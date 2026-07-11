@@ -272,8 +272,8 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     if (toolName === 'write' || toolName === 'edit') {
         trustHtml = `
             <label class="trust-option">
-                <input type="checkbox" id="trust-workspace-${confirmId}" ${inWorkspace ? '' : 'disabled'}>
-                Trust all writes in workspace ${inWorkspace ? '' : '(path outside workspace)'}
+                <input type="checkbox" id="trust-workspace-${confirmId}">
+                Trust all writes in workspace
             </label>
         `;
     } else if (toolName === 'shell') {
