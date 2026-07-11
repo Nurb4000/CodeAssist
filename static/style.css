@@ -369,6 +369,23 @@ body {
 #send-btn:hover { background: var(--accent); }
 #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+#stop-btn {
+    background: var(--red);
+    border: none;
+    color: white;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+#stop-btn:hover { background: #da3633; }
+
 /* Welcome */
 .welcome {
     text-align: center;

@@ -1,4 +1,4 @@
-import json
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -79,6 +79,24 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     session = Session(session_id)
     agent = Agent(config, session, tools)
+    agent_task: asyncio.Task | None = None
+
+    async def run_agent_task(message: str):
+        nonlocal agent_task
+        try:
+            async for event in agent.run(message):
+                await websocket.send_json({
+                    "type": event.type,
+                    **event.data,
+                })
+        except Exception as e:
+            log.exception("Agent error")
+            try:
+                await websocket.send_json({"type": "error", "message": str(e)})
+            except Exception:
+                pass
+        finally:
+            agent_task = None
 
     try:
         while True:
@@ -88,24 +106,24 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 content = data.get("content", "")
                 if not content.strip():
                     continue
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
 
-                try:
-                    async for event in agent.run(content):
-                        await websocket.send_json({
-                            "type": event.type,
-                            **event.data,
-                        })
-                except Exception as e:
-                    log.exception("Agent error")
-                    await websocket.send_json({"type": "error", "message": str(e)})
+                agent_task = asyncio.create_task(run_agent_task(content))
 
             elif data.get("type") == "cancel":
-                pass
+                if agent_task and not agent_task.done():
+                    agent.cancel()
 
     except WebSocketDisconnect:
         log.info("Client disconnected from session %s", session_id)
+        if agent_task and not agent_task.done():
+            agent.cancel()
     except Exception as e:
         log.exception("WebSocket error")
+        if agent_task and not agent_task.done():
+            agent.cancel()
         try:
             await websocket.close()
         except Exception:
