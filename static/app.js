@@ -283,6 +283,10 @@ function connectWS() {
         } else if (data.type === 'tool_result') {
             updateLastToolResult(data.output);
             scrollToBottom();
+        } else if (data.type === 'context') {
+            updateContextUsage(data.tokens, data.usage_pct, data.severity);
+        } else if (data.type === 'compacted') {
+            showError(data.message);
         } else if (data.type === 'error') {
             hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
@@ -451,6 +455,19 @@ function hideContinueButton() {
         continueBtnContainer.remove();
         continueBtnContainer = null;
     }
+}
+
+function updateContextUsage(tokens, usagePct, severity) {
+    let el = document.getElementById('context-usage');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'context-usage';
+        document.querySelector('.sidebar-footer').appendChild(el);
+    }
+    const color = severity === 'critical' ? 'var(--red)' : severity === 'warning' ? 'var(--yellow)' : 'var(--text-muted)';
+    el.innerHTML = `<span style="color:${color}">${usagePct}% context used</span> (${tokens.toLocaleString()} tokens)`;
+    el.style.fontSize = '11px';
+    el.style.marginTop = '4px';
 }
 
 inputEl.addEventListener('keydown', (e) => {

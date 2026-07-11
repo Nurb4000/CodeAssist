@@ -17,11 +17,12 @@ dependencies = [
     "markdown>=3.6",
     "pygments>=2.18.0",
     "wcmatch>=8.5",
+    "tiktoken>=0.7.0",
 ]
 
 [project.scripts]
 codeassist = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "agent", "config", "llm", "prompts", "server", "session"]
+py-modules = ["cli", "agent", "config", "llm", "prompts", "server", "session", "tokens"]
 packages = ["tools"]

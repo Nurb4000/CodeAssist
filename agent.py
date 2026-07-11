@@ -11,6 +11,7 @@ from llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
 from prompts import build_system_prompt, build_openai_messages
 from session import Session
 from tools import ToolRegistry
+from tokens import compact_messages, check_context_limit, truncate_tool_result
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,20 @@ class Agent:
 
             history = await self.session.get_messages()
             messages = build_openai_messages(self.system_prompt, history)
+
+            # Check context limits and compact if needed
+            ctx = check_context_limit(messages, self.config.llm.model)
+            yield AgentEvent("context", {
+                "tokens": ctx["total_tokens"],
+                "usage_pct": ctx["usage_pct"],
+                "severity": ctx["severity"],
+            })
+
+            if ctx["needs_compaction"]:
+                log.info("Context at %s%%, compacting messages", ctx["usage_pct"])
+                messages = compact_messages(messages, keep_recent=20, model=self.config.llm.model)
+                yield AgentEvent("compacted", {"message": "Context window compressed to make room"})
+
             tool_schemas = self.tools.schemas()
             openai_tools = self.llm.format_tools(tool_schemas) if tool_schemas else None
 
@@ -117,8 +132,10 @@ class Agent:
                     if self.cancel_event.is_set():
                         return
                     result = await self.tools.execute(tc.name, tc.arguments)
-                    await self.session.add_message("tool", content=result, tool_call_id=tc.id)
-                    yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": result})
+                    # Truncate large tool results before saving
+                    truncated = truncate_tool_result(result, max_tokens=4000)
+                    await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
+                    yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
 
                 continue
 
