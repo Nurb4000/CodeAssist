@@ -6,7 +6,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 
-DB_PATH = Path(__file__).parent.parent / "data" / "codeassist.db"
+DB_PATH = Path(__file__).parent / "data" / "codeassist.db"
 
 
 async def init_db():
