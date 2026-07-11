@@ -1,8 +1,9 @@
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import AsyncIterator
+
+import openai
 
 from config import Config
 from llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
@@ -30,6 +31,31 @@ class Agent:
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         await self.session.add_message("user", user_message)
 
+        try:
+            async for event in self._loop(user_message):
+                yield event
+        except openai.APIConnectionError:
+            msg = f"Could not connect to LLM at {self.config.llm.base_url or 'api.openai.com'}. Is the server running?"
+            log.error(msg)
+            yield AgentEvent("error", {"message": msg})
+            yield AgentEvent("done")
+        except openai.AuthenticationError as e:
+            msg = f"Authentication failed: {e.message}"
+            log.error(msg)
+            yield AgentEvent("error", {"message": msg})
+            yield AgentEvent("done")
+        except openai.APIStatusError as e:
+            msg = f"LLM API error (HTTP {e.status_code}): {e.message}"
+            log.error(msg)
+            yield AgentEvent("error", {"message": msg})
+            yield AgentEvent("done")
+        except Exception as e:
+            msg = f"Unexpected error: {type(e).__name__}: {e}"
+            log.exception(msg)
+            yield AgentEvent("error", {"message": msg})
+            yield AgentEvent("done")
+
+    async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
         for iteration in range(self.config.agent.max_iterations):
             history = await self.session.get_messages()
             messages = build_openai_messages(self.system_prompt, history)
@@ -38,7 +64,6 @@ class Agent:
 
             accumulated_text = ""
             tool_calls: list[ToolCall] = []
-            finished = False
 
             async for event in self.llm.stream(messages, openai_tools):
                 if isinstance(event, TextDelta):
@@ -54,7 +79,6 @@ class Agent:
                     })
 
                 elif isinstance(event, Finish):
-                    finished = True
                     yield AgentEvent("finish", {
                         "reason": event.finish_reason,
                         "usage": {

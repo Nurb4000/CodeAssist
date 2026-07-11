@@ -4,3 +4,5 @@ data/
 *.db
 .env
 config.toml
+*.toml~
+config.toml~

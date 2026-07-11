@@ -51,6 +51,13 @@ async def delete_session(session_id: str):
     return {"ok": True}
 
 
+@app.patch("/api/sessions/{session_id}")
+async def rename_session(session_id: str, body: dict):
+    session = Session(session_id)
+    await session.rename(body.get("name", "Untitled"))
+    return {"ok": True}
+
+
 @app.get("/api/sessions/{session_id}/messages")
 async def get_messages(session_id: str):
     session = Session(session_id)
