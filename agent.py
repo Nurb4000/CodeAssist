@@ -75,7 +75,7 @@ class Agent:
             messages = build_openai_messages(self.system_prompt, history)
 
             # Check context limits and compact if needed
-            ctx = check_context_limit(messages, self.config.llm.model)
+            ctx = check_context_limit(messages, self.config.llm.model, self.config.llm.context_window)
             yield AgentEvent("context", {
                 "tokens": ctx["total_tokens"],
                 "usage_pct": ctx["usage_pct"],

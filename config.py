@@ -12,6 +12,7 @@ class LLMConfig:
     base_url: str = ""
     temperature: float = 0.0
     max_tokens: int = 8192
+    context_window: int = 128000
 
 
 @dataclass
@@ -57,6 +58,7 @@ class Config:
                 base_url=llm_raw.get("base_url", ""),
                 temperature=params.get("temperature", 0.0),
                 max_tokens=params.get("max_tokens", 8192),
+                context_window=params.get("context_window", 128000),
             ),
             server=ServerConfig(
                 host=raw.get("server", {}).get("host", "0.0.0.0"),

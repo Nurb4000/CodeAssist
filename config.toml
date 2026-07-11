@@ -21,7 +21,7 @@ base_url = "http://10.0.1.27:8080/v1"
 
 [llm.parameters]
 temperature = 0.0
-max_tokens = 120000
+max_tokens = 500
 
 [server]
 host = "0.0.0.0"
