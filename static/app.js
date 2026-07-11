@@ -46,21 +46,26 @@ async function loadSessions() {
         const nameSpan = document.createElement('span');
         nameSpan.textContent = s.name || 'Untitled';
         nameSpan.className = 'session-name';
+        nameSpan.onclick = () => switchSession(s.id);
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'rename-btn';
+        renameBtn.innerHTML = '&#9998;';
+        renameBtn.title = 'Rename session';
+        renameBtn.onclick = (e) => {
+            e.stopPropagation();
+            startRename(div, s.id, nameSpan);
+        };
 
         const delBtn = document.createElement('button');
         delBtn.className = 'delete-btn';
         delBtn.dataset.id = s.id;
         delBtn.innerHTML = '&times;';
         delBtn.title = 'Delete session';
-
-        nameSpan.ondblclick = (e) => {
-            e.stopPropagation();
-            startRename(div, s.id, nameSpan);
-        };
-        nameSpan.onclick = () => switchSession(s.id);
         delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
 
         div.appendChild(nameSpan);
+        div.appendChild(renameBtn);
         div.appendChild(delBtn);
         sessionListEl.appendChild(div);
     }
@@ -72,22 +77,28 @@ function startRename(container, sessionId, nameSpan) {
     input.type = 'text';
     input.value = current;
     input.className = 'rename-input';
-    input.style.cssText = 'background:var(--bg-primary);border:1px solid var(--accent);color:var(--text-primary);border-radius:4px;padding:2px 4px;font-size:13px;width:100%;outline:none;';
+    input.style.cssText = 'background:var(--bg-primary);border:1px solid var(--accent);color:var(--text-primary);border-radius:4px;padding:2px 4px;font-size:13px;width:100%;outline:none;flex:1;min-width:0;';
 
-    nameSpan.replaceWith(input);
+    nameSpan.style.display = 'none';
+    container.insertBefore(input, nameSpan.nextSibling);
     input.focus();
     input.select();
 
+    let done = false;
     const finish = async (save) => {
+        if (done) return;
+        done = true;
         const newName = input.value.trim();
+        input.remove();
+        nameSpan.style.display = '';
         if (save && newName && newName !== current) {
+            nameSpan.textContent = newName;
             await api('PATCH', `/api/sessions/${sessionId}`, { name: newName });
         }
-        await loadSessions();
     };
 
     input.onkeydown = (e) => {
-        if (e.key === 'Enter') finish(true);
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
         if (e.key === 'Escape') finish(false);
     };
     input.onblur = () => finish(true);
@@ -150,7 +161,7 @@ function showWelcome() {
         <div class="welcome">
             <h2>CodeAssist</h2>
             <p>AI coding assistant connected to your workspace</p>
-            <p class="welcome-hint">Double-click a session name to rename it</p>
+            <p class="welcome-hint">Hover a session name to rename or delete it</p>
         </div>`;
 }
 
@@ -263,20 +274,25 @@ function connectWS() {
         const data = JSON.parse(event.data);
 
         if (data.type === 'text_delta') {
+            hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
             textBuffer += data.content;
             currentContentEl.innerHTML = marked.parse(textBuffer);
             scrollToBottom();
         } else if (data.type === 'tool_call') {
+            hideProgress();
             appendToolCall(data.name, data.arguments, '');
+            updateProgress(`Executing ${data.name}...`);
         } else if (data.type === 'tool_result') {
             updateLastToolResult(data.output);
             scrollToBottom();
         } else if (data.type === 'error') {
+            hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
             currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
         } else if (data.type === 'done') {
+            hideProgress();
             currentContentEl = null;
             textBuffer = '';
             isStreaming = false;
@@ -342,16 +358,43 @@ function sendMessage() {
     inputEl.style.height = 'auto';
 
     appendUserMessage(text);
+    showProgress('Thinking...');
     ws.send(JSON.stringify({ type: 'user_message', content: text }));
 }
 
 function showError(msg) {
     removeWelcome();
+    hideProgress();
     const div = document.createElement('div');
     div.className = 'message';
     div.innerHTML = `<div class="message-role" style="color:var(--red)">System</div><div class="message-content"><p style="color:var(--red)">${escapeHtml(msg)}</p></div>`;
     messagesEl.appendChild(div);
     scrollToBottom();
+}
+
+let progressEl = null;
+
+function showProgress(status) {
+    hideProgress();
+    progressEl = document.createElement('div');
+    progressEl.className = 'progress-bar';
+    progressEl.innerHTML = `<div class="spinner"></div><div class="status-text">${escapeHtml(status)}</div>`;
+    messagesEl.appendChild(progressEl);
+    scrollToBottom();
+}
+
+function updateProgress(status) {
+    if (progressEl) {
+        const textEl = progressEl.querySelector('.status-text');
+        if (textEl) textEl.textContent = status;
+    }
+}
+
+function hideProgress() {
+    if (progressEl) {
+        progressEl.remove();
+        progressEl = null;
+    }
 }
 
 inputEl.addEventListener('keydown', (e) => {
