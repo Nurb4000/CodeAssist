@@ -380,9 +380,11 @@ function connectWS() {
             stopBtn.style.display = 'none';
             inputEl.disabled = false;
         }
+        // Faster reconnect on initial load
+        const delay = document.querySelector('.welcome') ? 1000 : 3000;
         reconnectTimer = setTimeout(() => {
             if (currentSessionId && !isStreaming) connectWS();
-        }, 3000);
+        }, delay);
     };
 
     ws.onerror = () => {
@@ -417,6 +419,16 @@ function sendMessage() {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         showError('Not connected to server. Reconnecting...');
         connectWS();
+        // Queue the message to send after connection
+        const checkAndSend = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                clearInterval(checkAndSend);
+                hideError();
+                sendMessage();
+            }
+        }, 500);
+        // Stop trying after 5 seconds
+        setTimeout(() => clearInterval(checkAndSend), 5000);
         return;
     }
 
@@ -438,10 +450,17 @@ function showError(msg) {
     removeWelcome();
     hideProgress();
     const div = document.createElement('div');
-    div.className = 'message';
+    div.className = 'message system-error';
     div.innerHTML = `<div class="message-role" style="color:var(--red)">System</div><div class="message-content"><p style="color:var(--red)">${escapeHtml(msg)}</p></div>`;
     messagesEl.appendChild(div);
     scrollToBottom();
+}
+
+function hideError() {
+    const errors = messagesEl.querySelectorAll('.system-error');
+    if (errors.length > 0) {
+        errors[errors.length - 1].remove();
+    }
 }
 
 let progressEl = null;
