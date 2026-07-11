@@ -354,6 +354,7 @@ function connectWS() {
             appendToolCall(data.name, data.arguments, '');
             showProgress(`Executing ${data.name}...`);
         } else if (data.type === 'tool_result') {
+            hideProgress();
             updateLastToolResult(data.output);
             scrollToBottom();
         } else if (data.type === 'context') {
