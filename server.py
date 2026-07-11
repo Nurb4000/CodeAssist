@@ -124,6 +124,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if agent_task and not agent_task.done():
                     agent.cancel()
 
+            elif data.get("type") == "confirm_response":
+                confirm_id = data.get("id")
+                approved = data.get("approved", False)
+                if confirm_id:
+                    agent.resolve_confirm(confirm_id, approved)
+
     except WebSocketDisconnect:
         log.info("Client disconnected from session %s", session_id)
         if agent_task and not agent_task.done():

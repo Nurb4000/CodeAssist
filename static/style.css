@@ -399,6 +399,78 @@ body {
     50% { opacity: 0.5; }
 }
 
+/* Confirmation Dialog */
+.confirm-dialog {
+    max-width: 800px;
+    margin: 0 auto 24px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--yellow);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.confirm-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--yellow);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.confirm-title::before {
+    content: '\26A0';
+    font-size: 14px;
+}
+
+.confirm-details {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    font-family: monospace;
+    background: var(--bg-primary);
+    padding: 8px 12px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.confirm-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.confirm-btn {
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+}
+
+.confirm-btn.approve {
+    background: var(--green);
+    border-color: var(--green);
+    color: white;
+}
+
+.confirm-btn.approve:hover {
+    background: #2ea043;
+}
+
+.confirm-btn.deny {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.confirm-btn.deny:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
 /* Input Area */
 #input-area {
     padding: 16px 24px 24px;
