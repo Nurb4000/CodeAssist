@@ -115,6 +115,7 @@ async function createSession() {
 async function switchSession(id) {
     if (isStreaming) return;
     currentSessionId = id;
+    hideContinueButton();
     await loadSessions();
     await loadMessages();
     connectWS();
@@ -293,6 +294,9 @@ function connectWS() {
             scrollToBottom();
         } else if (data.type === 'done') {
             hideProgress();
+            if (textBuffer || messagesEl.querySelectorAll('.tool-call').length > 0) {
+                showContinueButton();
+            }
             currentContentEl = null;
             textBuffer = '';
             isStreaming = false;
@@ -358,6 +362,7 @@ function sendMessage() {
     inputEl.style.height = 'auto';
 
     appendUserMessage(text);
+    hideContinueButton();
     showProgress('Thinking...');
     ws.send(JSON.stringify({ type: 'user_message', content: text }));
 }
@@ -373,9 +378,11 @@ function showError(msg) {
 }
 
 let progressEl = null;
+let continueBtnContainer = null;
 
 function showProgress(status) {
     hideProgress();
+    hideContinueButton();
     progressEl = document.createElement('div');
     progressEl.className = 'progress-bar';
     progressEl.innerHTML = `<div class="spinner"></div><div class="status-text">${escapeHtml(status)}</div>`;
@@ -394,6 +401,27 @@ function hideProgress() {
     if (progressEl) {
         progressEl.remove();
         progressEl = null;
+    }
+}
+
+function showContinueButton() {
+    hideContinueButton();
+    continueBtnContainer = document.createElement('div');
+    continueBtnContainer.className = 'message-actions';
+    continueBtnContainer.innerHTML = `<button id="continue-btn">Continue</button>`;
+    messagesEl.appendChild(continueBtnContainer);
+    continueBtnContainer.querySelector('#continue-btn').onclick = () => {
+        hideContinueButton();
+        inputEl.value = 'continue';
+        sendMessage();
+    };
+    scrollToBottom();
+}
+
+function hideContinueButton() {
+    if (continueBtnContainer) {
+        continueBtnContainer.remove();
+        continueBtnContainer = null;
     }
 }
 
