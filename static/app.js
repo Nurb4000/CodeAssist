@@ -257,7 +257,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function showConfirmDialog(confirmId, toolName, args) {
+function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     const div = document.createElement('div');
     div.className = 'confirm-dialog';
     div.id = `confirm-${confirmId}`;
@@ -267,9 +267,28 @@ function showConfirmDialog(confirmId, toolName, args) {
         argsStr = JSON.stringify(args, null, 2);
     }
 
+    // Build trust options based on tool type
+    let trustHtml = '';
+    if (toolName === 'write' || toolName === 'edit') {
+        trustHtml = `
+            <label class="trust-option">
+                <input type="checkbox" id="trust-workspace-${confirmId}" ${inWorkspace ? '' : 'disabled'}>
+                Trust all writes in workspace ${inWorkspace ? '' : '(path outside workspace)'}
+            </label>
+        `;
+    } else if (toolName === 'shell') {
+        trustHtml = `
+            <label class="trust-option">
+                <input type="checkbox" id="trust-shell-${confirmId}">
+                Trust all shell commands for this session
+            </label>
+        `;
+    }
+
     div.innerHTML = `
         <div class="confirm-title">Agent wants to use ${escapeHtml(toolName)}</div>
         <div class="confirm-details">${escapeHtml(argsStr)}</div>
+        ${trustHtml ? `<div class="trust-options">${trustHtml}</div>` : ''}
         <div class="confirm-actions">
             <button class="confirm-btn approve">Allow</button>
             <button class="confirm-btn deny">Deny</button>
@@ -280,16 +299,28 @@ function showConfirmDialog(confirmId, toolName, args) {
     scrollToBottom();
 
     div.querySelector('.approve').onclick = () => {
+        const trustWorkspace = div.querySelector(`#trust-workspace-${confirmId}`)?.checked || false;
+        const trustShell = div.querySelector(`#trust-shell-${confirmId}`)?.checked || false;
         div.remove();
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'confirm_response', id: confirmId, approved: true }));
+            ws.send(JSON.stringify({
+                type: 'confirm_response',
+                id: confirmId,
+                approved: true,
+                trust_workspace: trustWorkspace,
+                trust_shell: trustShell,
+            }));
         }
     };
 
     div.querySelector('.deny').onclick = () => {
         div.remove();
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'confirm_response', id: confirmId, approved: false }));
+            ws.send(JSON.stringify({
+                type: 'confirm_response',
+                id: confirmId,
+                approved: false,
+            }));
         }
     };
 }
@@ -332,7 +363,7 @@ function connectWS() {
         } else if (data.type === 'plan_update') {
             updatePlanDisplay(data.tasks);
         } else if (data.type === 'confirm_request') {
-            showConfirmDialog(data.id, data.tool, data.arguments);
+            showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
