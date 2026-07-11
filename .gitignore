@@ -6,3 +6,4 @@ data/
 config.toml
 *.toml~
 config.toml~
+*.egg-info/
