@@ -458,3 +458,120 @@ tOML>=0.10.2    # Only needed for Python < 3.11
 ```
 
 All dependencies are well-established, actively maintained, and have minimal transitive dependencies.
+
+---
+
+## Local Workstation Daemon (Phase 5)
+
+### Problem
+
+Currently all tools (read, write, edit, shell, glob, grep) run on the server's filesystem. Developers want tools to execute on their local workstation instead.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Web App (server.py)                     │
+│                                                     │
+│  Tool calls → Worker Registry → Route to worker     │
+│                              ← Return results       │
+└────────────────────┬────────────────────────────────┘
+                     │ WebSocket
+┌────────────────────▼────────────────────────────────┐
+│          Local Daemon (worker.py)                    │
+│          Runs on developer's workstation             │
+│                                                     │
+│  Connects to server as a "worker"                   │
+│  Receives tool execution requests                   │
+│  Executes tools against LOCAL filesystem            │
+│  Returns results to server                          │
+│                                                     │
+│  Usage:                                              │
+│    python worker.py --server ws://your-server:8000   │
+│    python worker.py --server ws://your-server:8000 --workspace ~/myproject
+└─────────────────────────────────────────────────────┘
+```
+
+### Protocol
+
+The daemon connects to a dedicated WebSocket endpoint:
+
+```
+Server: /ws/worker/{worker_id}
+Daemon:  ws://server:8000/ws/worker
+```
+
+**Messages (server → daemon):**
+```json
+{"type": "execute", "request_id": "abc123", "tool": "read", "args": {"file_path": "/local/file.py"}}
+```
+
+**Messages (daemon → server):**
+```json
+{"type": "result", "request_id": "abc123", "output": "1: import os\n2: ..."}
+{"type": "registered", "worker_id": "...", "workspace": "/home/dev/myproject"}
+```
+
+### Server Changes
+
+1. **Worker Registry** -- tracks connected workers
+2. **Tool Routing** -- when a worker is connected, route tool calls to it instead of executing locally
+3. **Fallback** -- if no worker is connected, execute tools on the server (current behavior)
+4. **Session binding** -- a session can optionally be "bound" to a specific worker
+
+### Daemon Implementation (`worker.py`)
+
+```python
+# worker.py - Local workstation daemon
+# Connects to CodeAssist server, executes tools on local filesystem
+
+class Worker:
+    def __init__(self, server_url: str, workspace: Path):
+        self.server_url = server_url
+        self.workspace = workspace
+        self.tools = create_registry(workspace)
+
+    async def connect(self):
+        async with websockets.connect(self.server_url) as ws:
+            # Register with server
+            await ws.send(json.dumps({
+                "type": "register",
+                "workspace": str(self.workspace),
+            }))
+
+            # Listen for tool execution requests
+            async for msg in ws:
+                data = json.loads(msg)
+                if data["type"] == "execute":
+                    result = await self.tools.execute(data["tool"], data["args"])
+                    await ws.send(json.dumps({
+                        "type": "result",
+                        "request_id": data["request_id"],
+                        "output": result,
+                    }))
+
+# Usage:
+#   python worker.py --server ws://your-server:8000
+#   python worker.py --server ws://your-server:8000 --workspace ~/myproject
+```
+
+### Config Changes
+
+```toml
+[worker]
+# Enable worker mode (daemon connects to remote server)
+enabled = false
+server = "ws://your-server:8000"
+workspace = "."  # Local directory to expose to the server
+```
+
+### Implementation Priority
+
+| Step | Description | Effort |
+|------|-------------|--------|
+| 1 | Worker registry on server | 1 hour |
+| 2 | `worker.py` daemon with tool execution | 2 hours |
+| 3 | Tool routing (worker vs local) | 1 hour |
+| 4 | Session binding UI | 2 hours |
+| 5 | Authentication (API key or token) | 1 hour |
+| **Total** | | **~1 day** |
