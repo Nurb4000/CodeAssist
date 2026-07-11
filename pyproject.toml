@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeassist"
+version = "0.1.0"
+description = "AI coding assistant for local development"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    "openai>=1.30.0",
+    "aiosqlite>=0.20.0",
+    "httpx>=0.27.0",
+    "markdown>=3.6",
+    "pygments>=2.18.0",
+    "wcmatch>=8.5",
+]
+
+[project.scripts]
+codeassist = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli", "agent", "config", "llm", "prompts", "server", "session"]
+packages = ["tools"]
