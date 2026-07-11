@@ -6,25 +6,29 @@ provider = "openai"
 #   OpenAI:    "gpt-4o", "gpt-4o-mini", "o3-mini", etc.
 #   llama.cpp: whatever you passed with -m to llama-server (e.g. "local-model", "codellama-13b")
 #   vLLM:      the model name you served (e.g. "meta-llama/Llama-3-8B-Instruct")
-model = "local"
+model = "gpt-4o"
 
 # API key:
 #   OpenAI:    your real key, e.g. "sk-..."
 #   llama.cpp: not checked, use any value like "none"
-api_key = "none"
+api_key = ""
 
 # Base URL:
 #   OpenAI:    leave empty "" (defaults to api.openai.com)
 #   llama.cpp: "http://localhost:8080/v1"
 #   vLLM:      "http://localhost:8000/v1"
-base_url = "http://10.0.1.27:8080/v1"
+base_url = ""
 
 [llm.parameters]
 temperature = 0.0
-max_tokens = 500
+max_tokens = 8192
+
+# Context window size in tokens. Set this to match your model's actual limit.
+# llama.cpp models are often 4096-32768, OpenAI models are 128000-200000.
+context_window = 128000
 
 [server]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 8000
 workspace = "."
 
