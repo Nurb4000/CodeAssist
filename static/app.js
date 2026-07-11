@@ -216,11 +216,6 @@ function appendToolCall(name, args, output) {
         div.querySelector('.tool-call-body').classList.toggle('open');
     };
 
-    if (!output) {
-        div.querySelector('.tool-call-header').classList.add('open');
-        div.querySelector('.tool-call-body').classList.add('open');
-    }
-
     scrollToBottom();
 }
 
@@ -378,6 +373,8 @@ function showError(msg) {
 }
 
 let progressEl = null;
+let progressShowTime = 0;
+let progressMinTimer = null;
 let continueBtnContainer = null;
 
 function showProgress(status) {
@@ -388,6 +385,7 @@ function showProgress(status) {
     progressEl.innerHTML = `<div class="spinner"></div><div class="status-text">${escapeHtml(status)}</div>`;
     messagesEl.appendChild(progressEl);
     scrollToBottom();
+    progressShowTime = Date.now();
 }
 
 function updateProgress(status) {
@@ -398,7 +396,19 @@ function updateProgress(status) {
 }
 
 function hideProgress() {
-    if (progressEl) {
+    if (!progressEl) return;
+    const elapsed = Date.now() - progressShowTime;
+    const remaining = Math.max(0, 400 - elapsed);
+    if (remaining > 0) {
+        clearTimeout(progressMinTimer);
+        progressMinTimer = setTimeout(() => {
+            if (progressEl) {
+                progressEl.remove();
+                progressEl = null;
+            }
+        }, remaining);
+    } else {
+        clearTimeout(progressMinTimer);
         progressEl.remove();
         progressEl = null;
     }
