@@ -82,6 +82,15 @@ async def get_todos():
     return {"tasks": []}
 
 
+@app.post("/api/todos/clear")
+async def clear_todos():
+    todo_tool = tools.get("todo")
+    if todo_tool and hasattr(todo_tool, '_tasks'):
+        todo_tool._tasks.clear()
+        todo_tool._next_id = 1
+    return {"ok": True}
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
