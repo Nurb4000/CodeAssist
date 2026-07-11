@@ -96,6 +96,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     session = Session(session_id)
     agent = Agent(config, session, tools)
+    agent.reset_trust()  # Reset trust for new session
     agent_task: asyncio.Task | None = None
 
     async def run_agent_task(message: str):
@@ -136,8 +137,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             elif data.get("type") == "confirm_response":
                 confirm_id = data.get("id")
                 approved = data.get("approved", False)
+                trust_workspace = data.get("trust_workspace", False)
+                trust_shell = data.get("trust_shell", False)
                 if confirm_id:
-                    agent.resolve_confirm(confirm_id, approved)
+                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell)
 
     except WebSocketDisconnect:
         log.info("Client disconnected from session %s", session_id)

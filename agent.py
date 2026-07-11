@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import AsyncIterator
 
 import openai
@@ -35,9 +36,50 @@ class Agent:
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
+        # Session trust flags
+        self._trust_workspace_writes = False
+        self._trust_shell = False
 
     def cancel(self):
         self.cancel_event.set()
+
+    def reset_trust(self):
+        """Reset trust flags for new session."""
+        self._trust_workspace_writes = False
+        self._trust_shell = False
+
+    def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False):
+        """Set trust flags from user confirmation."""
+        if trust_workspace:
+            self._trust_workspace_writes = True
+        if trust_shell:
+            self._trust_shell = True
+
+    def _is_in_workspace(self, file_path: str) -> bool:
+        """Check if a file path is within the workspace."""
+        try:
+            path = Path(file_path).resolve()
+            workspace = self.config.workspace.resolve()
+            return str(path).startswith(str(workspace))
+        except Exception:
+            return False
+
+    def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:
+        """Check if a tool call requires user confirmation."""
+        if tool_name not in CONFIRM_TOOLS:
+            return False
+
+        # Check shell trust
+        if tool_name == "shell" and self._trust_shell:
+            return False
+
+        # Check workspace write trust
+        if tool_name in ("write", "edit") and self._trust_workspace_writes:
+            file_path = arguments.get("file_path", arguments.get("path", ""))
+            if file_path and self._is_in_workspace(file_path):
+                return False
+
+        return True
 
     async def wait_for_confirm(self, confirm_id: str) -> bool:
         """Wait for user to approve/deny a tool execution."""
@@ -48,8 +90,10 @@ class Agent:
         self._confirm_events.pop(confirm_id, None)
         return result
 
-    def resolve_confirm(self, confirm_id: str, approved: bool):
+    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False):
         """Resolve a pending confirmation from WebSocket."""
+        if approved:
+            self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell)
         if confirm_id in self._confirm_events:
             self._confirm_results[confirm_id] = approved
             self._confirm_events[confirm_id].set()
@@ -153,12 +197,13 @@ class Agent:
                         return
 
                     # Check if tool requires confirmation
-                    if tc.name in CONFIRM_TOOLS:
+                    if self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
                         yield AgentEvent("confirm_request", {
                             "id": confirm_id,
                             "tool": tc.name,
                             "arguments": tc.arguments,
+                            "in_workspace": self._is_in_workspace(tc.arguments.get("file_path", tc.arguments.get("path", ""))) if tc.name in ("write", "edit") else None,
                         })
                         approved = await self.wait_for_confirm(confirm_id)
 
