@@ -23,6 +23,10 @@ base_url = ""
 temperature = 0.0
 max_tokens = 8192
 
+# Context window size in tokens. Set this to match your model's actual limit.
+# llama.cpp models are often 4096-32768, OpenAI models are 128000-200000.
+context_window = 128000
+
 [server]
 host = "127.0.0.1"
 port = 8000
