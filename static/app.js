@@ -109,6 +109,8 @@ function startRename(container, sessionId, nameSpan) {
 async function createSession() {
     const res = await api('POST', '/api/sessions');
     currentSessionId = res.id;
+    planDisplayEl.innerHTML = ''; // Clear plan display
+    await api('POST', '/api/todos/clear'); // Clear todo tool state
     await loadSessions();
     showWelcome();
     connectWS();
@@ -118,9 +120,10 @@ async function switchSession(id) {
     if (isStreaming) return;
     currentSessionId = id;
     hideContinueButton();
+    planDisplayEl.innerHTML = ''; // Clear plan display
+    await api('POST', '/api/todos/clear'); // Clear todo tool state
     await loadSessions();
     await loadMessages();
-    await loadTodos();
     connectWS();
 }
 
