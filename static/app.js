@@ -5,6 +5,7 @@ const stopBtn = document.getElementById('stop-btn');
 const sessionListEl = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const modelInfoEl = document.getElementById('model-info');
+const planDisplayEl = document.getElementById('plan-display');
 
 let currentSessionId = null;
 let ws = null;
@@ -119,6 +120,7 @@ async function switchSession(id) {
     hideContinueButton();
     await loadSessions();
     await loadMessages();
+    await loadTodos();
     connectWS();
 }
 
@@ -287,6 +289,8 @@ function connectWS() {
             updateContextUsage(data.tokens, data.usage_pct, data.severity);
         } else if (data.type === 'compacted') {
             showError(data.message);
+        } else if (data.type === 'plan_update') {
+            updatePlanDisplay(data.tasks);
         } else if (data.type === 'error') {
             hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
@@ -470,6 +474,55 @@ function updateContextUsage(tokens, usagePct, severity) {
     el.style.marginTop = '4px';
 }
 
+function updatePlanDisplay(tasks) {
+    if (!tasks || tasks.length === 0) {
+        planDisplayEl.innerHTML = '';
+        return;
+    }
+
+    const container = document.createElement('div');
+    container.className = 'plan-container';
+
+    const title = document.createElement('div');
+    title.className = 'plan-title';
+    title.textContent = 'Current Plan';
+    container.appendChild(title);
+
+    for (const task of tasks) {
+        const item = document.createElement('div');
+        item.className = `plan-item ${task.status}`;
+
+        const checkbox = document.createElement('div');
+        checkbox.className = 'plan-checkbox';
+        if (task.status === 'completed') {
+            checkbox.innerHTML = '&#10003;';
+        } else if (task.status === 'in_progress') {
+            checkbox.innerHTML = '&#8987;';
+        }
+
+        const content = document.createElement('span');
+        content.textContent = task.content;
+
+        item.appendChild(checkbox);
+        item.appendChild(content);
+        container.appendChild(item);
+    }
+
+    planDisplayEl.innerHTML = '';
+    planDisplayEl.appendChild(container);
+}
+
+async function loadTodos() {
+    try {
+        const data = await api('GET', '/api/todos');
+        if (data.tasks && data.tasks.length > 0) {
+            updatePlanDisplay(data.tasks);
+        }
+    } catch (e) {
+        // Ignore errors loading todos
+    }
+}
+
 inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -496,6 +549,7 @@ newSessionBtn.addEventListener('click', createSession);
     if (sessions.length > 0) {
         currentSessionId = sessions[0].id;
         await loadMessages();
+        await loadTodos();
         connectWS();
     } else {
         showWelcome();

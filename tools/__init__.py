@@ -56,6 +56,9 @@ class ToolRegistry:
     def list_names(self) -> list[str]:
         return list(self._tools.keys())
 
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
+
 
 def create_registry(workspace: Path) -> ToolRegistry:
     from tools.read import ReadTool

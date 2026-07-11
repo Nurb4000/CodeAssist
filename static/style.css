@@ -323,6 +323,82 @@ body {
     100% { content: ''; }
 }
 
+/* Plan Display */
+#plan-display {
+    max-width: 800px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 0 24px;
+}
+
+#plan-display:empty {
+    display: none;
+}
+
+.plan-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+}
+
+.plan-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent);
+    margin-bottom: 8px;
+}
+
+.plan-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.plan-item.completed {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+.plan-item.in_progress {
+    color: var(--text-primary);
+}
+
+.plan-checkbox {
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+}
+
+.plan-item.completed .plan-checkbox {
+    background: var(--green);
+    border-color: var(--green);
+    color: white;
+}
+
+.plan-item.in_progress .plan-checkbox {
+    border-color: var(--accent);
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 /* Input Area */
 #input-area {
     padding: 16px 24px 24px;

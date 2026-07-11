@@ -74,6 +74,14 @@ async def get_config():
     }
 
 
+@app.get("/api/todos")
+async def get_todos():
+    todo_tool = tools.get("todo")
+    if todo_tool and hasattr(todo_tool, '_tasks'):
+        return {"tasks": todo_tool._tasks}
+    return {"tasks": []}
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()

@@ -137,6 +137,12 @@ class Agent:
                     await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                     yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
 
+                    # Send plan update when todo tool is used
+                    if tc.name == "todo":
+                        todo_tool = self.tools.get("todo")
+                        if todo_tool and hasattr(todo_tool, '_tasks'):
+                            yield AgentEvent("plan_update", {"tasks": todo_tool._tasks})
+
                 continue
 
             if accumulated_text:
