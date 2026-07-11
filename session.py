@@ -42,11 +42,13 @@ class Session:
     @classmethod
     async def create(cls, name: str | None = None) -> "Session":
         sid = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.utcnow()
+        now_str = now.isoformat()
+        default_name = now.strftime("%Y-%m-%d %H:%M")
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (sid, name or f"Session {now[:10]}", now, now),
+                (sid, name or default_name, now_str, now_str),
             )
             await db.commit()
         return cls(sid)

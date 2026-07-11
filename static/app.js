@@ -7,9 +7,11 @@ const modelInfoEl = document.getElementById('model-info');
 
 let currentSessionId = null;
 let ws = null;
+let wsConnected = false;
 let isStreaming = false;
-let currentAssistantEl = null;
 let currentContentEl = null;
+let textBuffer = '';
+let reconnectTimer = null;
 
 marked.setOptions({
     highlight: (code, lang) => {
@@ -39,11 +41,56 @@ async function loadSessions() {
     for (const s of sessions) {
         const div = document.createElement('div');
         div.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
-        div.innerHTML = `<span>${s.name || 'Untitled'}</span><button class="delete-btn" data-id="${s.id}">&times;</button>`;
-        div.querySelector('span').onclick = () => switchSession(s.id);
-        div.querySelector('.delete-btn').onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
+        div.dataset.id = s.id;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = s.name || 'Untitled';
+        nameSpan.className = 'session-name';
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'delete-btn';
+        delBtn.dataset.id = s.id;
+        delBtn.innerHTML = '&times;';
+        delBtn.title = 'Delete session';
+
+        nameSpan.ondblclick = (e) => {
+            e.stopPropagation();
+            startRename(div, s.id, nameSpan);
+        };
+        nameSpan.onclick = () => switchSession(s.id);
+        delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
+
+        div.appendChild(nameSpan);
+        div.appendChild(delBtn);
         sessionListEl.appendChild(div);
     }
+}
+
+function startRename(container, sessionId, nameSpan) {
+    const current = nameSpan.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = current;
+    input.className = 'rename-input';
+    input.style.cssText = 'background:var(--bg-primary);border:1px solid var(--accent);color:var(--text-primary);border-radius:4px;padding:2px 4px;font-size:13px;width:100%;outline:none;';
+
+    nameSpan.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const finish = async (save) => {
+        const newName = input.value.trim();
+        if (save && newName && newName !== current) {
+            await api('PATCH', `/api/sessions/${sessionId}`, { name: newName });
+        }
+        await loadSessions();
+    };
+
+    input.onkeydown = (e) => {
+        if (e.key === 'Enter') finish(true);
+        if (e.key === 'Escape') finish(false);
+    };
+    input.onblur = () => finish(true);
 }
 
 async function createSession() {
@@ -55,6 +102,7 @@ async function createSession() {
 }
 
 async function switchSession(id) {
+    if (isStreaming) return;
     currentSessionId = id;
     await loadSessions();
     await loadMessages();
@@ -67,6 +115,7 @@ async function deleteSession(id) {
         currentSessionId = null;
         messagesEl.innerHTML = '';
         showWelcome();
+        if (ws) ws.close();
     }
     await loadSessions();
 }
@@ -101,6 +150,7 @@ function showWelcome() {
         <div class="welcome">
             <h2>CodeAssist</h2>
             <p>AI coding assistant connected to your workspace</p>
+            <p class="welcome-hint">Double-click a session name to rename it</p>
         </div>`;
 }
 
@@ -118,9 +168,7 @@ function appendAssistantMessage(text) {
     div.className = 'message';
     div.innerHTML = `<div class="message-role assistant">CodeAssist</div><div class="message-content"></div>`;
     messagesEl.appendChild(div);
-    const contentEl = div.querySelector('.message-content');
-    contentEl.innerHTML = marked.parse(text);
-    return contentEl;
+    div.querySelector('.message-content').innerHTML = marked.parse(text);
 }
 
 function startAssistantMessage() {
@@ -129,7 +177,6 @@ function startAssistantMessage() {
     div.className = 'message';
     div.innerHTML = `<div class="message-role assistant">CodeAssist</div><div class="message-content"></div>`;
     messagesEl.appendChild(div);
-    currentAssistantEl = div;
     currentContentEl = div.querySelector('.message-content');
     return currentContentEl;
 }
@@ -153,10 +200,8 @@ function appendToolCall(name, args, output) {
     messagesEl.appendChild(div);
 
     div.querySelector('.tool-call-header').onclick = () => {
-        const header = div.querySelector('.tool-call-header');
-        const body = div.querySelector('.tool-call-body');
-        header.classList.toggle('open');
-        body.classList.toggle('open');
+        div.querySelector('.tool-call-header').classList.toggle('open');
+        div.querySelector('.tool-call-body').classList.toggle('open');
     };
 
     if (!output) {
@@ -165,7 +210,6 @@ function appendToolCall(name, args, output) {
     }
 
     scrollToBottom();
-    return div;
 }
 
 function updateLastToolResult(output) {
@@ -202,19 +246,26 @@ function escapeHtml(text) {
 
 function connectWS() {
     if (ws) ws.close();
+    clearTimeout(reconnectTimer);
     if (!currentSessionId) return;
 
+    wsConnected = false;
+    updateConnectionStatus('connecting');
+
     ws = new WebSocket(`ws://${location.host}/ws/${currentSessionId}`);
-    let contentEl = null;
-    let textBuffer = '';
+
+    ws.onopen = () => {
+        wsConnected = true;
+        updateConnectionStatus('connected');
+    };
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
 
         if (data.type === 'text_delta') {
-            if (!contentEl) contentEl = startAssistantMessage();
+            if (!currentContentEl) currentContentEl = startAssistantMessage();
             textBuffer += data.content;
-            contentEl.innerHTML = marked.parse(textBuffer);
+            currentContentEl.innerHTML = marked.parse(textBuffer);
             scrollToBottom();
         } else if (data.type === 'tool_call') {
             appendToolCall(data.name, data.arguments, '');
@@ -222,29 +273,67 @@ function connectWS() {
             updateLastToolResult(data.output);
             scrollToBottom();
         } else if (data.type === 'error') {
-            if (!contentEl) contentEl = startAssistantMessage();
-            contentEl.innerHTML += `<p style="color:var(--red)">Error: ${escapeHtml(data.message)}</p>`;
+            if (!currentContentEl) currentContentEl = startAssistantMessage();
+            currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
+            scrollToBottom();
         } else if (data.type === 'done') {
-            contentEl = null;
+            currentContentEl = null;
             textBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
             inputEl.disabled = false;
             inputEl.focus();
         } else if (data.type === 'finish') {
-            // usage info available here if needed
+            // usage info
         }
     };
 
     ws.onclose = () => {
-        isStreaming = false;
-        sendBtn.disabled = false;
+        wsConnected = false;
+        updateConnectionStatus('disconnected');
+        if (!isStreaming) {
+            sendBtn.disabled = false;
+            inputEl.disabled = false;
+        }
+        reconnectTimer = setTimeout(() => {
+            if (currentSessionId && !isStreaming) connectWS();
+        }, 3000);
     };
+
+    ws.onerror = () => {
+        updateConnectionStatus('error');
+    };
+}
+
+function updateConnectionStatus(status) {
+    let el = document.getElementById('connection-status');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'connection-status';
+        document.querySelector('.sidebar-footer').prepend(el);
+    }
+    const labels = {
+        connected: '',
+        connecting: 'Connecting...',
+        disconnected: 'Disconnected - reconnecting...',
+        error: 'Connection error',
+    };
+    el.textContent = labels[status] || '';
+    el.style.display = labels[status] ? 'block' : 'none';
+    el.style.color = status === 'connected' ? 'var(--green)' : status === 'error' ? 'var(--red)' : 'var(--yellow)';
+    el.style.fontSize = '11px';
+    el.style.marginBottom = '4px';
 }
 
 function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || isStreaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!text || isStreaming) return;
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showError('Not connected to server. Reconnecting...');
+        connectWS();
+        return;
+    }
 
     isStreaming = true;
     sendBtn.disabled = true;
@@ -253,8 +342,16 @@ function sendMessage() {
     inputEl.style.height = 'auto';
 
     appendUserMessage(text);
-
     ws.send(JSON.stringify({ type: 'user_message', content: text }));
+}
+
+function showError(msg) {
+    removeWelcome();
+    const div = document.createElement('div');
+    div.className = 'message';
+    div.innerHTML = `<div class="message-role" style="color:var(--red)">System</div><div class="message-content"><p style="color:var(--red)">${escapeHtml(msg)}</p></div>`;
+    messagesEl.appendChild(div);
+    scrollToBottom();
 }
 
 inputEl.addEventListener('keydown', (e) => {

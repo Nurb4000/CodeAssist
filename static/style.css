@@ -325,6 +325,12 @@ body {
     margin-bottom: 8px;
 }
 
+.welcome-hint {
+    font-size: 12px;
+    margin-top: 16px;
+    color: var(--text-muted);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
