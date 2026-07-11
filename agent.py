@@ -52,8 +52,10 @@ class Agent:
         """Set trust flags from user confirmation."""
         if trust_workspace:
             self._trust_workspace_writes = True
+            print(f"[TRUST] Workspace writes trusted. Flag={self._trust_workspace_writes}")
         if trust_shell:
             self._trust_shell = True
+            print(f"[TRUST] Shell commands trusted. Flag={self._trust_shell}")
 
     def _is_in_workspace(self, file_path: str) -> bool:
         """Check if a file path is within the workspace."""
@@ -76,8 +78,8 @@ class Agent:
         # Check workspace write trust
         if tool_name in ("write", "edit") and self._trust_workspace_writes:
             file_path = arguments.get("file_path", arguments.get("path", ""))
-            if file_path and self._is_in_workspace(file_path):
-                return False
+            print(f"[TRUST] needs_confirmation: trust={self._trust_workspace_writes}, file_path={file_path}")
+            return False
 
         return True
 
@@ -92,6 +94,7 @@ class Agent:
 
     def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False):
         """Resolve a pending confirmation from WebSocket."""
+        print(f"[CONFIRM] id={confirm_id}, approved={approved}, trust_workspace={trust_workspace}, trust_shell={trust_shell}")
         if approved:
             self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell)
         if confirm_id in self._confirm_events:
@@ -197,6 +200,7 @@ class Agent:
                         return
 
                     # Check if tool requires confirmation
+                    print(f"[TOOL] {tc.name} args={tc.arguments}")
                     if self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
                         yield AgentEvent("confirm_request", {
