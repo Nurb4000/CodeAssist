@@ -254,6 +254,43 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function showConfirmDialog(confirmId, toolName, args) {
+    const div = document.createElement('div');
+    div.className = 'confirm-dialog';
+    div.id = `confirm-${confirmId}`;
+
+    let argsStr = args;
+    if (typeof args === 'object') {
+        argsStr = JSON.stringify(args, null, 2);
+    }
+
+    div.innerHTML = `
+        <div class="confirm-title">Agent wants to use ${escapeHtml(toolName)}</div>
+        <div class="confirm-details">${escapeHtml(argsStr)}</div>
+        <div class="confirm-actions">
+            <button class="confirm-btn approve">Allow</button>
+            <button class="confirm-btn deny">Deny</button>
+        </div>
+    `;
+
+    messagesEl.appendChild(div);
+    scrollToBottom();
+
+    div.querySelector('.approve').onclick = () => {
+        div.remove();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'confirm_response', id: confirmId, approved: true }));
+        }
+    };
+
+    div.querySelector('.deny').onclick = () => {
+        div.remove();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'confirm_response', id: confirmId, approved: false }));
+        }
+    };
+}
+
 function connectWS() {
     if (ws) ws.close();
     clearTimeout(reconnectTimer);
@@ -291,6 +328,8 @@ function connectWS() {
             showError(data.message);
         } else if (data.type === 'plan_update') {
             updatePlanDisplay(data.tasks);
+        } else if (data.type === 'confirm_request') {
+            showConfirmDialog(data.id, data.tool, data.arguments);
         } else if (data.type === 'error') {
             hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
@@ -307,6 +346,13 @@ function connectWS() {
             if (textBuffer || messagesEl.querySelectorAll('.tool-call').length > 0) {
                 showContinueButton();
             }
+            // Show clear "done" indicator
+            const doneDiv = document.createElement('div');
+            doneDiv.className = 'message-actions';
+            doneDiv.innerHTML = `<span style="color:var(--green);font-size:12px;">&#10003; Complete</span>`;
+            messagesEl.appendChild(doneDiv);
+            scrollToBottom();
+
             currentContentEl = null;
             textBuffer = '';
             isStreaming = false;
@@ -545,14 +591,19 @@ newSessionBtn.addEventListener('click', createSession);
 
 (async () => {
     await loadConfig();
-    const sessions = await api('GET', '/api/sessions');
-    if (sessions.length > 0) {
+    let sessions = await api('GET', '/api/sessions');
+    if (sessions.length === 0) {
+        // Auto-create first session
+        const res = await api('POST', '/api/sessions');
+        currentSessionId = res.id;
+        sessions = await api('GET', '/api/sessions');
+        showWelcome();
+        connectWS();
+    } else {
         currentSessionId = sessions[0].id;
         await loadMessages();
         await loadTodos();
         connectWS();
-    } else {
-        showWelcome();
     }
     await loadSessions();
 })();

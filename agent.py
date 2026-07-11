@@ -15,6 +15,9 @@ from tokens import compact_messages, check_context_limit, truncate_tool_result
 
 log = logging.getLogger(__name__)
 
+# Tools that require user confirmation before execution
+CONFIRM_TOOLS = {"write", "edit", "shell"}
+
 
 @dataclass
 class AgentEvent:
@@ -30,9 +33,26 @@ class Agent:
         self.llm = LLMClient(config.llm)
         self.system_prompt = build_system_prompt(config.workspace, config.llm.model)
         self.cancel_event = asyncio.Event()
+        self._confirm_events: dict[str, asyncio.Event] = {}
+        self._confirm_results: dict[str, bool] = {}
 
     def cancel(self):
         self.cancel_event.set()
+
+    async def wait_for_confirm(self, confirm_id: str) -> bool:
+        """Wait for user to approve/deny a tool execution."""
+        event = asyncio.Event()
+        self._confirm_events[confirm_id] = event
+        await event.wait()
+        result = self._confirm_results.pop(confirm_id, False)
+        self._confirm_events.pop(confirm_id, None)
+        return result
+
+    def resolve_confirm(self, confirm_id: str, approved: bool):
+        """Resolve a pending confirmation from WebSocket."""
+        if confirm_id in self._confirm_events:
+            self._confirm_results[confirm_id] = approved
+            self._confirm_events[confirm_id].set()
 
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
@@ -131,6 +151,30 @@ class Agent:
                 for tc in tool_calls:
                     if self.cancel_event.is_set():
                         return
+
+                    # Check if tool requires confirmation
+                    if tc.name in CONFIRM_TOOLS:
+                        confirm_id = f"{tc.id}_{tc.name}"
+                        yield AgentEvent("confirm_request", {
+                            "id": confirm_id,
+                            "tool": tc.name,
+                            "arguments": tc.arguments,
+                        })
+                        approved = await self.wait_for_confirm(confirm_id)
+
+                        if not approved:
+                            await self.session.add_message(
+                                "tool",
+                                content=f"Tool '{tc.name}' was denied by user.",
+                                tool_call_id=tc.id,
+                            )
+                            yield AgentEvent("tool_result", {
+                                "id": tc.id,
+                                "name": tc.name,
+                                "output": f"Denied by user",
+                            })
+                            continue
+
                     result = await self.tools.execute(tc.name, tc.arguments)
                     # Truncate large tool results before saving
                     truncated = truncate_tool_result(result, max_tokens=4000)
