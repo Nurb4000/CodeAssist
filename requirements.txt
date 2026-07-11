@@ -7,3 +7,4 @@ httpx>=0.27.0
 markdown>=3.6
 pygments>=2.18.0
 wcmatch>=8.5
+tiktoken>=0.7.0
