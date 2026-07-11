@@ -1,6 +1,7 @@
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
+const stopBtn = document.getElementById('stop-btn');
 const sessionListEl = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const modelInfoEl = document.getElementById('model-info');
@@ -287,6 +288,12 @@ function connectWS() {
             if (!currentContentEl) currentContentEl = startAssistantMessage();
             currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
+            isStreaming = false;
+            sendBtn.disabled = false;
+            sendBtn.style.display = 'flex';
+            stopBtn.style.display = 'none';
+            inputEl.disabled = false;
+            inputEl.focus();
         } else if (data.type === 'done') {
             hideProgress();
             if (textBuffer || messagesEl.querySelectorAll('.tool-call').length > 0) {
@@ -296,8 +303,15 @@ function connectWS() {
             textBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
+            sendBtn.style.display = 'flex';
+            stopBtn.style.display = 'none';
             inputEl.disabled = false;
             inputEl.focus();
+        } else if (data.type === 'cancelled') {
+            hideProgress();
+            if (!currentContentEl) currentContentEl = startAssistantMessage();
+            currentContentEl.innerHTML += `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Stopped by user</p>`;
+            scrollToBottom();
         } else if (data.type === 'finish') {
             // usage info
         }
@@ -308,6 +322,8 @@ function connectWS() {
         updateConnectionStatus('disconnected');
         if (!isStreaming) {
             sendBtn.disabled = false;
+            sendBtn.style.display = 'flex';
+            stopBtn.style.display = 'none';
             inputEl.disabled = false;
         }
         reconnectTimer = setTimeout(() => {
@@ -352,6 +368,8 @@ function sendMessage() {
 
     isStreaming = true;
     sendBtn.disabled = true;
+    sendBtn.style.display = 'none';
+    stopBtn.style.display = 'flex';
     inputEl.disabled = true;
     inputEl.value = '';
     inputEl.style.height = 'auto';
@@ -448,6 +466,11 @@ inputEl.addEventListener('input', () => {
 });
 
 sendBtn.addEventListener('click', sendMessage);
+stopBtn.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'cancel' }));
+    }
+});
 newSessionBtn.addEventListener('click', createSession);
 
 (async () => {

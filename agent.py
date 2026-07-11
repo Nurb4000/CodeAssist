@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -27,12 +28,21 @@ class Agent:
         self.tools = tools
         self.llm = LLMClient(config.llm)
         self.system_prompt = build_system_prompt(config.workspace, config.llm.model)
+        self.cancel_event = asyncio.Event()
+
+    def cancel(self):
+        self.cancel_event.set()
 
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
+        self.cancel_event.clear()
         await self.session.add_message("user", user_message)
 
         try:
             async for event in self._loop(user_message):
+                if self.cancel_event.is_set():
+                    yield AgentEvent("cancelled")
+                    yield AgentEvent("done")
+                    return
                 yield event
         except openai.APIConnectionError:
             msg = f"Could not connect to LLM at {self.config.llm.base_url or 'api.openai.com'}. Is the server running?"
@@ -57,6 +67,9 @@ class Agent:
 
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
         for iteration in range(self.config.agent.max_iterations):
+            if self.cancel_event.is_set():
+                return
+
             history = await self.session.get_messages()
             messages = build_openai_messages(self.system_prompt, history)
             tool_schemas = self.tools.schemas()
@@ -66,6 +79,8 @@ class Agent:
             tool_calls: list[ToolCall] = []
 
             async for event in self.llm.stream(messages, openai_tools):
+                if self.cancel_event.is_set():
+                    return
                 if isinstance(event, TextDelta):
                     accumulated_text += event.content
                     yield AgentEvent("text_delta", {"content": event.content})
@@ -99,6 +114,8 @@ class Agent:
                 )
 
                 for tc in tool_calls:
+                    if self.cancel_event.is_set():
+                        return
                     result = await self.tools.execute(tc.name, tc.arguments)
                     await self.session.add_message("tool", content=result, tool_call_id=tc.id)
                     yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": result})
