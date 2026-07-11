@@ -1,0 +1,21 @@
+[llm]
+provider = "openai"
+model = "gpt-4o"
+# Paste your API key directly, or use "env:VAR_NAME" to read from an environment variable
+api_key = ""
+# For llama.cpp / vLLM / other local servers, set the base URL:
+# base_url = "http://localhost:8080/v1"
+base_url = ""
+
+[llm.parameters]
+temperature = 0.0
+max_tokens = 8192
+
+[server]
+host = "0.0.0.0"
+port = 8000
+workspace = "."
+
+[agent]
+max_iterations = 30
+name = "CodeAssist"
