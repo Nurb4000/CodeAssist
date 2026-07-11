@@ -7,3 +7,4 @@ config.toml
 *.toml~
 config.toml~
 *.egg-info/
+.#config.toml
