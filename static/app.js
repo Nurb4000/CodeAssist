@@ -318,7 +318,7 @@ function connectWS() {
         } else if (data.type === 'tool_call') {
             hideProgress();
             appendToolCall(data.name, data.arguments, '');
-            updateProgress(`Executing ${data.name}...`);
+            showProgress(`Executing ${data.name}...`);
         } else if (data.type === 'tool_result') {
             updateLastToolResult(data.output);
             scrollToBottom();
