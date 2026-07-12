@@ -219,9 +219,10 @@ function startAssistantMessage() {
     toolCallCount = 0;
     const header = document.createElement('div');
     header.className = 'tool-panel-header';
+    const panel = currentToolPanel;
     header.onclick = () => {
         header.classList.toggle('open');
-        currentToolPanel.querySelector('.tool-panel-body')?.classList.toggle('open');
+        panel.querySelector('.tool-panel-body')?.classList.toggle('open');
     };
     currentToolPanel.appendChild(header);
     currentToolPanel.style.display = 'none';
