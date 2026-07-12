@@ -14,6 +14,8 @@ let isStreaming = false;
 let currentContentEl = null;
 let textBuffer = '';
 let reconnectTimer = null;
+let currentToolPanel = null;
+let toolCallCount = 0;
 
 marked.setOptions({
     highlight: (code, lang) => {
@@ -207,6 +209,28 @@ function appendToolCall(name, args, output) {
         try { argsStr = JSON.stringify(JSON.parse(args), null, 2); } catch {}
     }
 
+    // Create or reuse the tool panel
+    if (!currentToolPanel) {
+        currentToolPanel = document.createElement('div');
+        currentToolPanel.className = 'tool-panel';
+        toolCallCount = 0;
+        const header = document.createElement('div');
+        header.className = 'tool-panel-header';
+        header.onclick = () => {
+            header.classList.toggle('open');
+            currentToolPanel.querySelector('.tool-panel-body').classList.toggle('open');
+        };
+        currentToolPanel.appendChild(header);
+        const body = document.createElement('div');
+        body.className = 'tool-panel-body';
+        currentToolPanel.appendChild(body);
+        messagesEl.appendChild(currentToolPanel);
+    }
+
+    toolCallCount++;
+    const header = currentToolPanel.querySelector('.tool-panel-header');
+    header.textContent = `Tool calls (${toolCallCount})`;
+
     const div = document.createElement('div');
     div.className = 'tool-call';
     div.innerHTML = `
@@ -215,7 +239,7 @@ function appendToolCall(name, args, output) {
             <div class="tool-call-args">${escapeHtml(argsStr)}</div>
             ${output ? `<div class="tool-result-label">Output</div><div class="tool-call-output">${escapeHtml(output)}</div>` : ''}
         </div>`;
-    messagesEl.appendChild(div);
+    currentToolPanel.querySelector('.tool-panel-body').appendChild(div);
 
     div.querySelector('.tool-call-header').onclick = () => {
         div.querySelector('.tool-call-header').classList.toggle('open');
@@ -225,8 +249,14 @@ function appendToolCall(name, args, output) {
     scrollToBottom();
 }
 
+function finalizeToolPanel() {
+    currentToolPanel = null;
+    toolCallCount = 0;
+}
+
 function updateLastToolResult(output) {
-    const toolCalls = messagesEl.querySelectorAll('.tool-call');
+    if (!currentToolPanel) return;
+    const toolCalls = currentToolPanel.querySelectorAll('.tool-call');
     if (toolCalls.length === 0) return;
     const last = toolCalls[toolCalls.length - 1];
     const body = last.querySelector('.tool-call-body');
@@ -349,6 +379,7 @@ function connectWS() {
 
         if (data.type === 'text_delta') {
             hideProgress();
+            finalizeToolPanel();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
             textBuffer += data.content;
             currentContentEl.innerHTML = marked.parse(textBuffer);
@@ -383,7 +414,8 @@ function connectWS() {
             inputEl.focus();
         } else if (data.type === 'done') {
             hideProgress();
-            if (textBuffer || messagesEl.querySelectorAll('.tool-call').length > 0) {
+            finalizeToolPanel();
+            if (textBuffer || messagesEl.querySelectorAll('.tool-panel').length > 0) {
                 showContinueButton();
             }
             // Show clear "done" indicator
