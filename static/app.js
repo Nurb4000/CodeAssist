@@ -514,7 +514,11 @@ let progressMinTimer = null;
 let continueBtnContainer = null;
 
 function showProgress(status) {
-    hideProgress();
+    // Always remove any existing progress bar immediately
+    clearTimeout(progressMinTimer);
+    if (progressEl) progressEl.remove();
+    progressEl = null;
+
     hideContinueButton();
     progressEl = document.createElement('div');
     progressEl.className = 'progress-bar';
@@ -533,21 +537,9 @@ function updateProgress(status) {
 
 function hideProgress() {
     if (!progressEl) return;
-    const elapsed = Date.now() - progressShowTime;
-    const remaining = Math.max(0, 400 - elapsed);
-    if (remaining > 0) {
-        clearTimeout(progressMinTimer);
-        progressMinTimer = setTimeout(() => {
-            if (progressEl) {
-                progressEl.remove();
-                progressEl = null;
-            }
-        }, remaining);
-    } else {
-        clearTimeout(progressMinTimer);
-        progressEl.remove();
-        progressEl = null;
-    }
+    clearTimeout(progressMinTimer);
+    progressEl.remove();
+    progressEl = null;
 }
 
 function showContinueButton() {
