@@ -153,11 +153,13 @@ async function loadMessages() {
     }
     for (const m of msgs) {
         if (m.role === 'user') {
+            finalizeToolPanel();
             appendUserMessage(m.content);
         } else if (m.role === 'assistant') {
             const hasContent = !!m.content;
             const hasTools = !!m.tool_calls;
             if (hasContent && hasTools) {
+                finalizeToolPanel();
                 startAssistantMessage();
                 currentContentEl.innerHTML = marked.parse(m.content);
                 currentToolPanel.style.display = '';
@@ -165,20 +167,21 @@ async function loadMessages() {
                 for (const tc of tcs) {
                     appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
                 }
-                finalizeToolPanel();
             } else if (hasContent) {
+                finalizeToolPanel();
                 appendAssistantMessage(m.content);
             } else if (hasTools) {
+                finalizeToolPanel();
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
                 for (const tc of tcs) {
                     appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
                 }
-                finalizeToolPanel();
             }
         } else if (m.role === 'tool') {
             updateLastToolResult(m.content);
         }
     }
+    finalizeToolPanel();
     scrollToBottom();
 }
 
