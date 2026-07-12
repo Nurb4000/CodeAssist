@@ -203,10 +203,11 @@ body {
 
 /* Tool display */
 .tool-call {
+    max-width: 800px;
+    margin: 12px auto;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 8px;
-    margin: 12px 0;
     overflow: hidden;
 }
 
