@@ -69,6 +69,10 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self.config.frequency_penalty:
+            kwargs["frequency_penalty"] = self.config.frequency_penalty
+        if self.config.presence_penalty:
+            kwargs["presence_penalty"] = self.config.presence_penalty
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

@@ -41,7 +41,12 @@ class Agent:
         self._trust_shell = False
 
     def cancel(self):
+        """Cancel the current agent run."""
         self.cancel_event.set()
+        # Unblock any pending confirmations so the agent can exit
+        for confirm_id, event in list(self._confirm_events.items()):
+            self._confirm_results[confirm_id] = False
+            event.set()
 
     def reset_trust(self):
         """Reset trust flags for new session."""
@@ -116,6 +121,11 @@ class Agent:
                     yield AgentEvent("done")
                     return
                 yield event
+            # _loop ended normally — check if it was due to cancel
+            if self.cancel_event.is_set():
+                yield AgentEvent("cancelled")
+                yield AgentEvent("done")
+                return
         except openai.APIConnectionError:
             msg = f"Could not connect to LLM at {self.config.llm.base_url or 'api.openai.com'}. Is the server running?"
             log.error(msg)
@@ -138,6 +148,9 @@ class Agent:
             yield AgentEvent("done")
 
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
+        recent_texts: list[str] = []
+        max_repeats = 3
+
         for iteration in range(self.config.agent.max_iterations):
             if self.cancel_event.is_set():
                 return
@@ -244,6 +257,16 @@ class Agent:
 
             if accumulated_text:
                 await self.session.add_message("assistant", content=accumulated_text)
+
+                # Repetition detection: break if the LLM keeps producing the same output
+                normalized = accumulated_text.strip().lower()
+                recent_texts.append(normalized)
+                if len(recent_texts) > max_repeats:
+                    recent_texts.pop(0)
+                if len(recent_texts) >= max_repeats and len(set(recent_texts)) == 1:
+                    log.warning("LLM repetition detected (%d identical responses), breaking loop", max_repeats)
+                    yield AgentEvent("error", {"message": f"Detected repetitive output — stopped after {max_repeats} identical responses."})
+                    break
 
             break
 
