@@ -195,9 +195,19 @@ function startAssistantMessage() {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
-    div.innerHTML = `<div class="message-role assistant">CodeAssist</div><div class="message-content"></div>`;
+    div.innerHTML = `<div class="message-role assistant">CodeAssist</div><div class="tool-panel"></div><div class="message-content"></div>`;
     messagesEl.appendChild(div);
     currentContentEl = div.querySelector('.message-content');
+    currentToolPanel = div.querySelector('.tool-panel');
+    toolCallCount = 0;
+    const header = document.createElement('div');
+    header.className = 'tool-panel-header';
+    header.onclick = () => {
+        header.classList.toggle('open');
+        currentToolPanel.classList.toggle('open');
+    };
+    currentToolPanel.appendChild(header);
+    currentToolPanel.style.display = 'none';
     return currentContentEl;
 }
 
@@ -209,27 +219,27 @@ function appendToolCall(name, args, output) {
         try { argsStr = JSON.stringify(JSON.parse(args), null, 2); } catch {}
     }
 
-    // Create or reuse the tool panel
+    // Ensure we have a message and panel
     if (!currentToolPanel) {
-        currentToolPanel = document.createElement('div');
-        currentToolPanel.className = 'tool-panel';
-        toolCallCount = 0;
-        const header = document.createElement('div');
-        header.className = 'tool-panel-header';
-        header.onclick = () => {
-            header.classList.toggle('open');
-            currentToolPanel.querySelector('.tool-panel-body').classList.toggle('open');
-        };
-        currentToolPanel.appendChild(header);
-        const body = document.createElement('div');
-        body.className = 'tool-panel-body';
-        currentToolPanel.appendChild(body);
-        messagesEl.appendChild(currentToolPanel);
+        startAssistantMessage();
+    }
+
+    // Show the panel on first tool call
+    if (toolCallCount === 0) {
+        currentToolPanel.style.display = '';
     }
 
     toolCallCount++;
     const header = currentToolPanel.querySelector('.tool-panel-header');
     header.textContent = `Tool calls (${toolCallCount})`;
+
+    // Ensure body exists
+    let body = currentToolPanel.querySelector('.tool-panel-body');
+    if (!body) {
+        body = document.createElement('div');
+        body.className = 'tool-panel-body';
+        currentToolPanel.appendChild(body);
+    }
 
     const div = document.createElement('div');
     div.className = 'tool-call';
@@ -239,7 +249,7 @@ function appendToolCall(name, args, output) {
             <div class="tool-call-args">${escapeHtml(argsStr)}</div>
             ${output ? `<div class="tool-result-label">Output</div><div class="tool-call-output">${escapeHtml(output)}</div>` : ''}
         </div>`;
-    currentToolPanel.querySelector('.tool-panel-body').appendChild(div);
+    body.appendChild(div);
 
     div.querySelector('.tool-call-header').onclick = () => {
         div.querySelector('.tool-call-header').classList.toggle('open');
@@ -250,25 +260,29 @@ function appendToolCall(name, args, output) {
 }
 
 function finalizeToolPanel() {
+    // Don't null out — panel persists in the message DOM
+    // Just reset the tracking variables so next turn creates fresh
     currentToolPanel = null;
     toolCallCount = 0;
 }
 
 function updateLastToolResult(output) {
     if (!currentToolPanel) return;
-    const toolCalls = currentToolPanel.querySelectorAll('.tool-call');
+    const body = currentToolPanel.querySelector('.tool-panel-body');
+    if (!body) return;
+    const toolCalls = body.querySelectorAll('.tool-call');
     if (toolCalls.length === 0) return;
     const last = toolCalls[toolCalls.length - 1];
-    const body = last.querySelector('.tool-call-body');
-    if (!body.querySelector('.tool-call-output')) {
+    const lastBody = last.querySelector('.tool-call-body');
+    if (!lastBody.querySelector('.tool-call-output')) {
         const label = document.createElement('div');
         label.className = 'tool-result-label';
         label.textContent = 'Output';
-        body.appendChild(label);
+        lastBody.appendChild(label);
         const outputDiv = document.createElement('div');
         outputDiv.className = 'tool-call-output' + (output && output.startsWith('Error') ? ' error' : '');
         outputDiv.textContent = output;
-        body.appendChild(outputDiv);
+        lastBody.appendChild(outputDiv);
     }
 }
 
@@ -379,8 +393,7 @@ function connectWS() {
 
         if (data.type === 'text_delta') {
             hideProgress();
-            finalizeToolPanel();
-            if (!currentContentEl) currentContentEl = startAssistantMessage();
+            if (!currentContentEl) startAssistantMessage();
             textBuffer += data.content;
             currentContentEl.innerHTML = marked.parse(textBuffer);
             scrollToBottom();
@@ -403,7 +416,7 @@ function connectWS() {
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
-            if (!currentContentEl) currentContentEl = startAssistantMessage();
+            if (!currentContentEl) startAssistantMessage();
             currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
             isStreaming = false;
