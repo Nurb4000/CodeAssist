@@ -143,6 +143,30 @@ codeassist --workspace ~/Projects/myapp --no-browser
 - **Track tasks** across multi-step work
 - **Continue** conversations with context
 
+### Built-in tools
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents with line numbers, offset/limit support |
+| `write` | Write or overwrite files, creates parent directories |
+| `edit` | Surgical string replacement in files |
+| `shell` | Execute shell commands with timeout |
+| `glob` | Find files matching glob patterns |
+| `grep` | Search file contents with regex (uses ripgrep if available) |
+| `webfetch` | Fetch and return content from a URL |
+| `websearch` | Search the web for information |
+| `todo` | Manage a task list across multi-step work |
+| `git` | Full git operations: status, diff, log, commit, push, pull, branch, clone, worktree, apply patch |
+| `fossil` | Fossil VCS operations: status, diff, log, commit, checkout, branch, tag |
+| `database` | Execute SQL queries against SQLite databases |
+| `directory` | List directory contents with metadata |
+| `apply_patch` | Apply unified diff patches atomically across multiple files |
+| `documentation` | Generate documentation from source code (Python, JS, TS) |
+| `http` | Make HTTP requests to REST APIs |
+| `process` | Manage long-running background processes |
+| `question` | Ask the user a clarifying question mid-task |
+| `task` | Delegate work to a background subagent |
+
 ## Project structure
 
 ```
@@ -162,7 +186,16 @@ CodeAssist/
 │   ├── glob.py         # Find files by pattern
 │   ├── grep.py         # Search file contents
 │   ├── webfetch.py     # Fetch web content
-│   └── todo.py         # Task list management
+│   ├── todo.py         # Task list management
+│   ├── git.py          # Git operations
+│   ├── fossil.py       # Fossil VCS operations
+│   ├── database.py     # SQLite queries
+│   ├── directory.py    # Directory listing
+│   ├── apply_patch.py  # Unified diff patches
+│   ├── documentation.py# Source code documentation
+│   ├── http.py         # HTTP requests
+│   ├── process.py      # Background process management
+│   └── advanced.py     # Web search, user questions, subtasks
 ├── static/             # Web UI
 ├── Dockerfile          # Container image definition
 ├── docker-compose.yml  # One-command Docker startup
