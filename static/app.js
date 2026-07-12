@@ -143,6 +143,10 @@ async function deleteSession(id) {
 async function loadMessages() {
     const msgs = await api('GET', `/api/sessions/${currentSessionId}/messages`);
     messagesEl.innerHTML = '';
+    currentToolPanel = null;
+    toolCallCount = 0;
+    currentContentEl = null;
+    textBuffer = '';
     if (msgs.length === 0) {
         showWelcome();
         return;
@@ -151,12 +155,25 @@ async function loadMessages() {
         if (m.role === 'user') {
             appendUserMessage(m.content);
         } else if (m.role === 'assistant') {
-            if (m.content) appendAssistantMessage(m.content);
-            if (m.tool_calls) {
+            const hasContent = !!m.content;
+            const hasTools = !!m.tool_calls;
+            if (hasContent && hasTools) {
+                startAssistantMessage();
+                currentContentEl.innerHTML = marked.parse(m.content);
+                currentToolPanel.style.display = '';
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
                 for (const tc of tcs) {
                     appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
                 }
+                finalizeToolPanel();
+            } else if (hasContent) {
+                appendAssistantMessage(m.content);
+            } else if (hasTools) {
+                const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
+                for (const tc of tcs) {
+                    appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
+                }
+                finalizeToolPanel();
             }
         } else if (m.role === 'tool') {
             updateLastToolResult(m.content);
