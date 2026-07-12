@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -8,6 +9,10 @@ import openai
 from config import LLMConfig
 
 log = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+INITIAL_BACKOFF = 1.0
+MAX_BACKOFF = 30.0
 
 
 @dataclass
@@ -68,11 +73,36 @@ class LLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        try:
-            response = await self.client.chat.completions.create(**kwargs)
-        except openai.APIError as e:
-            log.error("LLM API error: %s", e)
-            raise
+        response = None
+        backoff = INITIAL_BACKOFF
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+                break
+            except openai.APIConnectionError as e:
+                log.warning("LLM connection error (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
+                if attempt < MAX_RETRIES - 1:
+                    log.info("Retrying in %.1fs...", backoff)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_BACKOFF)
+                else:
+                    raise
+            except openai.RateLimitError as e:
+                log.warning("LLM rate limit hit (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
+                if attempt < MAX_RETRIES - 1:
+                    retry_after = float(e.headers.get("retry-after", backoff)) if hasattr(e, 'headers') else backoff
+                    log.info("Rate limited. Retrying in %.1fs...", retry_after)
+                    await asyncio.sleep(retry_after)
+                    backoff = min(backoff * 2, MAX_BACKOFF)
+                else:
+                    raise
+            except openai.APIError as e:
+                log.error("LLM API error: %s", e)
+                raise
+
+        if response is None:
+            raise RuntimeError("LLM connection failed after all retry attempts")
 
         current_tool_calls: dict[int, dict] = {}
         accumulated_text = ""

@@ -1,5 +1,9 @@
+import logging
 from pathlib import Path
 from tools import Tool, ToolResult
+from tools.security import validate_path, WorkspaceViolationError
+
+log = logging.getLogger(__name__)
 
 
 class ReadTool(Tool):
@@ -18,7 +22,12 @@ class ReadTool(Tool):
     }
 
     async def execute(self, file_path: str, offset: int = 0, limit: int = 2000) -> ToolResult:
-        path = Path(file_path)
+        try:
+            path = validate_path(file_path, self.workspace)
+        except WorkspaceViolationError as e:
+            log.warning("Path validation failed for read: %s", e)
+            return ToolResult(output=f"Error: {e}", error=True)
+
         if not path.exists():
             return ToolResult(output=f"Error: file not found: {file_path}", error=True)
         if path.is_dir():

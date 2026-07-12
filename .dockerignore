@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+*.db
+.env
+config.toml
+*.toml~
+*.egg-info/
+.#config.toml
+.git/
+tests/
+codeassist.egg-info/
+*.md
+run_tests.sh

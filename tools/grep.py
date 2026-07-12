@@ -1,8 +1,12 @@
+import logging
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from tools import Tool, ToolResult
+from tools.security import validate_directory, WorkspaceViolationError
+
+log = logging.getLogger(__name__)
 
 
 class GrepTool(Tool):
@@ -21,9 +25,14 @@ class GrepTool(Tool):
     }
 
     async def execute(self, pattern: str, path: str | None = None, include: str | None = None) -> ToolResult:
-        search_dir = Path(path) if path else self.workspace
-        if not search_dir.exists():
-            return ToolResult(output=f"Error: directory not found: {search_dir}", error=True)
+        search_dir_str = path or str(self.workspace)
+        try:
+            search_dir = validate_directory(search_dir_str, self.workspace)
+        except WorkspaceViolationError as e:
+            log.warning("Path validation failed for grep: %s", e)
+            return ToolResult(output=f"Error: {e}", error=True)
+        except Exception:
+            return ToolResult(output=f"Error: directory not found: {search_dir_str}", error=True)
 
         if shutil.which("rg"):
             return self._ripgrep(pattern, search_dir, include)
@@ -57,9 +66,9 @@ class GrepTool(Tool):
             return ToolResult(output=f"Error: invalid regex: {e}", error=True)
 
         matches = []
-        glob_pattern = include or "**/*"
+        search_pattern = include or "*.*"
 
-        for path_obj in directory.glob(glob_pattern):
+        for path_obj in directory.rglob(search_pattern):
             if not path_obj.is_file():
                 continue
             try:

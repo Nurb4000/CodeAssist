@@ -32,6 +32,81 @@ host = "127.0.0.1"
 port = 8000
 workspace = "."
 
+# Server authentication password (optional)
+# Set this to enable Basic Auth for the API
+# password = ""
+
 [agent]
 max_iterations = 30
 name = "CodeAssist"
+default_agent = "default"
+
+[tools]
+# Shell command timeout in seconds
+shell_timeout = 120
+
+# Maximum output size for shell commands (characters)
+max_output_chars = 20000
+
+# Maximum output size for webfetch (characters)
+webfetch_max_chars = 30000
+
+# Maximum output size for websearch (characters)
+websearch_max_chars = 30000
+
+# Maximum tokens for tool output truncation
+tool_output_max_tokens = 4000
+
+[mcp]
+# Enable MCP (Model Context Protocol) client
+enabled = false
+
+# MCP server configurations
+# [mcp.servers.server_name]
+#   url = "http://localhost:3001/sse"
+#   headers = {}
+#   env = {}
+
+[skills]
+# Enable skills system
+enabled = true
+
+# Directories to search for skills (relative to workspace)
+directories = [".codeassist/skills"]
+
+[plugins]
+# Enable plugin system
+enabled = false
+
+# Directories to search for plugins (relative to workspace)
+directories = [".codeassist/plugins"]
+
+[lsp]
+# Enable LSP (Language Server Protocol) integration
+enabled = false
+
+# LSP server configurations
+# [lsp.servers.server_name]
+#   command = "typescript-language-server"
+#   args = ["--stdio"]
+#   languages = ["typescript", "javascript"]
+
+[git]
+# Enable Git integration
+enabled = true
+
+# Automatically detect Git repositories in workspace
+auto_detect = true
+
+[compaction]
+# Enable context window compaction
+enabled = true
+
+# Trigger compaction when context usage exceeds this percentage
+threshold_pct = 75
+
+# Number of recent messages to keep intact during compaction
+keep_recent = 20
+
+# Maximum tokens for truncated tool results
+tool_result_max_tokens = 4000

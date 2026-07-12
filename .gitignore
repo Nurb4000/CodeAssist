@@ -8,3 +8,6 @@ config.toml
 config.toml~
 *.egg-info/
 .#config.toml
+.coverage
+.pytest_cache/
+htmlcov/

@@ -1,0 +1,19 @@
+services:
+  codeassist:
+    build: .
+    container_name: codeassist
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount your project directory as the workspace
+      - ${WORKSPACE:-.}:/workspace
+      # Mount config (copy config.docker.toml to config.toml to get started)
+      - ./config.toml:/app/config.toml:ro
+      # Persist session history across container restarts
+      - codeassist-data:/app/data
+    environment:
+      - CODEASSIST_WORKSPACE=/workspace
+      - TZ=UTC
+
+volumes:
+  codeassist-data:

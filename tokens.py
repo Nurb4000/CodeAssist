@@ -2,13 +2,23 @@
 
 import tiktoken
 
+# Cache for tiktoken encodings to avoid repeated lookups
+_encoding_cache: dict[str, tiktoken.Encoding] = {}
+
+
+def _get_encoding(model: str = "gpt-4") -> tiktoken.Encoding:
+    """Get a cached tiktoken encoding for the given model."""
+    if model not in _encoding_cache:
+        try:
+            _encoding_cache[model] = tiktoken.encoding_for_model(model)
+        except KeyError:
+            _encoding_cache[model] = tiktoken.get_encoding("cl100k_base")
+    return _encoding_cache[model]
+
 
 def count_tokens(messages: list[dict], model: str = "gpt-4") -> int:
     """Estimate token count for a list of messages."""
-    try:
-        encoding = tiktoken.encoding_for_model(model)
-    except KeyError:
-        encoding = tiktoken.get_encoding("cl100k_base")
+    encoding = _get_encoding(model)
 
     total = 0
     for msg in messages:
@@ -29,11 +39,7 @@ def truncate_tool_result(content: str, max_tokens: int = 4000) -> str:
     if not content:
         return content
 
-    try:
-        encoding = tiktoken.encoding_for_model("gpt-4")
-    except KeyError:
-        encoding = tiktoken.get_encoding("cl100k_base")
-
+    encoding = _get_encoding("gpt-4")
     tokens = len(encoding.encode(content))
     if tokens <= max_tokens:
         return content

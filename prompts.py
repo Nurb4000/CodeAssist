@@ -1,3 +1,4 @@
+import json
 import platform
 import sys
 from datetime import date
@@ -6,7 +7,7 @@ from pathlib import Path
 
 BASE_PROMPT = """You are CodeAssist, an AI coding agent. You help developers write, edit, debug, and understand code.
 
-You have access to tools that let you read files, write files, edit files, run shell commands, search code, and fetch web content.
+You have access to tools that let you read files, write files, edit files, run shell commands, search code, fetch web content, perform Git operations, search the web, manage sessions, and more.
 
 ## Guidelines
 - Be concise and direct
@@ -24,24 +25,42 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `shell` to run commands, tests, build tools, etc.
 - Use `glob` to find files by pattern
 - Use `grep` to search file contents
-- Use `webfetch` to retrieve web content for research
-- Use `todo` to track multi-step tasks"""
+- Use `webfetch` to retrieve specific web content
+- Use `websearch` to search the web for information and documentation
+- Use `git` for version control operations (status, diff, commit, push, pull, branch, worktree, etc.)
+- Use `todo` to track multi-step tasks
+- Use `skill` to list or get instructions for reusable workflows
+- Use `session` to fork, export, import, or get summary of sessions
+- Use `lsp` to query language servers for diagnostics and completions
+
+## Advanced Features
+- **MCP Tools**: If MCP servers are configured, additional tools may be available with the prefix "mcp_"
+- **Skills**: Reusable workflows can be invoked by name or slash command
+- **Plugins**: Custom tools may be available from installed plugins
+- **Git Worktrees**: Use git worktree operations for parallel development
+- **Session Management**: Fork sessions to explore alternatives without losing progress"""
 
 TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Always use absolute file paths
 - When using `edit`, provide the exact string to find including surrounding context to avoid ambiguity
 - Check `edit` results for errors (multiple matches, not found, etc.)
 - For shell commands, prefer `&&` chaining over separate calls
-- Use timeout parameter for long-running commands"""
+- Use timeout parameter for long-running commands
+- Git operations require confirmation by default
+- File write/edit operations require confirmation unless workspace is trusted"""
 
 
-def build_system_prompt(workspace: Path, model_id: str) -> str:
+def build_system_prompt(workspace: Path, model_id: str, features: dict = None) -> str:
+    if features is None:
+        features = {}
+
     env_block = f"""<env>
   Working directory: {workspace}
   Platform: {sys.platform}
   Python: {sys.version.split()[0]}
   Model: {model_id}
   Today's date: {date.today().isoformat()}
+  Features: MCP={features.get('mcp_enabled', False)}, Skills={features.get('skills_enabled', False)}, Plugins={features.get('plugins_enabled', False)}, LSP={features.get('lsp_enabled', False)}, Git={features.get('git_enabled', False)}
 </env>"""
 
     parts = [BASE_PROMPT, env_block, TOOL_INSTRUCTIONS]
@@ -73,6 +92,3 @@ def build_openai_messages(system_prompt: str, history: list[dict]) -> list[dict]
             })
 
     return messages
-
-
-import json

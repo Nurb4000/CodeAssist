@@ -1,5 +1,9 @@
+import logging
 from pathlib import Path
 from tools import Tool, ToolResult
+from tools.security import validate_path, WorkspaceViolationError
+
+log = logging.getLogger(__name__)
 
 
 class WriteTool(Tool):
@@ -17,7 +21,12 @@ class WriteTool(Tool):
     }
 
     async def execute(self, file_path: str, content: str) -> ToolResult:
-        path = Path(file_path)
+        try:
+            path = validate_path(file_path, self.workspace)
+        except WorkspaceViolationError as e:
+            log.warning("Path validation failed for write: %s", e)
+            return ToolResult(output=f"Error: {e}", error=True)
+
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)

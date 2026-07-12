@@ -13,6 +13,8 @@ CodeAssist is designed to run on your development machine, not a remote server. 
 
 ## Quick Start
 
+> **Always specify your project folder.** CodeAssist operates on whatever directory you give it. Running it without `--workspace` defaults to the current directory, which may not be what you intended. Get in the habit of always pointing it at the project you want to work on.
+
 ### With conda (recommended)
 
 ```bash
@@ -28,8 +30,8 @@ pip install -e .
 cp config.example.toml config.toml
 # Edit config.toml -- add your API key or llama.cpp server URL
 
-# Run
-codeassist
+# Run -- always specify your project folder
+codeassist --workspace ~/Projects/myapp
 ```
 
 ### With venv
@@ -43,14 +45,50 @@ pip install -e .
 cp config.example.toml config.toml
 # Edit config.toml
 
-codeassist
+# Always specify your project folder
+codeassist --workspace ~/Projects/myapp
 ```
 
 ### Without installing
 
 ```bash
-python -m codeassist
+python -m codeassist --workspace ~/Projects/myapp
 ```
+
+### With Docker
+
+Isolates the runtime in a container while mounting your project directory for full access.
+
+```bash
+# Copy the Docker example config
+cp config.docker.toml config.toml
+# Edit config.toml -- add your API key
+
+# Build and start -- always point WORKSPACE at your project
+WORKSPACE=~/Projects/myapp docker compose up --build
+```
+
+The server starts at `http://localhost:8000`. Session history persists across restarts via a Docker volume.
+
+Environment variable overrides (for advanced use):
+- `CODEASSIST_WORKSPACE` -- override the workspace path inside the container
+- `CODEASSIST_HOST` -- override the bind address
+- `CODEASSIST_PORT` -- override the port
+
+## Important: How CodeAssist Works
+
+CodeAssist is an **agentic** tool. Once you give it a prompt, it can:
+
+- Read and write files anywhere in the workspace directory
+- Execute shell commands (build scripts, git, test runners, etc.)
+- Search across your entire codebase
+
+It will ask for confirmation before making changes or running commands, but **you are granting it full access to the directory you specify**. This is by design -- it needs that access to be useful -- but it also means:
+
+- **Always use `--workspace`** to scope it to the project you are working on
+- **Never point it at your home directory** or any directory more broad than necessary
+- **Review the confirmation dialogs** before approving operations, especially shell commands
+- **Use Docker** if you want an additional isolation layer between the agent and your system
 
 ## Configuration
 
@@ -69,22 +107,30 @@ base_url = ""
 # base_url = "http://localhost:8080/v1"
 ```
 
-See `config.example.toml` for all options.
+See `config.example.toml` for all options (agent settings, tool limits, MCP, skills, LSP, and more).
+
+### Securing the server
+
+If you expose the server beyond localhost (e.g., `host = "0.0.0.0"`), set a password in `config.toml`:
+
+```toml
+[server]
+password = "your-secret-here"
+```
+
+Without a password, anyone who can reach the port has full access to the workspace.
 
 ## Usage
 
 ```bash
-# Default -- opens browser at http://127.0.0.1:8000
-codeassist
+# Always specify your project
+codeassist --workspace ~/Projects/myapp
 
 # Custom port
-codeassist --port 9000
-
-# Custom workspace
-codeassist --workspace ~/my-project
+codeassist --workspace ~/Projects/myapp --port 9000
 
 # Don't auto-open browser
-codeassist --no-browser
+codeassist --workspace ~/Projects/myapp --no-browser
 ```
 
 ## What it does
@@ -118,14 +164,18 @@ CodeAssist/
 │   ├── webfetch.py     # Fetch web content
 │   └── todo.py         # Task list management
 ├── static/             # Web UI
+├── Dockerfile          # Container image definition
+├── docker-compose.yml  # One-command Docker startup
 ├── config.toml         # Your config (gitignored)
-└── config.example.toml # Config template
+├── config.example.toml # Config template
+└── config.docker.toml  # Config template for Docker
 ```
 
 ## Requirements
 
 - Python 3.11+
 - An OpenAI-compatible API (OpenAI, llama.cpp, vLLM, etc.)
+- Git (recommended, for repository operations)
 
 ## License
 

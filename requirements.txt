@@ -8,3 +8,9 @@ markdown>=3.6
 pygments>=2.18.0
 wcmatch>=8.5
 tiktoken>=0.7.0
+duckduckgo-search>=4.0
+
+# Testing
+pytest>=9.0.0
+pytest-asyncio>=1.4.0
+pytest-cov>=7.0.0

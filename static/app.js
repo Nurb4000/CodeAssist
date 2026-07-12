@@ -302,6 +302,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
         const trustWorkspace = div.querySelector(`#trust-workspace-${confirmId}`)?.checked || false;
         const trustShell = div.querySelector(`#trust-shell-${confirmId}`)?.checked || false;
         div.remove();
+        showProgress(`Executing ${toolName}...`);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
                 type: 'confirm_response',
@@ -326,7 +327,10 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
 }
 
 function connectWS() {
-    if (ws) ws.close();
+    if (ws) {
+        ws.onclose = null;
+        ws.close();
+    }
     clearTimeout(reconnectTimer);
     if (!currentSessionId) return;
 
@@ -364,6 +368,7 @@ function connectWS() {
         } else if (data.type === 'plan_update') {
             updatePlanDisplay(data.tasks);
         } else if (data.type === 'confirm_request') {
+            hideProgress();
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
@@ -406,7 +411,7 @@ function connectWS() {
         }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
         wsConnected = false;
         updateConnectionStatus('disconnected');
         if (!isStreaming) {
@@ -414,6 +419,11 @@ function connectWS() {
             sendBtn.style.display = 'flex';
             stopBtn.style.display = 'none';
             inputEl.disabled = false;
+        }
+        // Don't reconnect on4001 (auth failure) or intentional close
+        if (event.code === 4001) {
+            updateConnectionStatus('error');
+            return;
         }
         // Faster reconnect on initial load
         const delay = document.querySelector('.welcome') ? 1000 : 3000;
