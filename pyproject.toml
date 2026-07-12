@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codeassist"
-version = "0.1.0"
-description = "AI coding assistant for local development"
+version = "1.0.0"
+description = "AI coding assistant for local development with MCP, skills, plugins, and LSP support"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110.0",
@@ -18,11 +18,12 @@ dependencies = [
     "pygments>=2.18.0",
     "wcmatch>=8.5",
     "tiktoken>=0.7.0",
+    "duckduckgo-search>=4.0",
 ]
 
 [project.scripts]
 codeassist = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "agent", "config", "llm", "prompts", "server", "session", "tokens"]
+py-modules = ["cli", "agent", "config", "llm", "prompts", "server", "session", "tokens", "mcp_client", "skills", "plugins", "lsp_client", "session_manager", "agents"]
 packages = ["tools"]

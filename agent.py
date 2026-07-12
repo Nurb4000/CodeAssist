@@ -17,7 +17,7 @@ from tokens import compact_messages, check_context_limit, truncate_tool_result
 log = logging.getLogger(__name__)
 
 # Tools that require user confirmation before execution
-CONFIRM_TOOLS = {"write", "edit", "shell"}
+CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 
 
 @dataclass
@@ -27,12 +27,12 @@ class AgentEvent:
 
 
 class Agent:
-    def __init__(self, config: Config, session: Session, tools: ToolRegistry):
+    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str = None):
         self.config = config
         self.session = session
         self.tools = tools
         self.llm = LLMClient(config.llm)
-        self.system_prompt = build_system_prompt(config.workspace, config.llm.model)
+        self.system_prompt = system_prompt or build_system_prompt(config.workspace, config.llm.model)
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
@@ -52,18 +52,19 @@ class Agent:
         """Set trust flags from user confirmation."""
         if trust_workspace:
             self._trust_workspace_writes = True
-            print(f"[TRUST] Workspace writes trusted. Flag={self._trust_workspace_writes}")
+            log.info("Workspace writes trusted. Flag=%s", self._trust_workspace_writes)
         if trust_shell:
             self._trust_shell = True
-            print(f"[TRUST] Shell commands trusted. Flag={self._trust_shell}")
+            log.info("Shell commands trusted. Flag=%s", self._trust_shell)
 
     def _is_in_workspace(self, file_path: str) -> bool:
         """Check if a file path is within the workspace."""
         try:
             path = Path(file_path).resolve()
             workspace = self.config.workspace.resolve()
-            return str(path).startswith(str(workspace))
-        except Exception:
+            path.relative_to(workspace)
+            return True
+        except (ValueError, OSError):
             return False
 
     def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:
@@ -75,11 +76,13 @@ class Agent:
         if tool_name == "shell" and self._trust_shell:
             return False
 
-        # Check workspace write trust
+        # Check workspace write trust — only skip confirmation for in-workspace paths
         if tool_name in ("write", "edit") and self._trust_workspace_writes:
             file_path = arguments.get("file_path", arguments.get("path", ""))
-            print(f"[TRUST] needs_confirmation: trust={self._trust_workspace_writes}, file_path={file_path}")
-            return False
+            if self._is_in_workspace(file_path):
+                log.debug("needs_confirmation: trust=%s, file_path=%s (in workspace)", self._trust_workspace_writes, file_path)
+                return False
+            log.debug("needs_confirmation: trust=%s, file_path=%s (outside workspace, requires confirmation)", self._trust_workspace_writes, file_path)
 
         return True
 
@@ -94,7 +97,8 @@ class Agent:
 
     def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False):
         """Resolve a pending confirmation from WebSocket."""
-        print(f"[CONFIRM] id={confirm_id}, approved={approved}, trust_workspace={trust_workspace}, trust_shell={trust_shell}")
+        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s",
+                 confirm_id, approved, trust_workspace, trust_shell)
         if approved:
             self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell)
         if confirm_id in self._confirm_events:
@@ -200,7 +204,7 @@ class Agent:
                         return
 
                     # Check if tool requires confirmation
-                    print(f"[TOOL] {tc.name} args={tc.arguments}")
+                    log.info("Executing tool: %s args=%s", tc.name, tc.arguments)
                     if self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
                         yield AgentEvent("confirm_request", {
@@ -226,15 +230,15 @@ class Agent:
 
                     result = await self.tools.execute(tc.name, tc.arguments)
                     # Truncate large tool results before saving
-                    truncated = truncate_tool_result(result, max_tokens=4000)
+                    truncated = truncate_tool_result(result, max_tokens=self.config.tools.tool_output_max_tokens)
                     await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                     yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
 
                     # Send plan update when todo tool is used
                     if tc.name == "todo":
                         todo_tool = self.tools.get("todo")
-                        if todo_tool and hasattr(todo_tool, '_tasks'):
-                            yield AgentEvent("plan_update", {"tasks": todo_tool._tasks})
+                        if todo_tool and hasattr(todo_tool, "get_tasks"):
+                            yield AgentEvent("plan_update", {"tasks": todo_tool.get_tasks()})
 
                 continue
 

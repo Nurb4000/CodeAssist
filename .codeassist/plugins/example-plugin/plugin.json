@@ -1,0 +1,8 @@
+{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "description": "Example plugin demonstrating the CodeAssist plugin API",
+  "config": {
+    "enabled_features": ["weather"]
+  }
+}

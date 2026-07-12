@@ -22,6 +22,13 @@ class TodoTool(Tool):
         self._tasks: list[dict] = []
         self._next_id = 1
 
+    def get_tasks(self) -> list[dict]:
+        return list(self._tasks)
+
+    def clear_tasks(self):
+        self._tasks.clear()
+        self._next_id = 1
+
     async def execute(self, action: str, task_id: int | None = None, content: str | None = None, status: str | None = None) -> ToolResult:
         if action == "add":
             if not content:

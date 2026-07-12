@@ -1,0 +1,56 @@
+# Docker-specific config — copy this to config.toml to get started:
+#   cp config.docker.toml config.toml
+
+[llm]
+provider = "openai"
+model = "gpt-4o"
+api_key = ""
+base_url = ""
+
+[llm.parameters]
+temperature = 0.0
+max_tokens = 8192
+context_window = 128000
+
+[server]
+# Inside Docker, uvicorn binds to 0.0.0.0 (set via entrypoint)
+# This value is ignored when running in Docker
+host = "0.0.0.0"
+port = 8000
+# Workspace is mounted at /workspace inside the container
+workspace = "/workspace"
+
+[agent]
+max_iterations = 30
+name = "CodeAssist"
+default_agent = "default"
+
+[tools]
+shell_timeout = 120
+max_output_chars = 20000
+webfetch_max_chars = 30000
+websearch_max_chars = 30000
+tool_output_max_tokens = 4000
+
+[mcp]
+enabled = false
+
+[skills]
+enabled = true
+directories = [".codeassist/skills"]
+
+[plugins]
+enabled = false
+
+[lsp]
+enabled = false
+
+[git]
+enabled = true
+auto_detect = true
+
+[compaction]
+enabled = true
+threshold_pct = 75
+keep_recent = 20
+tool_result_max_tokens = 4000

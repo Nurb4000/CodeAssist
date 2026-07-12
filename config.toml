@@ -35,3 +35,8 @@ workspace = "."
 [agent]
 max_iterations = 30
 name = "CodeAssist"
+
+[tools]
+shell_timeout = 120
+max_output_chars = 20000
+webfetch_max_chars = 30000

@@ -1,12 +1,14 @@
 import httpx
 from pathlib import Path
 from tools import Tool, ToolResult
+from tools.security import validate_url
 
 
 class WebFetchTool(Tool):
     name = "webfetch"
     description = "Fetch content from a URL. Returns text or markdown content."
     workspace = Path(".")
+    max_chars: int = 30000
 
     parameters = {
         "type": "object",
@@ -20,6 +22,13 @@ class WebFetchTool(Tool):
     async def execute(self, url: str, format: str = "markdown") -> ToolResult:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
+
+        # Block SSRF to private/internal networks
+        if not validate_url(url):
+            return ToolResult(
+                output=f"Error: URL '{url}' targets a private or internal network and is not allowed",
+                error=True
+            )
 
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -39,8 +48,9 @@ class WebFetchTool(Tool):
         else:
             text = response.text
 
-        if len(text) > 30000:
-            text = text[:15000] + "\n\n... (truncated) ...\n\n" + text[-15000:]
+        if len(text) > self.max_chars:
+            half = self.max_chars // 2
+            text = text[:half] + "\n\n... (truncated) ...\n\n" + text[-half:]
 
         return ToolResult(output=text)
 

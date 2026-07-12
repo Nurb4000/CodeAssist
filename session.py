@@ -1,38 +1,246 @@
 import aiosqlite
+import asyncio
 import json
 import uuid
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
 
-
 DB_PATH = Path(__file__).parent / "data" / "codeassist.db"
+
+SCHEMA_VERSION = 3
+
+
+class _DBPool:
+    """Simple async connection pool for aiosqlite."""
+
+    def __init__(self, db_path: Path, max_connections: int = 5):
+        self._db_path = db_path
+        self._max_connections = max_connections
+        self._pool: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue(maxsize=max_connections)
+        self._count = 0
+
+    async def acquire(self) -> aiosqlite.Connection:
+        try:
+            conn = self._pool.get_nowait()
+        except asyncio.QueueEmpty:
+            if self._count < self._max_connections:
+                self._count += 1
+                conn = await aiosqlite.connect(self._db_path)
+                conn.row_factory = aiosqlite.Row
+            else:
+                conn = await self._pool.get()
+        return conn
+
+    async def release(self, conn: aiosqlite.Connection):
+        try:
+            self._pool.put_nowait(conn)
+        except asyncio.QueueFull:
+            await conn.close()
+            self._count -= 1
+
+
+_db_pool: _DBPool | None = None
+
+
+def _get_pool() -> _DBPool:
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = _DBPool(DB_PATH)
+    return _db_pool
+
+
+def reset_pool():
+    """Drop all pooled connections. Call before deleting the DB file in tests."""
+    global _db_pool
+    if _db_pool is not None:
+        while not _db_pool._pool.empty():
+            try:
+                conn = _db_pool._pool.get_nowait()
+                # Schedule close but don't await — connection will be GC'd
+                conn._conn.close()
+            except (asyncio.QueueEmpty, Exception):
+                break
+        _db_pool._count = 0
+        _db_pool = None
+
+
+@asynccontextmanager
+async def get_db():
+    """Get a pooled database connection."""
+    pool = _get_pool()
+    conn = await pool.acquire()
+    try:
+        yield conn
+    finally:
+        await pool.release(conn)
 
 
 async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                created_at TEXT,
-                updated_at TEXT
+    async with get_db() as db:
+        await db.execute(f"""
+            CREATE TABLE IF NOT EXISTS schema_info (
+                key TEXT PRIMARY KEY,
+                value TEXT
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                session_id TEXT REFERENCES sessions(id),
-                role TEXT NOT NULL,
-                content TEXT,
-                tool_call_id TEXT,
-                tool_calls TEXT,
-                name TEXT,
-                created_at TEXT
-            )
-        """)
+
+        current_version = 0
+        try:
+            cursor = await db.execute("SELECT value FROM schema_info WHERE key = 'version'")
+            row = await cursor.fetchone()
+            if row:
+                current_version = int(row[0])
+        except Exception:
+            pass
+
+        if current_version == 0:
+            await _create_v1_tables(db)
+            current_version = 1
+
+        if current_version < 2:
+            await _add_v2_tables(db)
+            current_version = 2
+
+        if current_version < SCHEMA_VERSION:
+            await _add_v3_tables(db)
+            current_version = SCHEMA_VERSION
+
+        await db.execute(
+            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
+            (str(current_version),)
+        )
         await db.commit()
+
+
+async def _create_v1_tables(db):
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            parent_id TEXT,
+            fork_point TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id),
+            role TEXT NOT NULL,
+            content TEXT,
+            tool_call_id TEXT,
+            tool_calls TEXT,
+            name TEXT,
+            created_at TEXT
+        )
+    """)
+
+
+async def _add_v2_tables(db):
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS agents (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            instructions TEXT,
+            model TEXT,
+            max_iterations INTEGER,
+            permissions TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            config TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            content TEXT,
+            source TEXT,
+            slash_command TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS plugins (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            version TEXT,
+            config TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS lsp_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            command TEXT,
+            args TEXT,
+            languages TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS git_repos (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            head_branch TEXT,
+            last_sync TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+
+async def _add_v3_tables(db):
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS permissions (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT REFERENCES agents(id),
+            tool_name TEXT NOT NULL,
+            action TEXT NOT NULL,
+            scope TEXT,
+            created_at TEXT,
+            UNIQUE(agent_id, tool_name, action)
+        )
+    """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS session_exports (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id),
+            data TEXT,
+            redacted INTEGER DEFAULT 0,
+            created_at TEXT,
+            expires_at TEXT
+        )
+    """)
 
 
 class Session:
@@ -40,30 +248,29 @@ class Session:
         self.id = session_id
 
     @classmethod
-    async def create(cls, name: str | None = None) -> "Session":
+    async def create(cls, name: str | None = None, parent_id: str | None = None, fork_point: str | None = None) -> "Session":
         sid = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         now_str = now.isoformat()
-        default_name = now.strftime("%Y-%m-%d %H:%M")
-        async with aiosqlite.connect(DB_PATH) as db:
+        default_name = name or now.strftime("%Y-%m-%d %H:%M")
+        async with get_db() as db:
             await db.execute(
-                "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (sid, name or default_name, now_str, now_str),
+                "INSERT INTO sessions (id, name, parent_id, fork_point, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (sid, default_name, parent_id, fork_point, now_str, now_str),
             )
             await db.commit()
         return cls(sid)
 
     @classmethod
     async def list_all(cls) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db() as db:
             cursor = await db.execute("SELECT * FROM sessions ORDER BY updated_at DESC")
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
     @classmethod
     async def get_or_create_latest(cls) -> "Session":
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with get_db() as db:
             cursor = await db.execute("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1")
             row = await cursor.fetchone()
             if row:
@@ -79,8 +286,8 @@ class Session:
         name: str | None = None,
     ) -> str:
         mid = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
             await db.execute(
                 "INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_calls, name, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -103,8 +310,7 @@ class Session:
         return mid
 
     async def get_messages(self) -> list[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db() as db:
             cursor = await db.execute(
                 "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at",
                 (self.id,),
@@ -113,13 +319,376 @@ class Session:
             return [dict(r) for r in rows]
 
     async def rename(self, name: str):
-        now = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
             await db.execute("UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?", (name, now, self.id))
             await db.commit()
 
     async def delete(self):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with get_db() as db:
             await db.execute("DELETE FROM messages WHERE session_id = ?", (self.id,))
             await db.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
+            await db.commit()
+
+    async def fork(self, name: str | None = None) -> "Session":
+        """Create a fork of this session."""
+        new_session = await Session.create(name=name, parent_id=self.id, fork_point=datetime.now(timezone.utc).isoformat())
+        messages = await self.get_messages()
+        for msg in messages:
+            await new_session.add_message(
+                role=msg["role"],
+                content=msg["content"],
+                tool_calls=json.loads(msg["tool_calls"]) if msg["tool_calls"] else None,
+                tool_call_id=msg["tool_call_id"],
+                name=msg["name"],
+            )
+        return new_session
+
+
+class Agent:
+    def __init__(self, agent_id: str):
+        self.id = agent_id
+
+    @classmethod
+    async def create(
+        cls,
+        name: str,
+        description: str | None = None,
+        instructions: str | None = None,
+        model: str | None = None,
+        max_iterations: int | None = None,
+        permissions: dict[str, list[str]] | None = None,
+    ) -> "Agent":
+        aid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO agents (id, name, description, instructions, model, max_iterations, permissions, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (aid, name, description, instructions, model, max_iterations, json.dumps(permissions or {}), now, now),
+            )
+            await db.commit()
+        return cls(aid)
+
+    @classmethod
+    async def list_all(cls) -> list[dict]:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM agents WHERE enabled = 1 ORDER BY name")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @classmethod
+    async def get(cls, agent_id: str) -> "Agent | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    @classmethod
+    async def get_by_name(cls, name: str) -> "Agent | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM agents WHERE name = ? AND enabled = 1", (name,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    async def get_config(self) -> dict:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM agents WHERE id = ?", (self.id,))
+            row = await cursor.fetchone()
+            if row:
+                return dict(row)
+        return {}
+
+    _ALLOWED_UPDATE_FIELDS = {"name", "description", "instructions", "model", "max_iterations", "permissions"}
+
+    async def update(self, **kwargs):
+        now = datetime.now(timezone.utc).isoformat()
+        fields = []
+        values = []
+        for key, value in kwargs.items():
+            if key not in self._ALLOWED_UPDATE_FIELDS:
+                continue
+            if key == "permissions":
+                fields.append("permissions = ?")
+                values.append(json.dumps(value))
+            else:
+                fields.append(f"{key} = ?")
+                values.append(value)
+        if not fields:
+            return
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.append(self.id)
+        async with get_db() as db:
+            await db.execute(f"UPDATE agents SET {', '.join(fields)} WHERE id = ?", values)
+            await db.commit()
+
+    async def delete(self):
+        async with get_db() as db:
+            await db.execute("DELETE FROM permissions WHERE agent_id = ?", (self.id,))
+            await db.execute("UPDATE agents SET enabled = 0 WHERE id = ?", (self.id,))
+            await db.commit()
+
+
+class MCPServer:
+    def __init__(self, server_id: str):
+        self.id = server_id
+
+    @classmethod
+    async def create(cls, name: str, config: dict) -> "MCPServer":
+        sid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO mcp_servers (id, name, config, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+                (sid, name, json.dumps(config), now, now),
+            )
+            await db.commit()
+        return cls(sid)
+
+    @classmethod
+    async def list_all(cls) -> list[dict]:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM mcp_servers WHERE enabled = 1 ORDER BY name")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @classmethod
+    async def get(cls, server_id: str) -> "MCPServer | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM mcp_servers WHERE id = ?", (server_id,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    async def get_config(self) -> dict:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM mcp_servers WHERE id = ?", (self.id,))
+            row = await cursor.fetchone()
+            if row:
+                config = json.loads(row["config"])
+                config["id"] = row["id"]
+                config["name"] = row["name"]
+                return config
+        return {}
+
+    async def update(self, config: dict):
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE mcp_servers SET config = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(config), now, self.id),
+            )
+            await db.commit()
+
+    async def delete(self):
+        async with get_db() as db:
+            await db.execute("DELETE FROM mcp_servers WHERE id = ?", (self.id,))
+            await db.commit()
+
+
+class Skill:
+    def __init__(self, skill_id: str):
+        self.id = skill_id
+
+    @classmethod
+    async def create(
+        cls,
+        name: str,
+        description: str,
+        content: str,
+        source: str | None = None,
+        slash_command: str | None = None,
+    ) -> "Skill":
+        sid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO skills (id, name, description, content, source, slash_command, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (sid, name, description, content, source, slash_command, now, now),
+            )
+            await db.commit()
+        return cls(sid)
+
+    @classmethod
+    async def list_all(cls) -> list[dict]:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM skills WHERE enabled = 1 ORDER BY name")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @classmethod
+    async def get(cls, skill_id: str) -> "Skill | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM skills WHERE id = ?", (skill_id,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    @classmethod
+    async def get_by_slash_command(cls, command: str) -> "Skill | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM skills WHERE slash_command = ? AND enabled = 1", (command,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    async def delete(self):
+        async with get_db() as db:
+            await db.execute("UPDATE skills SET enabled = 0 WHERE id = ?", (self.id,))
+            await db.commit()
+
+
+class Plugin:
+    def __init__(self, plugin_id: str):
+        self.id = plugin_id
+
+    @classmethod
+    async def create(cls, name: str, version: str | None = None, config: dict | None = None) -> "Plugin":
+        pid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO plugins (id, name, version, config, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                (pid, name, version, json.dumps(config or {}), now, now),
+            )
+            await db.commit()
+        return cls(pid)
+
+    @classmethod
+    async def list_all(cls) -> list[dict]:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM plugins WHERE enabled = 1 ORDER BY name")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @classmethod
+    async def get(cls, plugin_id: str) -> "Plugin | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM plugins WHERE id = ?", (plugin_id,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    async def delete(self):
+        async with get_db() as db:
+            await db.execute("DELETE FROM plugins WHERE id = ?", (self.id,))
+            await db.commit()
+
+
+class LSPServer:
+    def __init__(self, server_id: str):
+        self.id = server_id
+
+    @classmethod
+    async def create(
+        cls,
+        name: str,
+        command: str,
+        args: list[str] | None = None,
+        languages: list[str] | None = None,
+    ) -> "LSPServer":
+        sid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO lsp_servers (id, name, command, args, languages, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+                (sid, name, command, json.dumps(args or []), json.dumps(languages or []), now, now),
+            )
+            await db.commit()
+        return cls(sid)
+
+    @classmethod
+    async def list_all(cls) -> list[dict]:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM lsp_servers WHERE enabled = 1 ORDER BY name")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @classmethod
+    async def get(cls, server_id: str) -> "LSPServer | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM lsp_servers WHERE id = ?", (server_id,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    async def get_config(self) -> dict:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM lsp_servers WHERE id = ?", (self.id,))
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "command": row["command"],
+                    "args": json.loads(row["args"]),
+                    "languages": json.loads(row["languages"]),
+                }
+        return {}
+
+    async def delete(self):
+        async with get_db() as db:
+            await db.execute("DELETE FROM lsp_servers WHERE id = ?", (self.id,))
+            await db.commit()
+
+
+class GitRepo:
+    def __init__(self, repo_id: str):
+        self.id = repo_id
+
+    @classmethod
+    async def create(cls, path: str, head_branch: str | None = None) -> "GitRepo":
+        rid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO git_repos (id, path, head_branch, last_sync, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (rid, path, head_branch, now, now, now),
+            )
+            await db.commit()
+        return cls(rid)
+
+    @classmethod
+    async def list_all(cls) -> list[dict]:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM git_repos ORDER BY path")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @classmethod
+    async def get_by_path(cls, path: str) -> "GitRepo | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT * FROM git_repos WHERE path = ?", (path,))
+            row = await cursor.fetchone()
+            if row:
+                return cls(row[0])
+        return None
+
+    async def update(self, head_branch: str | None = None):
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            if head_branch is not None:
+                await db.execute(
+                    "UPDATE git_repos SET head_branch = ?, last_sync = ?, updated_at = ? WHERE id = ?",
+                    (head_branch, now, now, self.id),
+                )
+            else:
+                await db.execute("UPDATE git_repos SET updated_at = ? WHERE id = ?", (now, self.id))
+            await db.commit()
+
+    async def delete(self):
+        async with get_db() as db:
+            await db.execute("DELETE FROM git_repos WHERE id = ?", (self.id,))
             await db.commit()
