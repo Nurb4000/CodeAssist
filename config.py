@@ -14,6 +14,8 @@ class LLMConfig:
     temperature: float = 0.0
     max_tokens: int = 8192
     context_window: int = 128000
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
 
 
 @dataclass
@@ -116,6 +118,8 @@ class Config:
                 temperature=params.get("temperature", 0.0),
                 max_tokens=params.get("max_tokens", 8192),
                 context_window=params.get("context_window", 128000),
+                frequency_penalty=params.get("frequency_penalty", 0.0),
+                presence_penalty=params.get("presence_penalty", 0.0),
             ),
             server=ServerConfig(
                 host=raw.get("server", {}).get("host", "127.0.0.1"),
