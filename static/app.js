@@ -158,11 +158,14 @@ async function loadMessages() {
         } else if (m.role === 'assistant') {
             const hasContent = !!m.content;
             const hasTools = !!m.tool_calls;
-            if (hasContent && hasTools) {
-                finalizeToolPanel();
-                startAssistantMessage();
-                currentContentEl.innerHTML = marked.parse(m.content);
-                currentToolPanel.style.display = '';
+            if (hasTools) {
+                if (!currentToolPanel) {
+                    startAssistantMessage();
+                    currentToolPanel.style.display = '';
+                }
+                if (hasContent) {
+                    currentContentEl.innerHTML = marked.parse(m.content);
+                }
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
                 for (const tc of tcs) {
                     appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
@@ -170,12 +173,6 @@ async function loadMessages() {
             } else if (hasContent) {
                 finalizeToolPanel();
                 appendAssistantMessage(m.content);
-            } else if (hasTools) {
-                finalizeToolPanel();
-                const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
-                for (const tc of tcs) {
-                    appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
-                }
             }
         } else if (m.role === 'tool') {
             updateLastToolResult(m.content);
