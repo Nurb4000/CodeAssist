@@ -171,6 +171,8 @@ codeassist --workspace ~/Projects/myapp --no-browser
 
 Skills are reusable, guided workflows that extend CodeAssist's capabilities. They're markdown files with frontmatter that define specialized instructions for specific tasks.
 
+**Using skills:** Type the slash command (e.g., `/review`, `/music`) in chat to invoke a skill. You can also mention the skill by name naturally (e.g., "review this code" or "help me debug this").
+
 **Built-in coding skills:**
 
 | Skill | Slash | Purpose |
