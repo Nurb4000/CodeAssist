@@ -167,6 +167,60 @@ codeassist --workspace ~/Projects/myapp --no-browser
 | `question` | Ask the user a clarifying question mid-task |
 | `task` | Delegate work to a background subagent |
 
+### Skills
+
+Skills are reusable, guided workflows that extend CodeAssist's capabilities. They're markdown files with frontmatter that define specialized instructions for specific tasks.
+
+**Built-in coding skills:**
+
+| Skill | Slash | Purpose |
+|-------|-------|---------|
+| `code-review` | `/review` | Review code for bugs, security, and quality |
+| `refactor` | `/refactor` | Improve code structure and readability |
+| `debug` | `/debug` | Systematic debugging workflow |
+| `test` | `/test` | Write unit and integration tests |
+| `explain` | `/explain` | Explain how code works |
+| `document` | `/doc` | Generate docstrings and documentation |
+| `optimize` | `/optimize` | Improve performance |
+| `clean` | `/clean` | Remove dead code, organize imports |
+| `security` | `/security` | Audit for vulnerabilities |
+| `convert` | `/convert` | Convert between languages/frameworks |
+| `generate` | `/generate` | Generate boilerplate code |
+| `migrate` | `/migrate` | Assist with framework/version upgrades |
+| `lint` | `/lint` | Fix linting and formatting issues |
+
+**Non-coding skill examples:**
+
+| Skill | Slash | Purpose |
+|-------|-------|---------|
+| `music` | `/music` | Generate structured song parameters for ACE-Step music generation |
+| `imagegen` | `/imagegen` | Generate Stable Diffusion prompts with proper syntax, weights, and negatives |
+
+These skills demonstrate how CodeAssist's skill system extends beyond coding tasks:
+
+- **`music`** generates properly formatted JSON payloads (caption, lyrics, metadata) for music generation engines, enforcing structure rules and duration-to-lyric mapping.
+- **`imagegen`** produces complete Stable Diffusion prompts with correct token weighting syntax `(word:1.3)`, positive/negative prompt separation, and style-specific templates.
+
+Both show the platform's flexibility for any domain where consistent, structured LLM output is valuable — creative tools, content generation, data formatting, and more.
+
+**Creating custom skills:**
+
+Add markdown files to `.codeassist/skills/` with this structure:
+
+```markdown
+---
+name: my-skill
+description: What this skill does and when to use it
+slash: command
+---
+
+# Skill Name
+
+Instructions and rules here...
+```
+
+Skills are discovered automatically on startup.
+
 ## Project structure
 
 ```
@@ -196,6 +250,8 @@ CodeAssist/
 │   ├── http.py         # HTTP requests
 │   ├── process.py      # Background process management
 │   └── advanced.py     # Web search, user questions, subtasks
+├── .codeassist/        # Skills and plugins
+│   └── skills/         # Skill markdown files
 ├── static/             # Web UI
 ├── Dockerfile          # Container image definition
 ├── docker-compose.yml  # One-command Docker startup

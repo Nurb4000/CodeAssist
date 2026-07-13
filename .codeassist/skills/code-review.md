@@ -1,29 +1,40 @@
 ---
 name: code-review
-description: Perform a comprehensive code review of changed files
+description: Review code for quality, bugs, and best practices
 slash: review
 ---
 
-You are performing a code review. Follow these steps:
+# Code Review Skill
 
-1. Use `git status` to see what files have been changed
-2. Use `git diff` to see the actual changes
-3. For each changed file:
-   - Read the file to understand context
-   - Check for common issues:
-     * Security vulnerabilities
-     * Performance problems
-     * Error handling gaps
-     * Code style inconsistencies
-     * Missing edge cases
-4. Provide specific, actionable feedback
-5. Suggest improvements with code examples when appropriate
+Perform a thorough code review of the provided code or file.
 
-Focus on:
-- Correctness and logic errors
-- Security implications
-- Performance concerns
-- Maintainability
-- Test coverage gaps
+## Steps
 
-Be constructive and specific in your feedback.
+1. **Read the code** - Examine the file(s) specified or the current context
+2. **Check for issues:**
+   - Bugs and logic errors
+   - Security vulnerabilities
+   - Performance problems
+   - Code style violations
+   - Missing error handling
+   - Edge cases not handled
+3. **Suggest improvements** with specific line references
+4. **Provide summary** of findings by severity (critical, warning, info)
+
+## Output Format
+
+```
+## Code Review Summary
+
+### Critical Issues
+- [file:line] Description
+
+### Warnings  
+- [file:line] Description
+
+### Suggestions
+- [file:line] Description
+
+### Positive Notes
+- What's done well
+```
