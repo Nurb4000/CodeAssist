@@ -268,6 +268,15 @@ CodeAssist/
 - An OpenAI-compatible API (OpenAI, llama.cpp, vLLM, etc.)
 - Git (recommended, for repository operations)
 
+A couple of screenshots of it in action.
+
+<img width="1272" height="929" alt="image" src="https://github.com/user-attachments/assets/4be2ae04-85a8-40ef-b0f8-fad343c2105b" />
+<img width="844" height="624" alt="image" src="https://github.com/user-attachments/assets/699085b7-b580-4fbc-b34a-c157a8134ab7" />
+<img width="831" height="411" alt="image" src="https://github.com/user-attachments/assets/cb468233-6407-4c73-b775-46a32fc54d02" />
+<img width="786" height="394" alt="image" src="https://github.com/user-attachments/assets/c778bf52-9c31-4982-8cb5-84ebbb844c2a" />
+
+
+
 ## License
 
 MIT
