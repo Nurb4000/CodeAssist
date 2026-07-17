@@ -29,6 +29,9 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `websearch` to search the web for information and documentation
 - Use `git` for version control operations (status, diff, commit, push, pull, branch, worktree, etc.)
 - Use `todo` to track multi-step tasks
+  - When using `todo`, ALWAYS mark each task as completed immediately after finishing the work for that step
+  - Never leave tasks in `pending` or `in_progress` status once the work is done
+  - Before finishing your response, verify all tasks are marked as completed
 - Use `skill` to list or get instructions for reusable workflows
 - Use `session` to fork, export, import, or get summary of sessions
 - Use `lsp` to query language servers for diagnostics and completions
