@@ -167,6 +167,11 @@ body {
 .message-content p { margin-bottom: 12px; }
 .message-content p:last-child { margin-bottom: 0; }
 
+.message-content.user-content {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
 .message-content pre {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
