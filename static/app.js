@@ -195,7 +195,7 @@ function appendUserMessage(text) {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
-    div.innerHTML = `<div class="message-role user">You</div><div class="message-content">${escapeHtml(text)}</div>`;
+    div.innerHTML = `<div class="message-role user">You</div><div class="message-content user-content">${escapeHtml(text)}</div>`;
     messagesEl.appendChild(div);
 }
 
