@@ -142,6 +142,31 @@ codeassist --workspace ~/Projects/myapp --no-browser
 - **Fetch web content** for documentation lookup
 - **Track tasks** across multi-step work
 - **Continue** conversations with context
+- **Knowledge base** - persistent learning across sessions with semantic search
+
+## Knowledge Base
+
+CodeAssist learns from every session and builds a persistent knowledge base:
+
+- **Session Summaries** - AI-generated summaries with key topics and quality scores
+- **Knowledge Extraction** - Automatically captures patterns, conventions, and decisions
+- **Full-Text Search** - FTS5 search across all knowledge (instant)
+- **Semantic Search** - Vector embeddings for similarity search (requires embedding model)
+- **Tool Analytics** - Track tool usage, success rates, and performance
+- **LLM Cost Tracking** - Monitor token usage and estimated costs
+- **File History** - Track modifications across sessions
+- **Fine-Tuning Ready** - Structured Q&A pairs for future model training
+
+All data stored in human-readable SQLite - query directly with SQL, DB Browser, or Python.
+
+```bash
+# Enable semantic search (optional)
+# Add to config.toml:
+[llm]
+embedding_model = "text-embedding-3-small"
+```
+
+See `docs/knowledge-base-quickref.md` for API endpoints and examples.
 
 ### Built-in tools
 
@@ -234,6 +259,8 @@ CodeAssist/
 ├── config.py           # Configuration loading
 ├── prompts.py          # System prompt construction
 ├── session.py          # SQLite session persistence
+├── knowledge.py        # Knowledge base CRUD and search
+├── embeddings.py       # Vector embeddings for semantic search
 ├── tools/              # Tool implementations
 │   ├── read.py         # Read file contents
 │   ├── write.py        # Write file contents
