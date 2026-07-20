@@ -14,9 +14,9 @@ context_window = 128000
 
 [server]
 # Inside Docker, uvicorn binds to 0.0.0.0 (set via entrypoint)
-# This value is ignored when running in Docker
+# This value determines the container's listening port
 host = "0.0.0.0"
-port = 8000
+port = 8090
 # Workspace is mounted at /workspace inside the container
 workspace = "/workspace"
 

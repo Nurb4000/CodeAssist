@@ -22,7 +22,7 @@ class LLMConfig:
 @dataclass
 class ServerConfig:
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8090
     workspace: str = "."
     password: str = ""
 
