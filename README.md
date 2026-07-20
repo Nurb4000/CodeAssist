@@ -285,6 +285,19 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `create_skill` | Create new skills for repetitive workflows |
 | `create_tool` | Create custom Python tools |
 
+### Tool Manager
+
+Access the Tool Manager via the **🔧 icon** in the sidebar or the **Tool Manager** link in the footer.
+
+| Page | Purpose |
+|------|---------|
+| **All Tools** | Browse built-in and custom tools |
+| **Custom Tools** | Review, trust/untrust, delete custom tools |
+| **Security Scan** | Scan for dangerous code patterns |
+| **Usage Stats** | View tool usage statistics |
+
+**Security:** Custom tools are scanned for potentially dangerous patterns (network access, file operations, subprocess calls, etc.). Review and trust tools before allowing unrestricted execution.
+
 ### Skills
 
 Skills are reusable, guided workflows that extend CodeAssist's capabilities. They're markdown files with frontmatter that define specialized instructions for specific tasks.
