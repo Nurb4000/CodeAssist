@@ -1204,9 +1204,7 @@ async def kb_clear(body: dict):
 @app.get("/api/tools/manage/list")
 async def list_all_tools():
     """List all tools (built-in + custom) with metadata."""
-    from config import load_config
-    
-    config = load_config()
+    config = get_config()
     workspace = Path(config.server.workspace)
     
     # Get built-in tools
@@ -1257,9 +1255,7 @@ async def list_all_tools():
 @app.get("/api/tools/manage/{tool_name}")
 async def get_tool_details(tool_name: str):
     """Get detailed info about a specific tool."""
-    from config import load_config
-    
-    config = load_config()
+    config = get_config()
     workspace = Path(config.server.workspace)
     
     # Check built-in tools
@@ -1305,9 +1301,7 @@ async def get_tool_details(tool_name: str):
 @app.put("/api/tools/manage/{tool_name}/trust")
 async def set_tool_trust(tool_name: str, body: dict):
     """Set trust level for a custom tool."""
-    from config import load_config
-    
-    config = load_config()
+    config = get_config()
     workspace = Path(config.server.workspace)
     
     from custom_tools_loader import get_custom_tool_registry
@@ -1327,9 +1321,7 @@ async def set_tool_trust(tool_name: str, body: dict):
 @app.delete("/api/tools/manage/{tool_name}")
 async def delete_custom_tool(tool_name: str):
     """Delete a custom tool."""
-    from config import load_config
-    
-    config = load_config()
+    config = get_config()
     workspace = Path(config.server.workspace)
     
     from custom_tools_loader import get_custom_tool_registry
@@ -1371,9 +1363,7 @@ async def get_tool_usage_stats(period_days: int = 30):
 @app.post("/api/tools/manage/scan")
 async def scan_custom_tools():
     """Scan custom tools for potentially dangerous code patterns."""
-    from config import load_config
-    
-    config = load_config()
+    config = get_config()
     workspace = Path(config.server.workspace)
     
     from custom_tools_loader import get_custom_tool_registry
