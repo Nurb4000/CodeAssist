@@ -27,6 +27,11 @@ max_tokens = 8192
 # llama.cpp models are often 4096-32768, OpenAI models are 128000-200000.
 context_window = 128000
 
+# Embedding model for knowledge base semantic search (optional)
+# Only needed if your provider supports embeddings
+# Common models: "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"
+# embedding_model = "text-embedding-3-small"
+
 [server]
 host = "127.0.0.1"
 port = 8000

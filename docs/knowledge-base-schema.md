@@ -17,7 +17,7 @@ This document outlines the database schema extensions to transform CodeAssist fr
 1. **Human-Readable**: All data stored as plain text or JSON in SQLite; accessible via standard SQL tools
 2. **Auditable**: External tools (DB Browser, sqlite3 CLI, Python scripts) can query any table
 3. **Extensible**: JSON metadata fields allow schema evolution without migrations
-4. **Searchable**: FTS5 full-text search for immediate value; vector search placeholder for future
+4. **Searchable**: FTS5 full-text search + vector embeddings for semantic similarity
 5. **Fine-Tuning Ready**: Structured capture of high-quality Q&A pairs with quality scoring
 
 ---
@@ -367,7 +367,7 @@ async def _add_v4_tables(db):
             usage_count INTEGER DEFAULT 0,
             tags TEXT,
             metadata TEXT,
-            embedding TEXT,
+             embedding BLOB,
             created_at TEXT,
             updated_at TEXT
         )
@@ -707,28 +707,24 @@ conn.close()
 
 ---
 
-## Future Considerations (Phase 2+)
+## Implemented Features (Phase 1)
 
-### Vector Search (Semantic Similarity)
+### Vector Search (Semantic Similarity) ✅
 
-**Option A: sqlite-vec extension**
-```sql
--- Future: Add vector column and index
-ALTER TABLE knowledge_entries ADD COLUMN embedding BLOB;
+Vector embeddings are now stored as binary BLOBs in `knowledge_entries.embedding`:
+- **Format**: 1536-dimension float32 vectors (OpenAI `text-embedding-3-small`)
+- **Storage**: Binary format via `struct.pack("<1536f")`
+- **Search**: Cosine similarity with in-memory brute-force (thousands of entries)
+- **Batch generation**: `POST /api/knowledge/embeddings/generate`
+- **Semantic search**: `GET /api/knowledge/semantic?q=<query>`
+- **Similar entries**: `GET /api/knowledge/{id}/similar`
 
--- Load sqlite-vec extension
--- CREATE VIRTUAL TABLE knowledge_vec USING vec0(...);
-```
-
-**Option B: Separate vector store**
-- Use ChromaDB or FAISS for embeddings
-- Sync with SQLite for metadata
-- More complex but better performance at scale
+For millions of entries, consider adding sqlite-vec extension (Phase 2+).
 
 ### Fine-Tuning Dataset Generation
 
 ```python
-# Future: qa_export.py
+# qa_export.py
 def export_fine_tuning_dataset(
     min_quality: float = 0.8,
     min_success: int = 1,

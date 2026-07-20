@@ -543,6 +543,31 @@ async def delete_knowledge(entry_id: str):
     return {"ok": True}
 
 
+@app.get("/api/knowledge/semantic")
+async def semantic_search(q: str, entry_type: str = None, limit: int = 10):
+    """Semantic search using embeddings (falls back to text search if embeddings unavailable)."""
+    from embeddings import get_embedding_manager
+    manager = get_embedding_manager()
+    return await manager.search_by_embedding(q, limit=limit, entry_type=entry_type)
+
+
+@app.get("/api/knowledge/{entry_id}/similar")
+async def find_similar_knowledge(entry_id: str, limit: int = 5):
+    """Find knowledge entries similar to a given entry."""
+    from embeddings import get_embedding_manager
+    manager = get_embedding_manager()
+    return await manager.search_by_entry_embedding(entry_id, limit=limit)
+
+
+@app.post("/api/knowledge/embeddings/generate")
+async def generate_embeddings(batch_size: int = 10):
+    """Generate embeddings for knowledge entries that don't have them."""
+    from embeddings import get_embedding_manager
+    manager = get_embedding_manager()
+    count = await manager.generate_embeddings_for_all(batch_size=batch_size)
+    return {"generated": count}
+
+
 # ── Analytics Endpoints ───────────────────────────────────────────────────
 
 @app.get("/api/analytics/tools")
