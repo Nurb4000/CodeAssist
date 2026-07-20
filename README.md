@@ -62,18 +62,27 @@ Isolates the runtime in a container while mounting your project directory for fu
 ```bash
 # Copy the Docker example config
 cp config.docker.toml config.toml
-# Edit config.toml -- add your API key
+# Edit config.toml -- add your API key and desired port (e.g., port = 8090)
 
 # Build and start -- always point WORKSPACE at your project
 WORKSPACE=~/Projects/myapp docker compose up --build
 ```
 
-The server starts at `http://localhost:8000`. Session history persists across restarts via a Docker volume.
+The server starts at `http://localhost:8000` (or whatever port you set in config.toml).
+Session history persists across restarts via a Docker volume.
+
+**Port configuration:** The container reads the port from `config.toml`. Make sure the host port in `docker-compose.yml` matches (or use environment variables):
+
+```bash
+# Option 1: Edit docker-compose.yml ports section
+# Option 2: Use environment variables
+HOST_PORT=8090 SERVER_PORT=8090 docker compose up --build
+```
 
 Environment variable overrides (for advanced use):
 - `CODEASSIST_WORKSPACE` -- override the workspace path inside the container
-- `CODEASSIST_HOST` -- override the bind address
-- `CODEASSIST_PORT` -- override the port
+- `HOST_PORT` -- host port to expose (default: 8000)
+- `SERVER_PORT` -- container port (must match config.toml)
 
 ## Important: How CodeAssist Works
 
