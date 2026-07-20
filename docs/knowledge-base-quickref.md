@@ -114,14 +114,18 @@ python server.py
 - [x] Tool execution logging
 - [x] LLM usage tracking
 
-### Phase 2 (Future)
-- [ ] Q&A extraction pipeline
-- [ ] Quality scoring refinement
-- [ ] Knowledge graph relationships
+### Phase 2 (Complete)
+- [x] Pattern detection for repetitive workflows
+- [x] Auto-skill creation (when confidence > 0.7)
+- [x] Custom tool creation system
+- [x] Skills hot-reload
+- [x] Custom tools dynamic loader
+- [x] Management API endpoints
 
 ### Phase 3 (Future)
-- [ ] Fine-tuning dataset export
-- [ ] Automated model training
+- [ ] CLI management commands
+- [ ] Trust levels for custom tools
+- [ ] Quality scoring refinement
 
 ---
 
@@ -187,6 +191,68 @@ POST /api/sessions/{id}/tags           - Add session tag
 ### File History
 ```
 GET  /api/files/history?file_path=...  - File modification history
+```
+
+### Self-Creation System
+```
+GET  /api/custom-tools                - List custom tools
+POST /api/custom-tools/reload         - Reload custom tools from disk
+GET  /api/skills/list                 - List all skills (built-in + custom)
+POST /api/skills/reload               - Reload skills from disk
+GET  /api/auto-creation/status        - Auto-creation status and stats
+```
+
+---
+
+## Self-Creation System
+
+CodeAssist can automatically create skills when it detects repetitive workflows.
+
+### How It Works
+
+1. **Pattern Detection** - Session hook analyzes tool call sequences
+2. **Repetition Check** - Same sequence 3+ times triggers pattern storage
+3. **Confidence Scoring** - Higher repetition = higher confidence
+4. **Auto-Creation** - If confidence > 0.7, skill is auto-created
+5. **KB Integration** - All creations logged to knowledge base
+
+### Manual Creation
+
+Use tools in chat:
+- `create_skill` - Create a new skill file
+- `create_tool` - Create a custom Python tool
+
+### Configuration
+
+```toml
+[agent]
+auto_create_skills = true      # Enable auto-creation
+auto_create_tools = false      # Disabled by default (security)
+max_auto_creations = 3         # Per session limit
+min_confidence = 0.7           # Threshold for auto-creation
+```
+
+### Custom Tools Directory
+
+Custom tools are stored in `.codeassist/custom_tools/`:
+
+```python
+# .codeassist/custom_tools/my_tool.py
+TOOLS = {
+    "my_tool": {
+        "name": "my_tool",
+        "description": "Does something useful",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string"}
+            }
+        }
+    }
+}
+
+async def execute(input: str) -> str:
+    return f"Processed: {input}"
 ```
 
 ---
