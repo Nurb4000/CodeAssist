@@ -119,9 +119,11 @@ class SessionHook:
     
     def __init__(self, llm_client=None):
         self.llm_client = llm_client
+        self._session_content_hashes: set[str] = set()
     
     async def on_session_end(self, session: Session, agent=None):
         """Called when a session ends. Generates summary and extracts knowledge."""
+        self._session_content_hashes.clear()
         try:
             # Get session messages
             messages = await session.get_messages()
@@ -457,6 +459,45 @@ Provide a JSON response with:
                             file_path=file_path,
                             action="read",
                         )
+                        suffix = Path(file_path).suffix.lower()
+                        if suffix:
+                            await self._create_knowledge_if_new(
+                                entry_type="convention",
+                                scope="file",
+                                scope_identifier=file_path,
+                                content=f"File reviewed: {file_path} ({suffix} file examined)",
+                                source_session_id=session_id,
+                                tags=["file_review", suffix.lstrip(".")],
+                                confidence=0.5,
+                            )
+                
+                # Extract from directory/glob/grep operations (project exploration)
+                elif tool_name in ("directory", "glob", "grep", "ls", "find"):
+                    pattern = args.get("pattern", args.get("query", args.get("path", "")))
+                    if pattern:
+                        knowledge = {
+                            "entry_type": "pattern",
+                            "scope": "project",
+                            "content": f"Project exploration via {tool_name}: searched for '{pattern[:200]}'",
+                            "tags": ["exploration", tool_name],
+                            "confidence": 0.4,
+                        }
+                        await self._create_knowledge_if_new(**knowledge, source_session_id=session_id)
+                        extracted.append(knowledge)
+                
+                # Extract from web search/fetch operations
+                elif tool_name in ("websearch", "webfetch"):
+                    query = args.get("query", args.get("url", ""))
+                    if query:
+                        knowledge = {
+                            "entry_type": "pattern",
+                            "scope": "project",
+                            "content": f"External research via {tool_name}: '{query[:200]}'",
+                            "tags": ["research", tool_name],
+                            "confidence": 0.4,
+                        }
+                        await self._create_knowledge_if_new(**knowledge, source_session_id=session_id)
+                        extracted.append(knowledge)
         
         return extracted
     
@@ -517,7 +558,7 @@ Provide a JSON response with:
         return None
     
     async def _extract_from_code_patterns(self, session_id: str, messages: list[dict]) -> list[dict]:
-        """Extract knowledge from code patterns in assistant messages."""
+        """Extract knowledge from code patterns and analysis in assistant messages."""
         extracted = []
         
         for msg in messages:
@@ -528,11 +569,10 @@ Provide a JSON response with:
             if len(content) < 50:
                 continue
             
-            # Detect code patterns
+            # Detect code patterns via regex
             for pattern_name, patterns in CODE_PATTERNS.items():
                 for regex in patterns:
                     if re.search(regex, content, re.MULTILINE):
-                        # Found a pattern, extract context
                         snippet = self._extract_snippet_around_match(content, regex)
                         if snippet:
                             knowledge = self._classify_and_create_knowledge(
@@ -541,9 +581,33 @@ Provide a JSON response with:
                                 session_id=session_id,
                             )
                             if knowledge:
+                                knowledge["source_session_id"] = session_id
                                 await self._create_knowledge_if_new(**knowledge)
                                 extracted.append(knowledge)
                         break  # Don't match same pattern type multiple times
+            
+            # Extract insights from assistant analysis (reviews, suggestions, explanations)
+            analysis_keywords = [
+                "recommend", "suggestion", "improvement", "should", "could",
+                "consider", "best practice", "issue", "problem", "concern",
+                "observation", "note that", "important", "warning",
+            ]
+            content_lower = content.lower()
+            if any(kw in content_lower for kw in analysis_keywords) and len(content) > 100:
+                # Extract the most informative paragraph
+                paragraphs = [p.strip() for p in content.split("\n\n") if len(p.strip()) > 80]
+                if paragraphs:
+                    snippet = paragraphs[0][:500]
+                    knowledge = {
+                        "entry_type": "pattern",
+                        "scope": "project",
+                        "content": f"Assistant analysis: {snippet}",
+                        "tags": ["analysis", "review", "insight"],
+                        "confidence": 0.5,
+                        "source_session_id": session_id,
+                    }
+                    await self._create_knowledge_if_new(**knowledge)
+                    extracted.append(knowledge)
         
         return extracted
     
@@ -608,7 +672,7 @@ Provide a JSON response with:
         return None
     
     async def _extract_from_user_questions(self, session_id: str, messages: list[dict]) -> list[dict]:
-        """Extract knowledge from user questions (what people ask about)."""
+        """Extract knowledge from user questions and requests."""
         extracted = []
         
         user_msgs = [m for m in messages if m["role"] == "user" and m.get("content")]
@@ -618,17 +682,29 @@ Provide a JSON response with:
             if len(content) < 20:
                 continue
             
-            # Extract question patterns
-            if content.strip().endswith("?") or any(word in content.lower() for word in ["how", "what", "why", "where", "when"]):
-                # This is a question - extract topic
+            # Extract from questions and requests
+            is_question = (
+                content.strip().endswith("?")
+                or any(word in content.lower() for word in [
+                    "how", "what", "why", "where", "when", "which", "who",
+                ])
+                or any(word in content.lower() for word in [
+                    "can you", "could you", "please", "help me", "show me",
+                    "explain", "review", "check", "look at", "find",
+                    "tell me", "describe", "analyze",
+                ])
+            )
+            
+            if is_question:
                 topic = self._extract_topic_from_question(content)
                 if topic:
                     knowledge = {
                         "entry_type": "pattern",
                         "scope": "project",
-                        "content": f"User question pattern: {content[:300]}",
-                        "tags": ["user_question", topic],
-                        "confidence": 0.6,
+                        "content": f"User request pattern: {content[:300]}",
+                        "tags": ["user_request", topic],
+                        "confidence": 0.5,
+                        "source_session_id": session_id,
                     }
                     await self._create_knowledge_if_new(**knowledge)
                     extracted.append(knowledge)
@@ -688,6 +764,7 @@ Provide a JSON response with:
                                         "content": f"Error encountered with {tool_name}: {content[:300]}",
                                         "tags": ["error", "debugging", tool_name],
                                         "confidence": 0.7,
+                                        "source_session_id": session_id,
                                     }
                                     await self._create_knowledge_if_new(**error_knowledge)
                                     extracted.append(error_knowledge)
@@ -720,13 +797,14 @@ Provide a JSON response with:
             
             # Create knowledge about project structure
             for dir_path, files in dirs.items():
-                if len(files) >= 2:  # Only if multiple files in same dir
+                if len(files) >= 1:
                     knowledge = {
                         "entry_type": "convention",
                         "scope": "project",
                         "content": f"Project structure: {dir_path}/ contains {', '.join(Path(f).name for f in files[:5])}",
                         "tags": ["project_structure", "organization"],
                         "confidence": 0.6,
+                        "source_session_id": session_id,
                     }
                     await self._create_knowledge_if_new(**knowledge)
                     extracted.append(knowledge)
@@ -775,11 +853,7 @@ Provide a JSON response with:
                     "content": pattern_content,
                     "tags": ["repetitive_workflow", "auto_create_candidate"],
                     "confidence": min(0.5 + (count * 0.1), 0.9),
-                    "metadata": {
-                        "sequence": list(sequence),
-                        "count": count,
-                        "session_id": session_id,
-                    },
+                    "source_session_id": session_id,
                 }
                 
                 await self._create_knowledge_if_new(**knowledge)
@@ -867,6 +941,12 @@ This workflow is now available as a skill. The agent will use this pattern when 
     ):
         """Create a knowledge entry if similar content doesn't exist."""
         try:
+            # In-memory dedup for same session
+            content_hash = hashlib.md5(content.lower()[:200].encode()).hexdigest()
+            if content_hash in self._session_content_hashes:
+                return
+            self._session_content_hashes.add(content_hash)
+            
             # Check if similar content exists (simple dedup)
             existing = await KnowledgeBase.search_knowledge(
                 entry_type=entry_type,
