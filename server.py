@@ -1080,8 +1080,7 @@ async def kb_pii_redact(body: dict):
 @app.get("/api/kb/settings")
 async def kb_get_settings():
     """Get KB/auto-creation settings."""
-    from config import load_config
-    config = load_config()
+    config = get_config()
     
     return {
         "auto_create_skills": config.agent.auto_create_skills,

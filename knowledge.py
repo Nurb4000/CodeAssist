@@ -45,7 +45,7 @@ class KnowledgeBase:
 
         async with get_db() as db:
             await db.execute(
-                """INSERT INTO session_summaries 
+                """INSERT OR REPLACE INTO session_summaries 
                    (id, session_id, summary, key_topics, goals_achieved, tools_used, 
                     files_modified, duration_seconds, message_count, token_usage, 
                     model, quality_score, created_at, updated_at)
