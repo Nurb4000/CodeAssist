@@ -1,0 +1,276 @@
+/* Tool Manager Styles */
+
+/* Tool Card */
+.tool-card {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.tool-card:hover {
+    border-color: #4fc3f7;
+}
+
+.tool-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.tool-icon.builtin {
+    background: #1a237e;
+}
+
+.tool-icon.custom {
+    background: #4a148c;
+}
+
+.tool-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.tool-name {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 4px;
+}
+
+.tool-description {
+    color: #90a4ae;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tool-meta {
+    display: flex;
+    gap: 15px;
+    font-size: 12px;
+    color: #607d8b;
+    margin-top: 5px;
+}
+
+.tool-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* Trust Badge */
+.trust-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.trust-badge.trusted {
+    background: #1b5e20;
+    color: #a5d6a7;
+}
+
+.trust-badge.untrusted {
+    background: #e65100;
+    color: #ffcc80;
+}
+
+/* Type Badge */
+.tool-type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tool-type-badge.builtin {
+    background: #1a237e;
+    color: #82b1ff;
+}
+
+.tool-type-badge.custom {
+    background: #4a148c;
+    color: #ea80fc;
+}
+
+/* Risk Level */
+.risk-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.risk-badge.low {
+    background: #1b5e20;
+    color: #a5d6a7;
+}
+
+.risk-badge.medium {
+    background: #e65100;
+    color: #ffcc80;
+}
+
+.risk-badge.high {
+    background: #b71c1c;
+    color: #ffcdd2;
+}
+
+/* Security Scan Results */
+.scan-item {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.scan-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.scan-findings {
+    background: #0d1b2a;
+    border-radius: 4px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+.scan-finding {
+    margin-bottom: 8px;
+}
+
+.scan-finding-type {
+    color: #ff8a80;
+    font-weight: bold;
+}
+
+.scan-finding-matches {
+    color: #b0bec5;
+    margin-left: 10px;
+}
+
+/* Code Preview */
+.code-preview {
+    background: #0d1b2a;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 15px;
+    font-family: monospace;
+    font-size: 13px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Usage Stats */
+.usage-stat-card {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 10px;
+}
+
+.usage-stat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.usage-stat-name {
+    font-weight: 600;
+    color: #fff;
+}
+
+.usage-stat-count {
+    font-size: 24px;
+    font-weight: bold;
+    color: #4fc3f7;
+}
+
+.usage-stat-bar {
+    height: 8px;
+    background: #0f3460;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+.usage-stat-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #1a237e, #4fc3f7);
+    border-radius: 4px;
+}
+
+/* Modal Large */
+.modal-large {
+    max-width: 800px;
+}
+
+/* Trust Toggle */
+.trust-toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.trust-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.trust-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #424242;
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.trust-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.trust-toggle input:checked + .trust-slider {
+    background-color: #4caf50;
+}
+
+.trust-toggle input:checked + .trust-slider:before {
+    transform: translateX(26px);
+}

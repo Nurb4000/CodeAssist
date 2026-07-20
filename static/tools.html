@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tool Manager - CodeAssist</title>
+    <link rel="stylesheet" href="/static/style.css?v=dev">
+    <link rel="stylesheet" href="/static/kb.css?v=dev">
+    <link rel="stylesheet" href="/static/tools.css?v=dev">
+</head>
+<body>
+    <div id="kb-app">
+        <aside id="kb-sidebar">
+            <div class="sidebar-header">
+                <a href="/" class="back-link">&larr; Chat</a>
+                <h1>Tool Manager</h1>
+            </div>
+            <nav id="kb-nav">
+                <a href="#all" class="nav-item active" data-page="all">All Tools</a>
+                <a href="#custom" class="nav-item" data-page="custom">Custom Tools</a>
+                <a href="#security" class="nav-item" data-page="security">Security Scan</a>
+                <a href="#usage" class="nav-item" data-page="usage">Usage Stats</a>
+            </nav>
+        </aside>
+        
+        <main id="kb-content">
+            <!-- All Tools Page -->
+            <div id="page-all" class="kb-page active">
+                <h2>All Tools</h2>
+                <div class="filters">
+                    <select id="filter-type">
+                        <option value="">All Types</option>
+                        <option value="builtin">Built-in</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    <input type="text" id="filter-search" placeholder="Search tools...">
+                    <button id="btn-apply-filters">Apply</button>
+                </div>
+                <div id="tools-list"></div>
+            </div>
+            
+            <!-- Custom Tools Page -->
+            <div id="page-custom" class="kb-page">
+                <h2>Custom Tools</h2>
+                <p>Tools created by this project or auto-generated. Review carefully before trusting.</p>
+                <div id="custom-tools-list"></div>
+            </div>
+            
+            <!-- Security Scan Page -->
+            <div id="page-security" class="kb-page">
+                <h2>Security Scan</h2>
+                <p>Scan custom tools for potentially dangerous code patterns.</p>
+                <button id="btn-scan">Scan Custom Tools</button>
+                <div id="scan-results"></div>
+            </div>
+            
+            <!-- Usage Stats Page -->
+            <div id="page-usage" class="kb-page">
+                <h2>Usage Statistics</h2>
+                <div id="usage-stats"></div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Tool Details Modal -->
+    <div id="tool-modal" class="modal" style="display:none">
+        <div class="modal-content modal-large">
+            <span class="close">&times;</span>
+            <h3 id="modal-tool-name">Tool Details</h3>
+            <div id="modal-tool-content"></div>
+        </div>
+    </div>
+    
+    <script src="/static/tools.js?v=dev"></script>
+</body>
+</html>
