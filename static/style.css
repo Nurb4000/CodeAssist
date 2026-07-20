@@ -54,15 +54,20 @@ body {
     font-weight: 600;
 }
 
-.kb-icon {
-    font-size: 20px;
+.header-links {
+    display: flex;
+    gap: 8px;
+}
+
+.header-icon {
+    font-size: 18px;
     text-decoration: none;
     padding: 4px 8px;
     border-radius: 4px;
     transition: background 0.2s;
 }
 
-.kb-icon:hover {
+.header-icon:hover {
     background: var(--bg-hover);
 }
 
@@ -73,11 +78,17 @@ body {
     color: var(--text-secondary);
 }
 
+.footer-links {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
 .kb-link {
     display: block;
     color: var(--accent);
     text-decoration: none;
-    margin-bottom: 8px;
     font-size: 13px;
 }
 

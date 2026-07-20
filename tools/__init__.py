@@ -171,6 +171,51 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     return registry
 
 
+def get_tools(config=None) -> dict:
+    """Get a dictionary of all built-in tools."""
+    from tools.read import ReadTool
+    from tools.write import WriteTool
+    from tools.edit import EditTool
+    from tools.shell import ShellTool
+    from tools.glob import GlobTool
+    from tools.grep import GrepTool
+    from tools.webfetch import WebFetchTool
+    from tools.todo import TodoTool
+    from tools.git import GitTool
+    from tools.fossil import FossilTool
+    from tools.apply_patch import ApplyPatchTool
+    from tools.directory import DirectoryTool
+    from tools.process import ProcessTool
+    from tools.http import HTTPTool
+    from tools.database import DatabaseTool
+    from tools.documentation import DocumentationTool
+    from tools.advanced import WebSearchTool, QuestionTool, TaskTool
+    
+    tools = {}
+    workspace = Path(".")
+    
+    # Create tool instances
+    tool_classes = [
+        ReadTool, WriteTool, EditTool, ShellTool, GlobTool, GrepTool,
+        WebFetchTool, TodoTool, GitTool, FossilTool, ApplyPatchTool,
+        DirectoryTool, ProcessTool, HTTPTool, DatabaseTool, DocumentationTool,
+        WebSearchTool, QuestionTool, TaskTool,
+    ]
+    
+    for tool_cls in tool_classes:
+        tool = tool_cls()
+        tool.workspace = workspace
+        if config and hasattr(tool, "timeout"):
+            tool.timeout = config.tools.shell_timeout
+        if config and hasattr(tool, "max_output_chars"):
+            tool.max_output_chars = config.tools.max_output_chars
+        if config and hasattr(tool, "max_chars"):
+            tool.max_chars = config.tools.webfetch_max_chars
+        tools[tool.name] = tool
+    
+    return tools
+
+
 def reload_tools(workspace: Path, registry: ToolRegistry) -> int:
     """Reload all tools from the tools directory. Returns count of loaded tools."""
     from dynamic_tools import DynamicToolLoader

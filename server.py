@@ -1199,6 +1199,230 @@ async def kb_clear(body: dict):
     return {"message": "All KB entries cleared"}
 
 
+# ── Tool Management GUI API ──────────────────────────────────────────
+
+@app.get("/api/tools/manage/list")
+async def list_all_tools():
+    """List all tools (built-in + custom) with metadata."""
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    
+    # Get built-in tools
+    from tools import get_tools
+    builtin_tools = get_tools(config)
+    
+    # Get custom tools
+    from custom_tools_loader import get_custom_tool_registry
+    custom_registry = get_custom_tool_registry(workspace)
+    custom_registry.discover()
+    
+    # Get tool usage stats
+    from knowledge import KnowledgeBase
+    tool_stats = await KnowledgeBase.get_tool_stats()
+    
+    # Build unified list
+    tools = []
+    
+    for name, tool in builtin_tools.items():
+        stats = tool_stats.get(name, {})
+        tools.append({
+            "name": name,
+            "type": "builtin",
+            "description": getattr(tool, 'description', ''),
+            "enabled": True,
+            "trusted": True,
+            "usage_count": stats.get("total_calls", 0),
+            "success_rate": round(stats.get("successful", 0) / max(stats.get("total_calls", 1), 1) * 100, 1),
+        })
+    
+    for tool in custom_registry.list_tools():
+        name = tool["name"]
+        stats = tool_stats.get(name, {})
+        tools.append({
+            "name": name,
+            "type": "custom",
+            "description": tool.get("description", ""),
+            "enabled": True,  # TODO: Track enabled state
+            "trusted": False,  # Custom tools are untrusted by default
+            "source": tool.get("source", ""),
+            "usage_count": stats.get("total_calls", 0),
+            "success_rate": round(stats.get("successful", 0) / max(stats.get("total_calls", 1), 1) * 100, 1),
+        })
+    
+    return {"tools": tools, "count": len(tools)}
+
+
+@app.get("/api/tools/manage/{tool_name}")
+async def get_tool_details(tool_name: str):
+    """Get detailed info about a specific tool."""
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    
+    # Check built-in tools
+    from tools import get_tools
+    builtin_tools = get_tools(config)
+    
+    if tool_name in builtin_tools:
+        tool = builtin_tools[tool_name]
+        return {
+            "name": tool_name,
+            "type": "builtin",
+            "description": getattr(tool, 'description', ''),
+            "schema": getattr(tool, 'schema', lambda: {})(),
+            "trusted": True,
+        }
+    
+    # Check custom tools
+    from custom_tools_loader import get_custom_tool_registry
+    custom_registry = get_custom_tool_registry(workspace)
+    custom_registry.discover()
+    
+    custom_tool = custom_registry.get_tool(tool_name)
+    if custom_tool:
+        # Read source code
+        source_path = Path(custom_tool.source_path)
+        source_code = ""
+        if source_path.exists():
+            source_code = source_path.read_text(encoding="utf-8")
+        
+        return {
+            "name": tool_name,
+            "type": "custom",
+            "description": custom_tool.description,
+            "schema": custom_tool.schema(),
+            "source_code": source_code,
+            "source_path": str(source_path),
+            "trusted": custom_tool.trusted,
+        }
+    
+    return JSONResponse(status_code=404, content={"error": f"Tool '{tool_name}' not found"})
+
+
+@app.put("/api/tools/manage/{tool_name}/trust")
+async def set_tool_trust(tool_name: str, body: dict):
+    """Set trust level for a custom tool."""
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    
+    from custom_tools_loader import get_custom_tool_registry
+    custom_registry = get_custom_tool_registry(workspace)
+    custom_registry.discover()
+    
+    custom_tool = custom_registry.get_tool(tool_name)
+    if not custom_tool:
+        return JSONResponse(status_code=404, content={"error": "Custom tool not found"})
+    
+    trusted = body.get("trusted", False)
+    custom_tool.trusted = trusted
+    
+    return {"message": f"Tool '{tool_name}' trust level set to {trusted}", "trusted": trusted}
+
+
+@app.delete("/api/tools/manage/{tool_name}")
+async def delete_custom_tool(tool_name: str):
+    """Delete a custom tool."""
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    
+    from custom_tools_loader import get_custom_tool_registry
+    custom_registry = get_custom_tool_registry(workspace)
+    custom_registry.discover()
+    
+    custom_tool = custom_registry.get_tool(tool_name)
+    if not custom_tool:
+        return JSONResponse(status_code=404, content={"error": "Custom tool not found"})
+    
+    # Delete the file
+    source_path = Path(custom_tool.source_path)
+    if source_path.exists():
+        source_path.unlink()
+    
+    # Reload registry
+    custom_registry.reload()
+    
+    return {"message": f"Tool '{tool_name}' deleted", "tool_name": tool_name}
+
+
+@app.get("/api/tools/manage/usage")
+async def get_tool_usage_stats(period_days: int = 30):
+    """Get detailed tool usage statistics."""
+    from knowledge import KnowledgeBase
+    
+    stats = await KnowledgeBase.get_tool_stats(period_days=period_days)
+    
+    # Sort by usage count
+    sorted_stats = sorted(stats.items(), key=lambda x: x[1].get("total_calls", 0), reverse=True)
+    
+    return {
+        "period_days": period_days,
+        "tools": {name: data for name, data in sorted_stats},
+        "total_calls": sum(data.get("total_calls", 0) for _, data in sorted_stats),
+    }
+
+
+@app.post("/api/tools/manage/scan")
+async def scan_custom_tools():
+    """Scan custom tools for potentially dangerous code patterns."""
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    
+    from custom_tools_loader import get_custom_tool_registry
+    custom_registry = get_custom_tool_registry(workspace)
+    custom_registry.discover()
+    
+    import re
+    
+    # Dangerous patterns to scan for
+    dangerous_patterns = {
+        "network_access": r'(requests|urllib|httpx|aiohttp)\.(get|post|put|delete|patch)',
+        "file_system": r'(open|os\.remove|os\.unlink|shutil\.rmtree|pathlib.*unlink)',
+        "subprocess": r'(subprocess|os\.system|os\.popen|exec|eval)',
+        "imports": r'(import\s+os|from\s+os|import\s+subprocess|from\s+subprocess)',
+        "env_access": r'(os\.environ|os\.getenv|process\.env)',
+    }
+    
+    results = []
+    
+    for tool in custom_registry.list_tools():
+        tool_path = Path(workspace) / ".codeassist" / "custom_tools" / f"{tool['name']}.py"
+        if not tool_path.exists():
+            continue
+        
+        source = tool_path.read_text(encoding="utf-8")
+        findings = []
+        
+        for pattern_name, pattern in dangerous_patterns.items():
+            matches = re.findall(pattern, source)
+            if matches:
+                findings.append({
+                    "pattern": pattern_name,
+                    "matches": matches[:5],
+                })
+        
+        results.append({
+            "tool_name": tool["name"],
+            "source_path": str(tool_path),
+            "findings": findings,
+            "risk_level": "high" if len(findings) >= 3 else "medium" if findings else "low",
+        })
+    
+    # Sort by risk level
+    risk_order = {"high": 0, "medium": 1, "low": 2}
+    results.sort(key=lambda x: risk_order.get(x["risk_level"], 3))
+    
+    return {"results": results, "total_scanned": len(results)}
+
+
 # WebSocket endpoint
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
