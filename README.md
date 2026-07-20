@@ -168,6 +168,58 @@ embedding_model = "text-embedding-3-small"
 
 See `docs/knowledge-base-quickref.md` for API endpoints and examples.
 
+## Self-Creation System
+
+CodeAssist can automatically create skills and tools when it detects repetitive patterns in your workflow.
+
+### How It Works
+
+1. **Pattern Detection** - Monitors tool call sequences across sessions
+2. **Repetition Recognition** - Identifies workflows repeated 3+ times
+3. **Auto-Creation** - Creates skills when confidence threshold is met
+4. **Hot-Reload** - New skills available immediately (no restart)
+
+### Configuration
+
+```toml
+[agent]
+auto_create_skills = true      # Auto-create skills for repetitive workflows
+auto_create_tools = false      # Disabled by default (security)
+max_auto_creations = 3         # Per session limit
+min_confidence = 0.7           # Threshold for auto-creation
+```
+
+### Custom Tools
+
+You can create custom Python tools in `.codeassist/custom_tools/`:
+
+```python
+# .codeassist/custom_tools/my_tool.py
+TOOLS = {
+    "my_tool": {
+        "name": "my_tool",
+        "description": "Does something useful",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string"}
+            }
+        }
+    }
+}
+
+async def execute(input: str) -> str:
+    return f"Processed: {input}"
+```
+
+### Management
+
+- **API**: `GET /api/auto-creation/status` - View auto-creation stats
+- **API**: `POST /api/skills/reload` - Reload skills from disk
+- **API**: `POST /api/custom-tools/reload` - Reload custom tools
+
+See `docs/knowledge-base-quickref.md` for full API reference.
+
 ### Built-in tools
 
 | Tool | Description |
@@ -191,6 +243,8 @@ See `docs/knowledge-base-quickref.md` for API endpoints and examples.
 | `process` | Manage long-running background processes |
 | `question` | Ask the user a clarifying question mid-task |
 | `task` | Delegate work to a background subagent |
+| `create_skill` | Create new skills for repetitive workflows |
+| `create_tool` | Create custom Python tools |
 
 ### Skills
 
