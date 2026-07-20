@@ -32,6 +32,11 @@ class AgentConfig:
     max_iterations: int = 30
     name: str = "CodeAssist"
     default_agent: str = "default"
+    # Auto-creation settings
+    auto_create_skills: bool = True
+    auto_create_tools: bool = False  # Disabled by default (security)
+    max_auto_creations: int = 3  # Per session limit
+    min_confidence: float = 0.7  # Threshold for auto-creation
 
 
 @dataclass

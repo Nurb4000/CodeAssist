@@ -34,6 +34,7 @@ class SkillRegistry:
         self.config = config
         self._skills: dict[str, Skill] = {}
         self._slash_commands: dict[str, Skill] = {}
+        self._last_discover_time: float = 0
 
     def discover(self) -> list[Skill]:
         """Discover skills from configured directories."""
@@ -47,6 +48,14 @@ class SkillRegistry:
                 self._discover_from_directory(skill_dir)
 
         return list(self._skills.values())
+
+    def reload(self) -> list[Skill]:
+        """Hot-reload skills from disk."""
+        import time
+        self._skills.clear()
+        self._slash_commands.clear()
+        self._last_discover_time = time.time()
+        return self.discover()
 
     def _discover_from_directory(self, directory: Path):
         """Discover skills from a directory."""
