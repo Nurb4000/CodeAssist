@@ -10,6 +10,7 @@
 Transform CodeAssist from session-based to persistent knowledge base with:
 - Human-readable SQLite storage
 - Full-text search (FTS5)
+- Semantic search (vector embeddings)
 - Fine-tuning-ready data capture
 - Complete audit trail
 
@@ -31,7 +32,7 @@ Transform CodeAssist from session-based to persistent knowledge base with:
 
 ## Search Capabilities
 
-### FTS5 Full-Text Search
+### Full-Text Search (FTS5)
 ```sql
 -- Search knowledge for "async patterns"
 SELECT * FROM knowledge_search 
@@ -40,6 +41,16 @@ WHERE knowledge_search MATCH 'async pattern';
 -- Search session summaries
 SELECT * FROM session_summary_search 
 WHERE session_summary_search MATCH 'database optimization';
+```
+
+### Semantic Search (Vector Embeddings)
+```python
+# Via API
+GET /api/knowledge/semantic?q=error handling patterns
+GET /api/knowledge/{id}/similar
+
+# Auto-generate embeddings for existing entries
+POST /api/knowledge/embeddings/generate
 ```
 
 ### SQL Queries
@@ -66,35 +77,15 @@ GROUP BY tool_name;
 
 ---
 
-## Implementation Phases
+## Configuration
 
-### Phase 1 (Current)
-- [ ] Add v4 tables to schema
-- [ ] Implement FTS5 search
-- [ ] Session summary generation
-- [ ] Basic knowledge extraction
+Add to `config.toml` for semantic search:
+```toml
+[llm]
+embedding_model = "text-embedding-3-small"  # optional
+```
 
-### Phase 2 (Future)
-- [ ] Tool execution logging
-- [ ] LLM usage tracking
-- [ ] Q&A extraction pipeline
-- [ ] Quality scoring refinement
-
-### Phase 3 (Future)
-- [ ] Vector search (semantic similarity)
-- [ ] Fine-tuning dataset export
-- [ ] Knowledge graph
-
----
-
-## Key Files to Modify
-
-| File | Changes |
-|------|---------|
-| `session.py` | Add `_add_v4_tables()`, bump SCHEMA_VERSION |
-| `server.py` | Add search/analytics endpoints |
-| `knowledge.py` | **New** - Knowledge extraction pipeline |
-| `qa_extractor.py` | **New** - Q&A extraction for fine-tuning |
+If not set, falls back to text search automatically.
 
 ---
 
@@ -108,7 +99,29 @@ cp data/codeassist.db data/codeassist.db.backup.v3
 python server.py
 ```
 
-**Note:** FTS5 virtual tables are now automatically created on startup if they don't exist. No manual SQL step required.
+**Note:** FTS5 tables are now automatically created on startup if they don't exist. No manual SQL step required.
+
+---
+
+## Implementation Phases
+
+### Phase 1 (Complete)
+- [x] Add v4 tables to schema
+- [x] Implement FTS5 search
+- [x] Session summary generation
+- [x] Knowledge extraction (patterns, conventions, decisions)
+- [x] Semantic search (vector embeddings)
+- [x] Tool execution logging
+- [x] LLM usage tracking
+
+### Phase 2 (Future)
+- [ ] Q&A extraction pipeline
+- [ ] Quality scoring refinement
+- [ ] Knowledge graph relationships
+
+### Phase 3 (Future)
+- [ ] Fine-tuning dataset export
+- [ ] Automated model training
 
 ---
 
@@ -139,6 +152,41 @@ WHERE s.id = 'session-uuid';
 ```bash
 sqlite3 -header -csv data/codeassist.db \
   "SELECT * FROM knowledge_entries;" > knowledge.csv
+```
+
+---
+
+## API Endpoints
+
+### Knowledge
+```
+GET  /api/knowledge                    - List entries (filter by type, scope)
+GET  /api/knowledge/search?q=...       - Full-text search (FTS5)
+GET  /api/knowledge/semantic?q=...     - Semantic search (embeddings)
+GET  /api/knowledge/{id}               - Get entry
+GET  /api/knowledge/{id}/similar       - Find similar entries
+POST /api/knowledge                    - Create entry
+PUT  /api/knowledge/{id}               - Update entry
+DELETE /api/knowledge/{id}             - Delete entry
+POST /api/knowledge/embeddings/generate - Batch generate embeddings
+```
+
+### Analytics
+```
+GET  /api/analytics/tools              - Tool usage stats
+GET  /api/analytics/llm                - LLM usage stats
+```
+
+### Session Tags
+```
+GET  /api/sessions/search/tags?tags=... - Search sessions by tags
+GET  /api/sessions/{id}/tags           - Get session tags
+POST /api/sessions/{id}/tags           - Add session tag
+```
+
+### File History
+```
+GET  /api/files/history?file_path=...  - File modification history
 ```
 
 ---
@@ -176,5 +224,5 @@ cp data/codeassist.db.backup.v3 data/codeassist.db
 ---
 
 **Full Design**: See `knowledge-base-schema.md`  
-**Version**: 1.0  
+**Version**: 1.1  
 **Date**: 2026-07-20

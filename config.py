@@ -16,6 +16,7 @@ class LLMConfig:
     context_window: int = 128000
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
+    embedding_model: str = ""
 
 
 @dataclass
