@@ -3,7 +3,7 @@ services:
     build: .
     container_name: codeassist
     ports:
-      - "${HOST_PORT:-8000}:${SERVER_PORT:-8000}"
+      - "${HOST_PORT:-8090}:${SERVER_PORT:-8090}"
     volumes:
       # Mount your project directory as the workspace
       - ${WORKSPACE:-.}:/workspace

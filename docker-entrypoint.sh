@@ -2,7 +2,7 @@
 # Docker entrypoint that reads port from config.toml
 
 CONFIG_FILE="/app/config.toml"
-DEFAULT_PORT=8000
+DEFAULT_PORT=8090
 
 # Try to extract port from config.toml
 if [ -f "$CONFIG_FILE" ]; then
