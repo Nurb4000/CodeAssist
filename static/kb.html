@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Base - CodeAssist</title>
+    <link rel="stylesheet" href="/static/style.css?v=dev">
+    <link rel="stylesheet" href="/static/kb.css?v=dev">
+</head>
+<body>
+    <div id="kb-app">
+        <aside id="kb-sidebar">
+            <div class="sidebar-header">
+                <a href="/" class="back-link">&larr; Chat</a>
+                <h1>Knowledge Base</h1>
+            </div>
+            <nav id="kb-nav">
+                <a href="#dashboard" class="nav-item active" data-page="dashboard">Dashboard</a>
+                <a href="#entries" class="nav-item" data-page="entries">Entries</a>
+                <a href="#search" class="nav-item" data-page="search">Search</a>
+                <a href="#sessions" class="nav-item" data-page="sessions">Sessions</a>
+                <a href="#analytics" class="nav-item" data-page="analytics">Analytics</a>
+                <a href="#pii" class="nav-item" data-page="pii">PII Manager</a>
+                <a href="#settings" class="nav-item" data-page="settings">Settings</a>
+                <a href="#export" class="nav-item" data-page="export">Export/Import</a>
+            </nav>
+        </aside>
+        
+        <main id="kb-content">
+            <!-- Dashboard Page -->
+            <div id="page-dashboard" class="kb-page active">
+                <h2>Dashboard</h2>
+                <div id="stats-grid" class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-total">-</div>
+                        <div class="stat-label">Total Entries</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-sessions">-</div>
+                        <div class="stat-label">Sessions</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-tool-calls">-</div>
+                        <div class="stat-label">Tool Calls</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-quality">-</div>
+                        <div class="stat-label">Avg Quality</div>
+                    </div>
+                </div>
+                
+                <h3>Entries by Type</h3>
+                <div id="entry-type-chart" class="chart-container"></div>
+                
+                <h3>Recent Activity</h3>
+                <div id="recent-activity"></div>
+            </div>
+            
+            <!-- Entries Page -->
+            <div id="page-entries" class="kb-page">
+                <h2>Knowledge Entries</h2>
+                <div class="filters">
+                    <select id="filter-type">
+                        <option value="">All Types</option>
+                        <option value="pattern">Pattern</option>
+                        <option value="convention">Convention</option>
+                        <option value="decision">Decision</option>
+                        <option value="bug_fix">Bug Fix</option>
+                        <option value="optimization">Optimization</option>
+                        <option value="skill_created">Skill Created</option>
+                        <option value="tool_created">Tool Created</option>
+                    </select>
+                    <select id="filter-scope">
+                        <option value="">All Scopes</option>
+                        <option value="project">Project</option>
+                        <option value="file">File</option>
+                        <option value="session">Session</option>
+                    </select>
+                    <input type="text" id="filter-search" placeholder="Search entries...">
+                    <button id="btn-apply-filters">Apply</button>
+                    <button id="btn-bulk-delete" class="btn-danger" style="display:none">Delete Selected</button>
+                </div>
+                
+                <div id="entries-table-container">
+                    <table id="entries-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="select-all"></th>
+                                <th>Type</th>
+                                <th>Content</th>
+                                <th>Scope</th>
+                                <th>Confidence</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="entries-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="entries-pagination" class="pagination"></div>
+            </div>
+            
+            <!-- Search Page -->
+            <div id="page-search" class="kb-page">
+                <h2>Search Knowledge Base</h2>
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="Enter search query...">
+                    <select id="search-type">
+                        <option value="text">Text Search</option>
+                        <option value="semantic">Semantic Search</option>
+                    </select>
+                    <button id="btn-search">Search</button>
+                </div>
+                <div id="search-results"></div>
+            </div>
+            
+            <!-- Sessions Page -->
+            <div id="page-sessions" class="kb-page">
+                <h2>Session History</h2>
+                <div id="sessions-list"></div>
+            </div>
+            
+            <!-- Analytics Page -->
+            <div id="page-analytics" class="kb-page">
+                <h2>Analytics</h2>
+                <div class="analytics-section">
+                    <h3>Tool Usage</h3>
+                    <div id="tool-usage-chart" class="chart-container"></div>
+                </div>
+                <div class="analytics-section">
+                    <h3>LLM Usage</h3>
+                    <div id="llm-usage-chart" class="chart-container"></div>
+                </div>
+            </div>
+            
+            <!-- PII Page -->
+            <div id="page-pii" class="kb-page">
+                <h2>PII Manager</h2>
+                <p>Scan your knowledge base for potential personally identifiable information (PII).</p>
+                <button id="btn-scan-pii">Scan for PII</button>
+                <div id="pii-results"></div>
+            </div>
+            
+            <!-- Settings Page -->
+            <div id="page-settings" class="kb-page">
+                <h2>Settings</h2>
+                <div class="settings-form">
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="setting-auto-skills"> 
+                            Auto-create skills for repetitive workflows
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="setting-auto-tools"> 
+                            Auto-create custom tools (security risk)
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>Max auto-creations per session:</label>
+                        <input type="number" id="setting-max-creations" min="1" max="10" value="3">
+                    </div>
+                    <div class="setting-row">
+                        <label>Minimum confidence threshold:</label>
+                        <input type="number" id="setting-min-confidence" min="0.1" max="1.0" step="0.1" value="0.7">
+                    </div>
+                    <button id="btn-save-settings">Save Settings</button>
+                </div>
+            </div>
+            
+            <!-- Export Page -->
+            <div id="page-export" class="kb-page">
+                <h2>Export / Import</h2>
+                <div class="export-section">
+                    <h3>Export</h3>
+                    <p>Download your knowledge base as JSON or CSV.</p>
+                    <button id="btn-export-json">Export JSON</button>
+                    <button id="btn-export-csv">Export CSV</button>
+                </div>
+                <div class="import-section">
+                    <h3>Import</h3>
+                    <p>Import entries from a JSON export.</p>
+                    <textarea id="import-data" placeholder="Paste JSON data here..."></textarea>
+                    <button id="btn-import">Import</button>
+                </div>
+                <div class="danger-section">
+                    <h3>Danger Zone</h3>
+                    <p>Clear all knowledge base entries. This cannot be undone.</p>
+                    <button id="btn-clear-kb" class="btn-danger">Clear All Entries</button>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Edit Modal -->
+    <div id="edit-modal" class="modal" style="display:none">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Edit Entry</h3>
+            <form id="edit-form">
+                <input type="hidden" id="edit-entry-id">
+                <div class="form-group">
+                    <label>Content:</label>
+                    <textarea id="edit-content" rows="6"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Confidence:</label>
+                    <input type="number" id="edit-confidence" min="0" max="1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label>Tags (comma-separated):</label>
+                    <input type="text" id="edit-tags">
+                </div>
+                <button type="submit">Save Changes</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- View Modal -->
+    <div id="view-modal" class="modal" style="display:none">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Entry Details</h3>
+            <div id="view-entry-content"></div>
+        </div>
+    </div>
+    
+    <script src="/static/kb.js?v=dev"></script>
+</body>
+</html>
