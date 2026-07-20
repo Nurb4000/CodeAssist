@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 DB_PATH = Path(__file__).parent / "data" / "codeassist.db"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class _DBPool:
@@ -104,8 +104,12 @@ async def init_db():
             await _add_v2_tables(db)
             current_version = 2
 
-        if current_version < SCHEMA_VERSION:
+        if current_version < 3:
             await _add_v3_tables(db)
+            current_version = 3
+
+        if current_version < SCHEMA_VERSION:
+            await _add_v4_tables(db)
             current_version = SCHEMA_VERSION
 
         await db.execute(
@@ -113,6 +117,10 @@ async def init_db():
             (str(current_version),)
         )
         await db.commit()
+
+    # Create FTS5 virtual tables after commit (cannot be inside transactions)
+    if current_version >= 4:
+        await _ensure_fts5_tables()
 
 
 async def _create_v1_tables(db):
@@ -241,6 +249,200 @@ async def _add_v3_tables(db):
             expires_at TEXT
         )
     """)
+
+
+async def _add_v4_tables(db):
+    """Add knowledge base tables for Phase 1."""
+    
+    # 1. Session summaries
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS session_summaries (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            summary TEXT NOT NULL,
+            key_topics TEXT,
+            goals_achieved TEXT,
+            tools_used TEXT,
+            files_modified TEXT,
+            duration_seconds INTEGER,
+            message_count INTEGER,
+            token_usage INTEGER,
+            model TEXT,
+            quality_score REAL,
+            created_at TEXT,
+            updated_at TEXT,
+            UNIQUE(session_id)
+        )
+    """)
+    
+    # 2. Knowledge entries
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_entries (
+            id TEXT PRIMARY KEY,
+            entry_type TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            scope_identifier TEXT,
+            content TEXT NOT NULL,
+            source_session_id TEXT,
+            confidence REAL DEFAULT 1.0,
+            usage_count INTEGER DEFAULT 0,
+            tags TEXT,
+            metadata TEXT,
+            embedding TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    
+    # 3. Tool executions
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS tool_executions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            tool_name TEXT NOT NULL,
+            arguments TEXT,
+            result_summary TEXT,
+            result_full TEXT,
+            duration_ms INTEGER,
+            success INTEGER DEFAULT 1,
+            error_message TEXT,
+            token_usage INTEGER,
+            created_at TEXT
+        )
+    """)
+    
+    # 4. LLM usage
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            model TEXT NOT NULL,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            finish_reason TEXT,
+            duration_ms INTEGER,
+            estimated_cost_usd REAL,
+            created_at TEXT
+        )
+    """)
+    
+    # 5. Session tags
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS session_tags (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            tag TEXT NOT NULL,
+            source TEXT DEFAULT 'user',
+            created_at TEXT,
+            UNIQUE(session_id, tag)
+        )
+    """)
+    
+    # 6. File snapshots
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS file_snapshots (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            file_path TEXT NOT NULL,
+            action TEXT NOT NULL,
+            content_hash TEXT,
+            content_preview TEXT,
+            size_bytes INTEGER,
+            created_at TEXT
+        )
+    """)
+    
+    # 7. Q&A pairs
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS qa_pairs (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            question TEXT NOT NULL,
+            answer_summary TEXT,
+            context TEXT,
+            tools_used TEXT,
+            success INTEGER DEFAULT 1,
+            quality_score REAL,
+            quality_notes TEXT,
+            tags TEXT,
+            metadata TEXT,
+            created_at TEXT
+        )
+    """)
+    
+    # 8. Create indexes
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_session_summaries_quality ON session_summaries(quality_score)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_type ON knowledge_entries(entry_type)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_scope ON knowledge_entries(scope, scope_identifier)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_entries(source_session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge_entries(confidence)",
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_session ON tool_executions(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_tool ON tool_executions(tool_name)",
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_success ON tool_executions(success)",
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_created ON tool_executions(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_session_tags_session ON session_tags(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag)",
+        "CREATE INDEX IF NOT EXISTS idx_file_snapshots_session ON file_snapshots(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_file_snapshots_path ON file_snapshots(file_path)",
+        "CREATE INDEX IF NOT EXISTS idx_file_snapshots_action ON file_snapshots(action)",
+        "CREATE INDEX IF NOT EXISTS idx_qa_pairs_session ON qa_pairs(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_qa_pairs_quality ON qa_pairs(quality_score)",
+        "CREATE INDEX IF NOT EXISTS idx_qa_pairs_success ON qa_pairs(success)",
+    ]
+    
+    for idx in indexes:
+        await db.execute(idx)
+    
+    await db.commit()
+
+
+async def _ensure_fts5_tables():
+    """Create FTS5 virtual tables if they don't exist."""
+    try:
+        async with get_db() as db:
+            # Check if knowledge_search exists
+            cursor = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_search'"
+            )
+            if not await cursor.fetchone():
+                await db.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_search USING fts5(
+                        entry_id UNINDEXED,
+                        entry_type,
+                        content,
+                        tags,
+                        scope,
+                        scope_identifier
+                    )
+                """)
+            
+            # Check if session_summary_search exists
+            cursor = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summary_search'"
+            )
+            if not await cursor.fetchone():
+                await db.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS session_summary_search USING fts5(
+                        summary_id UNINDEXED,
+                        session_id UNINDEXED,
+                        summary,
+                        key_topics,
+                        tools_used,
+                        files_modified
+                    )
+                """)
+            
+            await db.commit()
+    except Exception as e:
+        # FTS5 creation can fail if extension not available - log but don't crash
+        import logging
+        logging.getLogger(__name__).warning("Could not create FTS5 tables: %s", e)
 
 
 class Session:

@@ -450,6 +450,175 @@ async def list_tools():
     return {"tools": [name for name in tools.list_names()]}
 
 
+# ── Knowledge Base Endpoints ──────────────────────────────────────────────
+
+@app.get("/api/knowledge")
+async def list_knowledge(
+    entry_type: str = None,
+    scope: str = None,
+    scope_identifier: str = None,
+    min_confidence: float = 0.0,
+    limit: int = 50,
+):
+    """List knowledge entries with optional filters."""
+    from knowledge import KnowledgeBase
+    return await KnowledgeBase.search_knowledge(
+        entry_type=entry_type,
+        scope=scope,
+        scope_identifier=scope_identifier,
+        min_confidence=min_confidence,
+        limit=limit,
+    )
+
+
+@app.get("/api/knowledge/search")
+async def search_knowledge(q: str, entry_type: str = None, limit: int = 20):
+    """Full-text search across knowledge entries."""
+    from knowledge import KnowledgeBase
+    try:
+        results = await KnowledgeBase.fulltext_search_knowledge(q, entry_type=entry_type, limit=limit)
+        if results:
+            return results
+    except Exception:
+        pass
+    # Fallback to LIKE search
+    return await KnowledgeBase.search_knowledge(
+        entry_type=entry_type,
+        min_confidence=0.0,
+        limit=limit,
+    )
+
+
+@app.post("/api/knowledge")
+async def create_knowledge(body: dict):
+    """Create a knowledge entry."""
+    from knowledge import KnowledgeBase
+    entry_type = body.get("entry_type")
+    scope = body.get("scope")
+    content = body.get("content")
+    
+    if not all([entry_type, scope, content]):
+        raise HTTPException(status_code=400, detail="entry_type, scope, and content are required")
+    
+    entry_id = await KnowledgeBase.create_knowledge_entry(
+        entry_type=entry_type,
+        scope=scope,
+        content=content,
+        scope_identifier=body.get("scope_identifier"),
+        source_session_id=body.get("source_session_id"),
+        confidence=body.get("confidence", 1.0),
+        tags=body.get("tags"),
+        metadata=body.get("metadata"),
+    )
+    return {"id": entry_id}
+
+
+@app.get("/api/knowledge/{entry_id}")
+async def get_knowledge(entry_id: str):
+    """Get a specific knowledge entry."""
+    from knowledge import KnowledgeBase
+    entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found")
+    return entry
+
+
+@app.put("/api/knowledge/{entry_id}")
+async def update_knowledge(entry_id: str, body: dict):
+    """Update a knowledge entry."""
+    from knowledge import KnowledgeBase
+    updated = await KnowledgeBase.update_knowledge_entry(entry_id, **body)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found")
+    return {"ok": True}
+
+
+@app.delete("/api/knowledge/{entry_id}")
+async def delete_knowledge(entry_id: str):
+    """Delete a knowledge entry."""
+    from knowledge import KnowledgeBase
+    deleted = await KnowledgeBase.delete_knowledge_entry(entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found")
+    return {"ok": True}
+
+
+# ── Analytics Endpoints ───────────────────────────────────────────────────
+
+@app.get("/api/analytics/tools")
+async def tool_stats(
+    session_id: str = None,
+    tool_name: str = None,
+    period_days: int = None,
+):
+    """Get tool usage statistics."""
+    from knowledge import KnowledgeBase
+    return await KnowledgeBase.get_tool_stats(
+        session_id=session_id,
+        tool_name=tool_name,
+        period_days=period_days,
+    )
+
+
+@app.get("/api/analytics/llm")
+async def llm_stats(
+    session_id: str = None,
+    model: str = None,
+    period_days: int = None,
+):
+    """Get LLM usage statistics."""
+    from knowledge import KnowledgeBase
+    return await KnowledgeBase.get_llm_stats(
+        session_id=session_id,
+        model=model,
+        period_days=period_days,
+    )
+
+
+# ── Session Tags Endpoints ────────────────────────────────────────────────
+
+@app.get("/api/sessions/search/tags")
+async def search_sessions_by_tags(tags: str, match_all: bool = False, limit: int = 50):
+    """Search sessions by tags (comma-separated)."""
+    from knowledge import KnowledgeBase
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    if not tag_list:
+        raise HTTPException(status_code=400, detail="tags parameter is required")
+    return await KnowledgeBase.search_sessions_by_tags(tag_list, match_all=match_all, limit=limit)
+
+
+@app.get("/api/sessions/{session_id}/tags")
+async def get_session_tags(session_id: str):
+    """Get tags for a session."""
+    from knowledge import KnowledgeBase
+    return await KnowledgeBase.get_session_tags(session_id)
+
+
+@app.post("/api/sessions/{session_id}/tags")
+async def add_session_tag(session_id: str, body: dict):
+    """Add a tag to a session."""
+    from knowledge import KnowledgeBase
+    tag = body.get("tag")
+    if not tag:
+        raise HTTPException(status_code=400, detail="tag is required")
+    
+    tag_id = await KnowledgeBase.add_session_tag(
+        session_id=session_id,
+        tag=tag,
+        source=body.get("source", "user"),
+    )
+    return {"id": tag_id}
+
+
+# ── File History Endpoints ────────────────────────────────────────────────
+
+@app.get("/api/files/history")
+async def file_history(file_path: str, limit: int = 50):
+    """Get modification history for a file."""
+    from knowledge import KnowledgeBase
+    return await KnowledgeBase.get_file_history(file_path, limit=limit)
+
+
 # WebSocket endpoint
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -557,6 +726,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         log.info("Client disconnected from session %s", session_id)
         if agent_task and not agent_task.done():
             agent.cancel()
+        # Generate session summary and extract knowledge
+        try:
+            from session_hook import get_session_hook
+            hook = get_session_hook()
+            await hook.on_session_end(session, agent)
+        except Exception as e:
+            log.warning("Failed to generate session summary: %s", e)
     except Exception as e:
         log.exception("WebSocket error")
         if agent_task and not agent_task.done():
