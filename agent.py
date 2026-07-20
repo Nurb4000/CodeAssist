@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
@@ -8,6 +9,7 @@ from typing import AsyncIterator
 import openai
 
 from config import Config
+from knowledge import KnowledgeBase
 from llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
 from prompts import build_system_prompt, build_openai_messages
 from session import Session
@@ -241,11 +243,28 @@ class Agent:
                             })
                             continue
 
+                    start = time.monotonic()
                     result = await self.tools.execute(tc.name, tc.arguments)
+                    duration_ms = int((time.monotonic() - start) * 1000)
                     # Truncate large tool results before saving
                     truncated = truncate_tool_result(result, max_tokens=self.config.tools.tool_output_max_tokens)
                     await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                     yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
+
+                    # Log tool execution to knowledge base
+                    try:
+                        await KnowledgeBase.log_tool_execution(
+                            session_id=self.session.id,
+                            tool_name=tc.name,
+                            arguments=tc.arguments,
+                            result_summary=truncated[:1000] if truncated else None,
+                            result_full=truncated,
+                            duration_ms=duration_ms,
+                            success=not result.error,
+                            error_message=truncated[:500] if result.error else None,
+                        )
+                    except Exception:
+                        log.debug("Failed to log tool execution")
 
                     # Send plan update when todo tool is used
                     if tc.name == "todo":
