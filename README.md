@@ -168,6 +168,35 @@ embedding_model = "text-embedding-3-small"
 
 See `docs/knowledge-base-quickref.md` for API endpoints and examples.
 
+## Knowledge Base GUI
+
+Access the KB dashboard via the **📚 icon** in the sidebar or the **Knowledge Base** link in the footer.
+
+### Features
+
+| Page | Purpose |
+|------|---------|
+| **Dashboard** | Overview stats, entry counts, recent activity |
+| **Entries** | Browse, filter, edit, delete knowledge entries |
+| **Search** | Full-text and semantic search across all knowledge |
+| **Sessions** | View session history with summaries |
+| **Analytics** | Tool usage charts, LLM cost tracking |
+| **PII Manager** | Scan for and redact personal information |
+| **Settings** | Configure auto-creation, confidence thresholds |
+| **Export/Import** | Download/upload KB data, clear entire KB |
+
+### PII Protection
+
+The PII Manager automatically scans for:
+- Email addresses
+- IP addresses
+- Phone numbers
+- SSNs
+- Credit card numbers
+- API keys
+
+Review flagged entries and redact or delete as needed.
+
 ## Self-Creation System
 
 CodeAssist can automatically create skills and tools when it detects repetitive patterns in your workflow.
@@ -217,6 +246,7 @@ async def execute(input: str) -> str:
 - **API**: `GET /api/auto-creation/status` - View auto-creation stats
 - **API**: `POST /api/skills/reload` - Reload skills from disk
 - **API**: `POST /api/custom-tools/reload` - Reload custom tools
+- **GUI**: `/static/kb.html` - Knowledge Base dashboard
 
 See `docs/knowledge-base-quickref.md` for full API reference.
 
