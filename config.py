@@ -181,3 +181,8 @@ class Config:
         if os.environ.get("CODEASSIST_PORT"):
             config.server.port = int(os.environ["CODEASSIST_PORT"])
         return config
+
+
+def load_config(path: str | Path = "config.toml") -> Config:
+    """Convenience function to load config from file."""
+    return Config.load(path)
