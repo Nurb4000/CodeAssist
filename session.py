@@ -29,6 +29,9 @@ class _DBPool:
                 self._count += 1
                 conn = await aiosqlite.connect(self._db_path)
                 conn.row_factory = aiosqlite.Row
+                # Enable WAL mode and set busy timeout for concurrent access
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA busy_timeout=5000")
             else:
                 conn = await self._pool.get()
         return conn
