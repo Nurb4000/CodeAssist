@@ -644,6 +644,111 @@ async def file_history(file_path: str, limit: int = 50):
     return await KnowledgeBase.get_file_history(file_path, limit=limit)
 
 
+# ── Custom Tools Management ───────────────────────────────────────────
+
+@app.get("/api/custom-tools")
+async def list_custom_tools():
+    """List all custom tools."""
+    from custom_tools_loader import get_custom_tool_registry
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    registry = get_custom_tool_registry(workspace)
+    registry.discover()
+    
+    return {"tools": registry.list_tools()}
+
+
+@app.post("/api/custom-tools/reload")
+async def reload_custom_tools():
+    """Reload all custom tools from disk."""
+    from custom_tools_loader import get_custom_tool_registry
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    registry = get_custom_tool_registry(workspace)
+    registry.reload()
+    
+    return {"message": "Custom tools reloaded", "count": len(registry._tools)}
+
+
+@app.get("/api/skills/list")
+async def list_all_skills():
+    """List all available skills (built-in + custom)."""
+    from skills import SkillRegistry
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    registry = SkillRegistry(workspace, config.skills)
+    skills = registry.discover()
+    
+    return {"skills": [s.to_dict() for s in skills]}
+
+
+@app.post("/api/skills/reload")
+async def reload_skills():
+    """Reload all skills from disk."""
+    from skills import SkillRegistry
+    from config import load_config
+    
+    config = load_config()
+    workspace = Path(config.server.workspace)
+    registry = SkillRegistry(workspace, config.skills)
+    registry.reload()
+    
+    return {"message": "Skills reloaded", "count": len(registry._skills)}
+
+
+@app.get("/api/auto-creation/status")
+async def auto_creation_status():
+    """Get auto-creation status and stats."""
+    from config import load_config
+    from knowledge import KnowledgeBase
+    
+    config = load_config()
+    
+    # Get recent auto-created skills
+    recent_skills = await KnowledgeBase.search_knowledge(
+        entry_type="skill_created",
+        scope="project",
+        min_confidence=0.5,
+        limit=10,
+    )
+    
+    # Get recent auto-created tools
+    recent_tools = await KnowledgeBase.search_knowledge(
+        entry_type="tool_created",
+        scope="project",
+        min_confidence=0.5,
+        limit=10,
+    )
+    
+    # Get detected patterns
+    patterns = await KnowledgeBase.search_knowledge(
+        entry_type="pattern",
+        tags=["repetitive_workflow"],
+        min_confidence=0.5,
+        limit=10,
+    )
+    
+    return {
+        "enabled": {
+            "skills": config.agent.auto_create_skills,
+            "tools": config.agent.auto_create_tools,
+        },
+        "limits": {
+            "max_per_session": config.agent.max_auto_creations,
+            "min_confidence": config.agent.min_confidence,
+        },
+        "recent_skills": recent_skills,
+        "recent_tools": recent_tools,
+        "detected_patterns": patterns,
+    }
+
+
 # WebSocket endpoint
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):

@@ -5,6 +5,7 @@ Called when a session ends (WebSocket disconnect) to:
 1. Generate a session summary
 2. Extract knowledge entries
 3. Log file snapshots
+4. Detect patterns for auto-creation
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import hashlib
 import json
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -377,6 +379,10 @@ Provide a JSON response with:
             file_knowledge = await self._extract_from_file_operations(session_id, messages)
             extracted.extend(file_knowledge)
             
+            # 6. Detect repetitive patterns for auto-creation
+            pattern_knowledge = await self._detect_repetitive_patterns(session_id, messages)
+            extracted.extend(pattern_knowledge)
+            
             log.info("Knowledge extraction completed for session %s: %d entries extracted", session_id, len(extracted))
             
         except Exception as e:
@@ -619,7 +625,7 @@ Provide a JSON response with:
                 if topic:
                     knowledge = {
                         "entry_type": "pattern",
-                        scope": "project",
+                        "scope": "project",
                         "content": f"User question pattern: {content[:300]}",
                         "tags": ["user_question", topic],
                         "confidence": 0.6,
@@ -726,6 +732,128 @@ Provide a JSON response with:
                     extracted.append(knowledge)
         
         return extracted
+    
+    async def _detect_repetitive_patterns(self, session_id: str, messages: list[dict]) -> list[dict]:
+        """Detect repetitive tool sequences for auto-creation."""
+        extracted = []
+        
+        # Extract tool call sequences
+        tool_sequences = []
+        current_sequence = []
+        
+        for msg in messages:
+            if msg.get("tool_calls"):
+                try:
+                    tool_calls = json.loads(msg["tool_calls"])
+                    for tc in tool_calls:
+                        if isinstance(tc, dict):
+                            func = tc.get("function", {})
+                            tool_name = func.get("name", "")
+                            if tool_name:
+                                current_sequence.append(tool_name)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif current_sequence:
+                if len(current_sequence) >= 2:
+                    tool_sequences.append(tuple(current_sequence))
+                current_sequence = []
+        
+        if current_sequence and len(current_sequence) >= 2:
+            tool_sequences.append(tuple(current_sequence))
+        
+        # Find repeated sequences
+        sequence_counts = Counter(tool_sequences)
+        
+        for sequence, count in sequence_counts.items():
+            if count >= 3:  # Same sequence 3+ times
+                # This is a repetitive pattern - store it
+                pattern_content = f"Repetitive workflow ({count} times): {' → '.join(sequence)}"
+                
+                knowledge = {
+                    "entry_type": "pattern",
+                    "scope": "project",
+                    "content": pattern_content,
+                    "tags": ["repetitive_workflow", "auto_create_candidate"],
+                    "confidence": min(0.5 + (count * 0.1), 0.9),
+                    "metadata": {
+                        "sequence": list(sequence),
+                        "count": count,
+                        "session_id": session_id,
+                    },
+                }
+                
+                await self._create_knowledge_if_new(**knowledge)
+                extracted.append(knowledge)
+                
+                # If count >= 5 and confidence high enough, suggest skill creation
+                if count >= 5:
+                    await self._suggest_skill_creation(sequence, count, session_id)
+        
+        return extracted
+    
+    async def _suggest_skill_creation(self, sequence: tuple, count: int, session_id: str):
+        """Suggest creating a skill for a repetitive pattern."""
+        try:
+            from config import load_config
+            config = load_config()
+            
+            if not config.agent.auto_create_skills:
+                return
+            
+            # Check auto-creation count for this session
+            existing_skills = await KnowledgeBase.search_knowledge(
+                entry_type="skill_created",
+                scope="project",
+                min_confidence=0.5,
+                limit=config.agent.max_auto_creations,
+            )
+            
+            session_creations = [
+                e for e in existing_skills
+                if e.get("metadata", {}).get("session_id") == session_id
+            ]
+            
+            if len(session_creations) >= config.agent.max_auto_creations:
+                log.info("Auto-creation limit reached for session %s", session_id)
+                return
+            
+            # Generate skill name and description
+            skill_name = f"auto-{sequence[0]}-workflow"
+            skill_description = f"Automated workflow for {' → '.join(sequence[:3])} pattern"
+            
+            # Create the skill content
+            skill_content = f"""# Auto-Generated Workflow
+
+This skill was automatically created based on a repetitive pattern detected in your sessions.
+
+## Pattern
+
+The following tool sequence was repeated {count} times:
+{chr(10).join(f"{i+1}. `{tool}`" for i, tool in enumerate(sequence))}
+
+## Usage
+
+This workflow is now available as a skill. The agent will use this pattern when it detects similar tasks.
+
+## Tools in Sequence
+
+{chr(10).join(f"- **{tool}**: Part of the automated workflow" for tool in sequence)}
+"""
+            
+            # Create the skill
+            from tools.create_skill import execute as create_skill_execute
+            await create_skill_execute(
+                name=skill_name,
+                description=skill_description,
+                content=skill_content,
+                tags=["auto_created", "repetitive_pattern"],
+                session_id=session_id,
+            )
+            
+            log.info("Auto-created skill '%s' for repetitive pattern", skill_name)
+            
+        except Exception as e:
+            log.warning("Failed to suggest skill creation: %s", e)
     
     async def _create_knowledge_if_new(
         self,
