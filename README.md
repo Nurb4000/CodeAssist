@@ -403,10 +403,14 @@ CodeAssist/
 
 A couple of screenshots of it in action.
 
-<img width="1272" height="929" alt="image" src="https://github.com/user-attachments/assets/4be2ae04-85a8-40ef-b0f8-fad343c2105b" />
+<<mg width="1535" height="929" alt="image" src="https://github.com/user-attachments/assets/6ec990df-c68b-4383-91aa-6fec0778c0eb" />
 <img width="844" height="624" alt="image" src="https://github.com/user-attachments/assets/699085b7-b580-4fbc-b34a-c157a8134ab7" />
 <img width="831" height="411" alt="image" src="https://github.com/user-attachments/assets/cb468233-6407-4c73-b775-46a32fc54d02" />
 <img width="786" height="394" alt="image" src="https://github.com/user-attachments/assets/c778bf52-9c31-4982-8cb5-84ebbb844c2a" />
+<img width="1761" height="665" alt="image" src="https://github.com/user-attachments/assets/65a4764d-d2a5-4df4-9201-5679a438f2c9" />
+<img width="1878" height="570" alt="image" src="https://github.com/user-attachments/assets/a3167ec6-94c6-4167-be75-c8e0f108b1a2" />
+
+
 
 
 
