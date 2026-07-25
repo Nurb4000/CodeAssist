@@ -27,6 +27,20 @@ marked.setOptions({
     breaks: true,
 });
 
+function highlightToolOutput(text) {
+    if (!text) return '';
+    const escaped = escapeHtml(text);
+    if (text.includes('\n') || text.startsWith('Error') || text.match(/^[{\[]/)) {
+        try {
+            if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+                return '<pre><code>' + hljs.highlight(escapeHtml(JSON.stringify(JSON.parse(text), null, 2)), {language: 'json'}).value + '</code></pre>';
+            }
+        } catch(e) {}
+        return '<pre><code>' + (hljs.highlightAuto(escaped).value) + '</pre></code>';
+    }
+    return escaped;
+}
+
 async function api(method, path, body) {
     const opts = { method, headers: { 'Content-Type': 'application/json' } };
     if (body) opts.body = JSON.stringify(body);
@@ -265,7 +279,7 @@ function appendToolCall(name, args, output) {
         <div class="tool-call-header">${escapeHtml(name)}</div>
         <div class="tool-call-body">
             <div class="tool-call-args">${escapeHtml(argsStr)}</div>
-            ${output ? `<div class="tool-result-label">Output</div><div class="tool-call-output">${escapeHtml(output)}</div>` : ''}
+            ${output ? `<div class="tool-result-label">Output</div><div class="tool-call-output">${highlightToolOutput(output)}</div>` : ''}
         </div>`;
     body.appendChild(div);
 
@@ -299,7 +313,7 @@ function updateLastToolResult(output) {
         lastBody.appendChild(label);
         const outputDiv = document.createElement('div');
         outputDiv.className = 'tool-call-output' + (output && output.startsWith('Error') ? ' error' : '');
-        outputDiv.textContent = output;
+        outputDiv.innerHTML = highlightToolOutput(output);
         lastBody.appendChild(outputDiv);
     }
 }
@@ -399,7 +413,7 @@ function connectWS() {
     wsConnected = false;
     updateConnectionStatus('connecting');
 
-    ws = new WebSocket(`ws://${location.host}/ws/${currentSessionId}`);
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/${currentSessionId}`);
 
     ws.onopen = () => {
         wsConnected = true;
