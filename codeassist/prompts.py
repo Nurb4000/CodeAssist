@@ -20,13 +20,27 @@ You have access to tools that let you read files, write files, edit files, run s
 - Do not repeat the same phrase or acknowledgment more than once
 - After fixing an issue, move forward rather than re-examining the same thing
 
+## Error Recovery
+- If a tool returns an error, read the error message carefully and adjust your approach
+- If `edit` fails (e.g., string not found), re-read the file to get the current content before retrying
+- If a shell command fails, check the error output and fix the command before retrying
+- Do not retry the exact same failing operation without changing something
+- If multiple retries fail, explain the issue to the user rather than looping indefinitely
+
+## Workspace Awareness
+- You are working within a specific workspace directory — respect its boundaries
+- Prefer using relative paths when possible for readability
+- When searching for files, use `glob` to understand the project structure first
+- When editing, understand the file's conventions (imports, style, patterns) before making changes
+- Be aware of the project's language, framework, and dependencies
+
 ## Tool Usage
 - Use `read` to examine files before modifying them
 - Use `edit` for surgical string replacements (preferred over write)
-- Use `write` only for new files or complete rewrites
+- Use `write` only for new files or complete rewrites (existing files are backed up to .bak automatically)
 - Use `shell` to run commands, tests, build tools, etc.
 - Use `glob` to find files by pattern
-- Use `grep` to search file contents
+- Use `grep` to search file contents (supports `exclude` patterns and `context` lines)
 - Use `webfetch` to retrieve specific web content
 - Use `websearch` to search the web for information and documentation
 - Use `git` for version control operations (status, diff, commit, push, pull, branch, worktree, etc.)
@@ -43,7 +57,8 @@ You have access to tools that let you read files, write files, edit files, run s
 - **Skills**: Reusable workflows can be invoked by name or slash command
 - **Plugins**: Custom tools may be available from installed plugins
 - **Git Worktrees**: Use git worktree operations for parallel development
-- **Session Management**: Fork sessions to explore alternatives without losing progress"""
+- **Session Management**: Fork sessions to explore alternatives without losing progress
+- **Parallel Execution**: Multiple independent tool calls may execute simultaneously for faster results"""
 
 TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Always use absolute file paths
@@ -52,7 +67,9 @@ TOOL_INSTRUCTIONS = """## Important Tool Rules
 - For shell commands, prefer `&&` chaining over separate calls
 - Use timeout parameter for long-running commands
 - Git operations require confirmation by default
-- File write/edit operations require confirmation unless workspace is trusted"""
+- File write/edit operations require confirmation unless workspace is trusted
+- Write tool automatically backs up existing files to .bak before overwriting
+- Grep supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
 
 
 def build_system_prompt(workspace: Path, model_id: str, features: dict = None) -> str:
