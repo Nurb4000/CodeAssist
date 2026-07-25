@@ -61,8 +61,21 @@ def reset_pool():
         while not _db_pool._pool.empty():
             try:
                 conn = _db_pool._pool.get_nowait()
-                # Schedule close but don't await — connection will be GC'd
                 conn._conn.close()
+            except (asyncio.QueueEmpty, Exception):
+                break
+        _db_pool._count = 0
+        _db_pool = None
+
+
+async def async_reset_pool():
+    """Properly close all pooled connections asynchronously."""
+    global _db_pool
+    if _db_pool is not None:
+        while not _db_pool._pool.empty():
+            try:
+                conn = _db_pool._pool.get_nowait()
+                await conn.close()
             except (asyncio.QueueEmpty, Exception):
                 break
         _db_pool._count = 0
@@ -424,6 +437,26 @@ async def _ensure_fts5_tables():
                         scope_identifier
                     )
                 """)
+                
+                # Add triggers for incremental updates
+                await db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS knowledge_search_ai AFTER INSERT ON knowledge_entries BEGIN
+                        INSERT INTO knowledge_search(entry_id, entry_type, content, tags, scope, scope_identifier)
+                        VALUES (new.id, new.entry_type, new.content, new.tags, new.scope, new.scope_identifier);
+                    END
+                """)
+                await db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS knowledge_search_ad AFTER DELETE ON knowledge_entries BEGIN
+                        DELETE FROM knowledge_search WHERE entry_id = old.id;
+                    END
+                """)
+                await db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS knowledge_search_au AFTER UPDATE ON knowledge_entries BEGIN
+                        DELETE FROM knowledge_search WHERE entry_id = old.id;
+                        INSERT INTO knowledge_search(entry_id, entry_type, content, tags, scope, scope_identifier)
+                        VALUES (new.id, new.entry_type, new.content, new.tags, new.scope, new.scope_identifier);
+                    END
+                """)
             
             # Check if session_summary_search exists
             cursor = await db.execute(
@@ -439,6 +472,26 @@ async def _ensure_fts5_tables():
                         tools_used,
                         files_modified
                     )
+                """)
+                
+                # Add triggers for incremental updates
+                await db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS session_summary_search_ai AFTER INSERT ON session_summaries BEGIN
+                        INSERT INTO session_summary_search(summary_id, session_id, summary, key_topics, tools_used, files_modified)
+                        VALUES (new.id, new.session_id, new.summary, new.key_topics, new.tools_used, new.files_modified);
+                    END
+                """)
+                await db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS session_summary_search_ad AFTER DELETE ON session_summaries BEGIN
+                        DELETE FROM session_summary_search WHERE summary_id = old.id;
+                    END
+                """)
+                await db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS session_summary_search_au AFTER UPDATE ON session_summaries BEGIN
+                        DELETE FROM session_summary_search WHERE summary_id = old.id;
+                        INSERT INTO session_summary_search(summary_id, session_id, summary, key_topics, tools_used, files_modified)
+                        VALUES (new.id, new.session_id, new.summary, new.key_topics, new.tools_used, new.files_modified);
+                    END
                 """)
             
             await db.commit()
