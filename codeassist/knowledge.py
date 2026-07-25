@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from session import get_db
+from .session import get_db
 
 log = logging.getLogger(__name__)
 

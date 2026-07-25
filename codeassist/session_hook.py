@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from session import Session
-from knowledge import KnowledgeBase
+from .session import Session
+from .knowledge import KnowledgeBase
 
 log = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from session import Session
+from .session import Session
 
 
 class SessionManager:

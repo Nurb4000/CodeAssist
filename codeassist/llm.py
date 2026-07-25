@@ -6,7 +6,7 @@ from typing import AsyncIterator
 
 import openai
 
-from config import LLMConfig
+from .config import LLMConfig
 
 log = logging.getLogger(__name__)
 

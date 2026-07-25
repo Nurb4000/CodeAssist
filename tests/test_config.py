@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from config import Config
+from codeassist.config import Config
 
 
 class TestConfig:

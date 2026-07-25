@@ -2,7 +2,7 @@
 import pytest
 from pathlib import Path
 
-from skills import SkillRegistry, SkillTool
+from codeassist.skills import SkillRegistry, SkillTool
 
 
 class TestSkillRegistry:

@@ -2,7 +2,7 @@
 import pytest
 from pathlib import Path
 
-from dynamic_tools import DynamicToolLoader, create_dynamic_registry
+from codeassist.dynamic_tools import DynamicToolLoader, create_dynamic_registry
 from tools import ToolRegistry
 
 

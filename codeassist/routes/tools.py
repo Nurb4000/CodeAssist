@@ -9,7 +9,7 @@ router = APIRouter(prefix="/api/tools", tags=["tools"])
 
 @router.post("/reload")
 async def reload_tools_endpoint():
-    from server import reload_all_tools
+    from ..server import reload_all_tools
     try:
         reload_all_tools()
         return {"ok": True, "message": "Tools reloaded successfully"}
@@ -19,7 +19,7 @@ async def reload_tools_endpoint():
 
 @router.get("/list")
 async def list_tools():
-    from server import tools
+    from ..server import tools
     if tools is None:
         return {"tools": []}
     return {"tools": [name for name in tools.list_names()]}
@@ -29,7 +29,7 @@ async def list_tools():
 
 @router.get("/manage/list")
 async def list_all_tools():
-    from server import get_config, get_trust_registry
+    from ..server import get_config, get_trust_registry
     from tools import get_tools
     from custom_tools_loader import get_custom_tool_registry
     from knowledge import KnowledgeBase
@@ -78,7 +78,7 @@ async def list_all_tools():
 
 @router.get("/manage/{tool_name}")
 async def get_tool_details(tool_name: str):
-    from server import get_config, get_trust_registry
+    from ..server import get_config, get_trust_registry
     from tools import get_tools
     from custom_tools_loader import get_custom_tool_registry
 
@@ -123,7 +123,7 @@ async def get_tool_details(tool_name: str):
 
 @router.put("/manage/{tool_name}/trust")
 async def set_tool_trust(tool_name: str, body: dict):
-    from server import get_config, get_trust_registry
+    from ..server import get_config, get_trust_registry
     from custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
@@ -145,7 +145,7 @@ async def set_tool_trust(tool_name: str, body: dict):
 
 @router.delete("/manage/{tool_name}")
 async def delete_custom_tool(tool_name: str):
-    from server import get_config, get_trust_registry
+    from ..server import get_config, get_trust_registry
     from custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
@@ -185,7 +185,7 @@ async def get_tool_usage_stats(period_days: int = 30):
 
 @router.post("/manage/scan")
 async def scan_custom_tools():
-    from server import get_config, get_trust_registry
+    from ..server import get_config, get_trust_registry
     from custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
@@ -269,7 +269,7 @@ async def llm_stats(
 @router.get("/trust/pending")
 async def get_pending_trust_requests():
     """Get all pending trust approval requests."""
-    from server import get_trust_registry
+    from ..server import get_trust_registry
     
     registry = get_trust_registry()
     if not registry:
@@ -285,7 +285,7 @@ async def get_pending_trust_requests():
 @router.get("/trust/trusted")
 async def get_trusted_tools():
     """Get all trusted tools/plugins."""
-    from server import get_trust_registry
+    from ..server import get_trust_registry
     
     registry = get_trust_registry()
     if not registry:

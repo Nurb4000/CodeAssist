@@ -2,7 +2,7 @@
 import asyncio
 import pytest
 
-from session import Session, init_db
+from codeassist.session import Session, init_db
 
 
 class TestSession:

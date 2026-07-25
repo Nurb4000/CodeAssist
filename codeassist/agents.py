@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Any
 
-from session import Agent as AgentRecord
+from .session import Agent as AgentRecord
 
 log = logging.getLogger(__name__)
 

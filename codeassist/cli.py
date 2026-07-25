@@ -21,8 +21,8 @@ def main():
     parser.add_argument("--config", default="config.toml", help="Config file path (default: config.toml)")
     args = parser.parse_args()
 
-    from config import Config
-    import server
+    from codeassist.config import Config
+    import codeassist.server as server
 
     config = Config.load(args.config)
 
@@ -53,7 +53,7 @@ def main():
     try:
         import uvicorn
         uvicorn.run(
-            "server:app",
+            "codeassist.server:app",
             host=host,
             port=port,
             log_level="info",

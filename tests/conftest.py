@@ -1,7 +1,7 @@
 """Shared test fixtures and configuration."""
 import asyncio
 import pytest
-import session as _session_mod
+import codeassist.session as _session_mod
 from pathlib import Path
 
 
