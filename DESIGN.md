@@ -57,29 +57,56 @@ CodeAssist/
 ├── DESIGN.md
 ├── config.toml
 ├── requirements.txt
-├── server.py              # FastAPI app, routes, WebSocket
-├── agent.py               # Core agent loop (prompt → tool calls → execute → repeat)
-├── llm.py                 # LLM client (OpenAI-compatible streaming)
-├── tools/
-│   ├── __init__.py        # Tool registry + base Tool class
-│   ├── read.py            # Read file contents
-│   ├── write.py           # Write file contents
-│   ├── edit.py            # Surgical string replacement
-│   ├── shell.py           # Execute shell commands
-│   ├── glob.py            # Find files by pattern
-│   ├── grep.py            # Search file contents
-│   ├── webfetch.py        # Fetch and parse web content
-│   └── todo.py            # Manage task lists
-├── session.py             # Session/message persistence (SQLite)
-├── prompts.py             # System prompt construction
-├── static/
-│   ├── index.html         # Chat UI
-│   ├── style.css
-│   └── app.js             # Frontend logic (WebSocket, streaming, markdown)
-└── tests/
-    ├── test_agent.py
-    ├── test_tools.py
-    └── test_llm.py
+├── codeassist/               # Core package
+│   ├── __main__.py           # CLI entry point
+│   ├── server.py             # FastAPI app, routes, WebSocket
+│   ├── agent.py              # Core agent loop (prompt → tool calls → execute → repeat)
+│   ├── llm.py                # LLM client (OpenAI-compatible streaming)
+│   ├── config.py             # Configuration loading
+│   ├── prompts.py            # System prompt construction
+│   ├── session.py            # Session/message persistence (SQLite)
+│   ├── session_hook.py       # Session lifecycle hooks
+│   ├── tokens.py             # Token counting and context window management
+│   ├── knowledge.py          # Knowledge base CRUD and search
+│   ├── embeddings.py         # Vector embeddings for semantic search
+│   ├── trust_registry.py     # Tool trust/approval system
+│   ├── lsp_client.py         # Language Server Protocol client
+│   ├── mcp_client.py         # Model Context Protocol client
+│   ├── plugins.py            # Plugin system
+│   ├── agents.py             # Agent configuration and management
+│   ├── session_manager.py    # Session fork/export/import
+│   ├── dynamic_tools.py      # Dynamic tool loading
+│   ├── custom_tools_loader.py# Custom tool discovery
+│   ├── cli.py                # CLI interface
+│   └── routes/               # API route modules
+│       ├── config.py, sessions.py, skills.py, tools.py
+│       ├── git.py, knowledge.py, mcp.py, plugins.py
+│       ├── kb_gui.py, lsp.py, agents.py, custom_tools.py
+├── tools/                    # Tool implementations
+│   ├── __init__.py           # ToolRegistry, Tool base class, ToolResult
+│   ├── read.py, write.py, edit.py, shell.py, glob.py, grep.py
+│   ├── webfetch.py, todo.py, git.py, fossil.py, database.py
+│   ├── directory.py, apply_patch.py, documentation.py, http.py
+│   ├── process.py, advanced.py (web search)
+│   ├── security.py           # SSRF protection, path validation
+│   ├── tool_manager.py       # Dynamic tool management
+│   ├── create_skill.py, create_tool.py
+├── static/                   # Web UI
+│   ├── index.html, style.css, app.js
+├── tests/                    # 198 tests
+│   ├── conftest.py, test_agent.py, test_config.py, test_llm.py
+│   ├── test_session.py, test_session_manager.py, test_agents.py
+│   ├── test_routes.py, test_skills.py, test_trust_registry.py
+│   ├── test_dynamic_tools.py
+│   └── test_tools/           # Tool-specific tests
+│       ├── test_git.py, test_fossil.py, test_apply_patch.py
+│       ├── test_database.py, test_directory.py, test_documentation.py
+│       ├── test_tool_manager.py, test_http.py, test_process.py
+├── Dockerfile
+├── docker-compose.yml
+├── config.toml               # Your config (gitignored)
+├── config.example.toml       # Config template
+└── config.docker.toml        # Config template for Docker
 ```
 
 ---
@@ -102,7 +129,7 @@ context_window = 128000
 
 [server]
 host = "0.0.0.0"
-port = 8000
+port = 8090
 workspace = "."                         # Root directory for file operations
 
 [agent]
@@ -157,14 +184,19 @@ class Agent:
         # Save user message
         await self.session.add_message("user", user_message)
 
+        # Cache tool schemas (computed once)
+        tool_schemas = self.tools.schemas()
+
         for iteration in range(self.config.max_iterations):
             # Build messages from history
             messages = self.build_messages()
 
-            # Build tool schemas for LLM
-            tool_schemas = self.tools.schemas()
+            # Check context limits, compact if needed
+            ctx = check_context_limit(messages, tool_schemas=tool_schemas)
+            if ctx["needs_compaction"]:
+                messages = compact_messages(messages)
 
-            # Stream LLM response
+            # Stream LLM response (with 120s timeout)
             tool_calls = []
             async for event in self.llm.stream(messages, tool_schemas):
                 yield event
@@ -172,13 +204,15 @@ class Agent:
                     tool_calls.append(event)
 
             if not tool_calls:
-                # No tool calls = LLM is done
                 break
 
-            # Execute tools and append results
-            for tc in tool_calls:
-                result = await self.tools.execute(tc.name, tc.arguments)
-                await self.session.add_message("tool", result, tool_call_id=tc.id)
+            # Execute tools in parallel via asyncio.gather()
+            confirmed = [tc for tc in tool_calls if not self.needs_confirmation(tc)]
+            results = await asyncio.gather(*[
+                self.tools.execute(tc.name, tc.arguments) for tc in confirmed
+            ])
+            for tc, result in zip(confirmed, results):
+                await self.session.add_message("tool", result.output, tool_call_id=tc.id)
                 yield ToolResultEvent(tc.id, result)
 
         # Save assistant message
@@ -189,23 +223,29 @@ class Agent:
 1. Save user message to DB
 2. Enter loop (max N iterations)
 3. Build message history from DB
-4. Build system prompt + tool schemas
-5. Call LLM with streaming
-6. If no tool calls → break (done)
-7. Execute each tool call, save results
-8. Loop back to step 3
+4. Check context limits, compact if needed (two-level: summarize tool outputs → drop old tool messages)
+5. Build system prompt + tool schemas
+6. Call LLM with streaming (120s timeout)
+7. If no tool calls → break (done)
+8. Execute confirmed tools in parallel via `asyncio.gather()`
+9. Loop back to step 3
 
 ### 4. Tool System (`tools/`)
 
 Each tool follows a consistent pattern, inspired by opencode's `Tool.define()`:
 
 ```python
+@dataclass
+class ToolResult:
+    output: str
+    error: bool = False
+
 class Tool:
     name: str
     description: str
     parameters: dict          # JSON Schema
 
-    async def execute(self, **kwargs) -> str:
+    async def execute(self, **kwargs) -> ToolResult:
         raise NotImplementedError
 ```
 
@@ -281,6 +321,8 @@ class GrepTool(Tool):
         "pattern": {"type": "string"},    # Regex pattern
         "path": {"type": "string"},        # Directory to search
         "include": {"type": "string"},     # File pattern filter
+        "exclude": {"type": "string"},     # File pattern to exclude
+        "context": {"type": "integer"},    # Context lines before/after match
     }
     # Uses ripgrep (rg) if available, falls back to Python re
 ```
@@ -356,11 +398,19 @@ Server → Client events:
   {"type": "tool_result",     "id": "call_123", "output": "1: import os..."}
   {"type": "thinking",        "content": "I need to check..."}
   {"type": "error",           "message": "Rate limit exceeded"}
+  {"type": "confirm_request", "id": "...", "tool": "write", "arguments": {...}}
+  {"type": "context",         "tokens": 45000, "usage_pct": 35.2, "severity": "ok"}
+  {"type": "compacted",       "message": "Context window compressed"}
+  {"type": "finish",          "reason": "stop", "usage": {...}}
+  {"type": "plan_update",     "tasks": [...]}
+  {"type": "cancelled"}
   {"type": "done"}
 
 Client → Server events:
   {"type": "user_message",    "content": "Fix the bug in main.py"}
   {"type": "cancel"}          # Abort current run
+  {"type": "confirm_response", "id": "...", "approved": true}
+  {"type": "switch_agent",    "agent": "plan"}
 ```
 
 ### 8. Frontend (`static/`)
@@ -384,51 +434,74 @@ A single-page chat interface:
 | Language | TypeScript/Bun | Python 3.11+ |
 | Framework | Effect v4 | Plain async/await |
 | LLM providers | 15+ via AI SDK | 1 via OpenAI-compatible API |
-| Protocols | MCP, LSP, ACP | None (future) |
+| Protocols | MCP, LSP, ACP | MCP client, LSP client |
 | UI | TUI + Web + Desktop | Web only |
 | Database | SQLite + Drizzle | SQLite + aiosqlite |
-| Tools | 41+ with permissions | 8 core tools, no permissions |
-| Agent types | build, plan, general, custom | Single agent (extensible) |
-| Git integration | Snapshots, diffs, reverts | None (future) |
+| Tools | 41+ with permissions | 20+ tools with trust/approval |
+| Agent types | build, plan, general, custom | Single agent (extensible via agents.json) |
+| Git integration | Snapshots, diffs, reverts | Shell-based via LLM |
 | Config | JSONC with schema | TOML |
 | Streaming | SSE + WebSocket | WebSocket only |
+| Context window | Compaction | Two-level compaction (summarize → drop) |
+| Parallel tools | Sequential | Parallel via asyncio.gather() |
+| SSRF protection | N/A (local only) | Full DNS validation, internal TLD blocking |
+| Custom tools | N/A | User-written Python files auto-discovered |
+| Skills | N/A | Markdown files with instructions |
+| Plugins | N/A | Python modules with hooks |
+| Workers | N/A | Local workstation daemon (planned) |
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Core Agent (MVP)
-- [ ] Config loading (TOML)
-- [ ] LLM client with OpenAI-compatible streaming
-- [ ] Agent loop with tool calling
-- [ ] Tool registry + base class
-- [ ] 5 core tools: read, write, edit, shell, glob
-- [ ] Session persistence (SQLite)
-- [ ] System prompt construction
+### Phase 1: Core Agent (MVP) ✅ Complete
+- [x] Config loading (TOML)
+- [x] LLM client with OpenAI-compatible streaming
+- [x] Agent loop with tool calling
+- [x] Tool registry + base class
+- [x] 5 core tools: read, write, edit, shell, glob
+- [x] Session persistence (SQLite)
+- [x] System prompt construction
 
-### Phase 2: Web UI
-- [ ] FastAPI server with WebSocket
-- [ ] Chat UI (HTML/CSS/JS)
-- [ ] Streaming text display
-- [ ] Tool call/result visualization
-- [ ] Session list/management
-- [ ] Markdown rendering
+### Phase 2: Web UI ✅ Complete
+- [x] FastAPI server with WebSocket
+- [x] Chat UI (HTML/CSS/JS)
+- [x] Streaming text display
+- [x] Tool call/result visualization
+- [x] Session list/management
+- [x] Markdown rendering
 
-### Phase 3: Polish
-- [ ] Grep tool (ripgrep or Python fallback)
-- [ ] Webfetch tool
-- [ ] Todo tool
-- [ ] Error handling and retries
-- [ ] Configuration validation
-- [ ] Model switching
+### Phase 3: Polish ✅ Complete
+- [x] Grep tool (ripgrep or Python fallback)
+- [x] Webfetch tool
+- [x] Todo tool
+- [x] Error handling and retries
+- [x] Configuration validation
+- [x] Model switching
+- [x] SSRF protection, DNS rebinding prevention
+- [x] ToolResult return type for all tools
+- [x] Context window management (two-level compaction)
+- [x] Parallel tool execution
+- [x] Streaming timeout (120s)
+- [x] Write tool backup, grep exclude/context, edit stale-edit detection
 
-### Phase 4: Advanced Features (optional)
-- [ ] Multi-agent support (plan mode)
-- [ ] MCP client integration
-- [ ] Git snapshot/revert
-- [ ] LSP diagnostics
-- [ ] Permission system
-- [ ] Plugin support
+### Phase 4: Advanced Features
+- [x] Multi-agent support (agents.json config)
+- [x] MCP client integration
+- [x] LSP diagnostics
+- [x] Plugin support
+- [x] Custom tools (user-written Python files)
+- [x] Skills system
+- [x] Trust registry (tool approval)
+- [x] Session manager (fork/export/import)
+- [ ] Git snapshot/revert (planned)
+
+### Phase 5: Local Workstation Daemon (planned)
+- [ ] Worker registry on server
+- [ ] `worker.py` daemon with tool execution
+- [ ] Tool routing (worker vs local)
+- [ ] Session binding UI
+- [ ] Authentication (API key or token)
 
 ---
 
@@ -436,10 +509,11 @@ A single-page chat interface:
 
 | Phase | Time | Deliverable |
 |-------|------|-------------|
-| Phase 1 | 2-3 days | Working CLI-level agent with tools |
-| Phase 2 | 2-3 days | Web UI with streaming |
-| Phase 3 | 2-3 days | Polished, production-ready |
-| Phase 4 | Ongoing | Feature additions |
+| Phase 1 | ✅ Done | Working agent with tools |
+| Phase 2 | ✅ Done | Web UI with streaming |
+| Phase 3 | ✅ Done | Polished, production-ready |
+| Phase 4 | ✅ Done | Multi-agent, MCP, LSP, plugins, custom tools |
+| Phase 5 | ~1 day | Local workstation daemon |
 
 ---
 
@@ -487,8 +561,8 @@ Currently all tools (read, write, edit, shell, glob, grep) run on the server's f
 │  Returns results to server                          │
 │                                                     │
 │  Usage:                                              │
-│    python worker.py --server ws://your-server:8000   │
-│    python worker.py --server ws://your-server:8000 --workspace ~/myproject
+│    python worker.py --server ws://your-server:8090   │
+│    python worker.py --server ws://your-server:8090 --workspace ~/myproject
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -498,7 +572,7 @@ The daemon connects to a dedicated WebSocket endpoint:
 
 ```
 Server: /ws/worker/{worker_id}
-Daemon:  ws://server:8000/ws/worker
+Daemon:  ws://server:8090/ws/worker
 ```
 
 **Messages (server → daemon):**
@@ -551,8 +625,8 @@ class Worker:
                     }))
 
 # Usage:
-#   python worker.py --server ws://your-server:8000
-#   python worker.py --server ws://your-server:8000 --workspace ~/myproject
+#   python worker.py --server ws://your-server:8090
+#   python worker.py --server ws://your-server:8090 --workspace ~/myproject
 ```
 
 ### Config Changes
@@ -561,7 +635,7 @@ class Worker:
 [worker]
 # Enable worker mode (daemon connects to remote server)
 enabled = false
-server = "ws://your-server:8000"
+server = "ws://your-server:8090"
 workspace = "."  # Local directory to expose to the server
 ```
 
