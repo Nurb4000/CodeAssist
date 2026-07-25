@@ -112,6 +112,13 @@ class Agent:
             self._confirm_results[confirm_id] = approved
             self._confirm_events[confirm_id].set()
 
+    def resolve_question(self, question_id: str, answer: str):
+        """Resolve a pending question from WebSocket."""
+        log.info("Question resolved: id=%s", question_id)
+        question_tool = self.tools.get("question")
+        if question_tool and hasattr(question_tool, "set_answer"):
+            question_tool.set_answer(question_id, answer)
+
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
         await self.session.add_message("user", user_message)
@@ -265,11 +272,27 @@ class Agent:
                     tool_calls=tc_dicts,
                 )
 
-                # Phase 1: Handle confirmations sequentially (interactive)
+                # Phase 1: Handle confirmations and questions sequentially (interactive)
                 confirmed_tool_calls = []
                 for tc in tool_calls:
                     if self.cancel_event.is_set():
                         return
+                    if tc.name == "question":
+                        question_id = f"{tc.id}_question"
+                        yield AgentEvent("question_request", {
+                            "id": question_id,
+                            "question": tc.arguments.get("question", ""),
+                            "options": tc.arguments.get("options"),
+                            "required": tc.arguments.get("required", False),
+                        })
+                        event = asyncio.Event()
+                        self._confirm_events[question_id] = event
+                        await event.wait()
+                        answer = self._confirm_results.pop(question_id, "")
+                        self._confirm_events.pop(question_id, None)
+                        await self.session.add_message("tool", content=str(answer), tool_call_id=tc.id)
+                        yield AgentEvent("tool_result", {"id": tc.id, "name": "question", "output": str(answer)})
+                        continue
                     if self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
                         yield AgentEvent("confirm_request", {

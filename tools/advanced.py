@@ -119,28 +119,22 @@ class QuestionTool(Tool):
         self._answers: dict[str, str] = {}
 
     async def execute(self, question: str, options: list[str] | None = None,
-                     required: bool = False) -> ToolResult:
-        # In a real implementation, this would pause the agent and wait for user input
-        # For now, return a placeholder
-        return ToolResult(
-            output=f"Question for user: {question}\n"
-                   f"Options: {', '.join(options) if options else 'Any response'}\n"
-                   f"Required: {required}"
-        )
+                      required: bool = False) -> ToolResult:
+        import uuid
+        question_id = str(uuid.uuid4())[:8]
+        self._pending_questions[question_id] = asyncio.Event()
+        await self._pending_questions[question_id].wait()
+        answer = self._answers.pop(question_id, None)
+        self._pending_questions.pop(question_id, None)
+        if answer is None:
+            return ToolResult(output="No answer received.", error=not required)
+        return ToolResult(output=answer)
 
     def set_answer(self, question_id: str, answer: str):
         """Set the answer to a pending question."""
         self._answers[question_id] = answer
         if question_id in self._pending_questions:
             self._pending_questions[question_id].set()
-
-    async def wait_for_answer(self, question_id: str) -> str | None:
-        """Wait for user to answer a question."""
-        event = asyncio.Event()
-        self._pending_questions[question_id] = event
-
-        await event.wait()
-        return self._answers.pop(question_id, None)
 
 
 class TaskTool(Tool):

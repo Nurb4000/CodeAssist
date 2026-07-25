@@ -82,7 +82,9 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from tools.database import DatabaseTool
     from tools.documentation import DocumentationTool
     from tools.tool_manager import ToolManagerTool
-    from tools.advanced import WebSearchTool
+    from tools.advanced import WebSearchTool, QuestionTool
+    from tools.create_tool import CreateTool
+    from tools.create_skill import CreateSkill
     from codeassist.skills import SkillTool
     from codeassist.session_manager import SessionTool
 
@@ -146,6 +148,13 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
         websearch_tool.max_chars = tool_config.websearch_max_chars
     registry.register(websearch_tool)
 
+    # Register Question tool
+    registry.register(QuestionTool())
+
+    # Register Create Tool and Create Skill tools
+    registry.register(CreateTool())
+    registry.register(CreateSkill())
+
     # Register Skill tool (if skill registry exists)
     if skill_registry:
         registry.register(SkillTool(skill_registry))
@@ -185,7 +194,9 @@ def get_tools(config=None) -> dict:
     from tools.http import HTTPTool
     from tools.database import DatabaseTool
     from tools.documentation import DocumentationTool
-    from tools.advanced import WebSearchTool
+    from tools.advanced import WebSearchTool, QuestionTool
+    from tools.create_tool import CreateTool
+    from tools.create_skill import CreateSkill
     
     tools = {}
     workspace = Path(".")
@@ -195,7 +206,7 @@ def get_tools(config=None) -> dict:
         ReadTool, WriteTool, EditTool, ShellTool, GlobTool, GrepTool,
         WebFetchTool, TodoTool, GitTool, FossilTool, ApplyPatchTool,
         DirectoryTool, ProcessTool, HTTPTool, DatabaseTool, DocumentationTool,
-        WebSearchTool,
+        WebSearchTool, QuestionTool, CreateTool, CreateSkill,
     ]
     
     for tool_cls in tool_classes:
