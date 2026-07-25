@@ -251,8 +251,8 @@ TOOLS = {
     }
 }
 
-async def execute(input: str) -> str:
-    return f"Processed: {input}"
+async def execute(input: str) -> ToolResult:
+    return ToolResult(output=f"Processed: {input}")
 ```
 
 ---

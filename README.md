@@ -129,6 +129,43 @@ password = "your-secret-here"
 
 Without a password, anyone who can reach the port has full access to the workspace.
 
+### Security features
+
+CodeAssist includes several security layers:
+
+- **SSRF protection** (`tools/security.py`): DNS rebinding prevention, internal TLD blocking (`.internal`, `.local`, `.corp`), cloud metadata IP blocking (`169.254.169.254`)
+- **Workspace path validation**: All file operations are validated to stay within the workspace directory
+- **Tool trust system**: Custom tools are scanned for dangerous patterns and require explicit approval
+- **Auth middleware**: Password-based HTTP Basic Auth with WebSocket support via `sec-websocket-protocol` header
+- **Secure WebSocket**: Frontend derives `wss://` or `ws://` from page protocol automatically
+
+### Context window management
+
+CodeAssist automatically manages context window limits during long sessions:
+
+- **Token counting**: Estimates token usage including tool schema overhead for accurate thresholds
+- **Two-level compaction**: When context exceeds 75%, old messages are compacted:
+  - **Level 0**: Tool outputs summarized to 1-line, assistant content truncated, user messages preserved
+  - **Level 1** (escalation): Old tool messages dropped entirely, only function names kept
+- **Compaction caching**: Compacted messages are cached and only recomputed when new messages arrive
+- **Smart truncation**: Tool output truncation preserves error/traceback lines for debugging
+
+Configuration in `config.toml`:
+```toml
+[compaction]
+enabled = true
+threshold_pct = 75      # Trigger compaction at this usage percentage
+keep_recent = 20        # Number of recent messages to preserve unchanged
+tool_result_max_tokens = 4000  # Max tokens per tool output
+```
+
+### Agent behavior
+
+- **Parallel tool execution**: Multiple independent tool calls from the LLM execute simultaneously via `asyncio.gather()`
+- **Streaming timeout**: LLM streams time out after 120 seconds with a graceful error
+- **Max-iteration limit**: When the agent reaches the maximum iteration count, it notifies the user rather than silently stopping
+- **Confirmation prompts**: Destructive operations (file writes, shell commands) require user confirmation unless workspace is trusted
+
 ## Usage
 
 ```bash
@@ -233,6 +270,8 @@ You can create custom Python tools in `.codeassist/custom_tools/`:
 
 ```python
 # .codeassist/custom_tools/my_tool.py
+from tools import ToolResult
+
 TOOLS = {
     "my_tool": {
         "name": "my_tool",
@@ -246,8 +285,8 @@ TOOLS = {
     }
 }
 
-async def execute(input: str) -> str:
-    return f"Processed: {input}"
+async def execute(input: str) -> ToolResult:
+    return ToolResult(output=f"Processed: {input}")
 ```
 
 ### Management
@@ -264,11 +303,11 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | Tool | Description |
 |------|-------------|
 | `read` | Read file contents with line numbers, offset/limit support |
-| `write` | Write or overwrite files, creates parent directories |
-| `edit` | Surgical string replacement in files |
+| `write` | Write or overwrite files, creates parent directories, backs up existing files to `.bak` |
+| `edit` | Surgical string replacement with stale-edit detection and similar-content hints |
 | `shell` | Execute shell commands with timeout |
 | `glob` | Find files matching glob patterns |
-| `grep` | Search file contents with regex (uses ripgrep if available) |
+| `grep` | Search file contents with regex, supports `exclude` patterns and `context` lines (uses ripgrep if available) |
 | `webfetch` | Fetch and return content from a URL |
 | `websearch` | Search the web for information |
 | `todo` | Manage a task list across multi-step work |
@@ -280,8 +319,6 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `documentation` | Generate documentation from source code (Python, JS, TS) |
 | `http` | Make HTTP requests to REST APIs |
 | `process` | Manage long-running background processes |
-| `question` | Ask the user a clarifying question mid-task |
-| `task` | Delegate work to a background subagent |
 | `create_skill` | Create new skills for repetitive workflows |
 | `create_tool` | Create custom Python tools |
 
@@ -358,41 +395,72 @@ Skills are discovered automatically on startup.
 
 ```
 CodeAssist/
-├── __main__.py         # CLI entry point
-├── server.py           # FastAPI web server
-├── agent.py            # Agent loop (prompt -> tool calls -> repeat)
-├── llm.py              # OpenAI-compatible streaming client
-├── config.py           # Configuration loading
-├── prompts.py          # System prompt construction
-├── session.py          # SQLite session persistence
-├── knowledge.py        # Knowledge base CRUD and search
-├── embeddings.py       # Vector embeddings for semantic search
-├── tools/              # Tool implementations
-│   ├── read.py         # Read file contents
-│   ├── write.py        # Write file contents
-│   ├── edit.py         # Surgical string replacement
-│   ├── shell.py        # Execute shell commands
-│   ├── glob.py         # Find files by pattern
-│   ├── grep.py         # Search file contents
-│   ├── webfetch.py     # Fetch web content
-│   ├── todo.py         # Task list management
-│   ├── git.py          # Git operations
-│   ├── fossil.py       # Fossil VCS operations
-│   ├── database.py     # SQLite queries
-│   ├── directory.py    # Directory listing
-│   ├── apply_patch.py  # Unified diff patches
-│   ├── documentation.py# Source code documentation
-│   ├── http.py         # HTTP requests
-│   ├── process.py      # Background process management
-│   └── advanced.py     # Web search, user questions, subtasks
-├── .codeassist/        # Skills and plugins
-│   └── skills/         # Skill markdown files
-├── static/             # Web UI
-├── Dockerfile          # Container image definition
-├── docker-compose.yml  # One-command Docker startup
-├── config.toml         # Your config (gitignored)
-├── config.example.toml # Config template
-└── config.docker.toml  # Config template for Docker
+├── __main__.py              # CLI entry point
+├── codeassist/              # Core package
+│   ├── server.py            # FastAPI web server
+│   ├── agent.py             # Agent loop (prompt -> tool calls -> repeat)
+│   ├── llm.py               # OpenAI-compatible streaming client
+│   ├── config.py            # Configuration loading
+│   ├── prompts.py           # System prompt construction
+│   ├── session.py           # SQLite session persistence
+│   ├── session_hook.py      # Session lifecycle hooks (summarization, knowledge extraction)
+│   ├── session_manager.py   # Session fork/export/import
+│   ├── tokens.py            # Token counting and context window management
+│   ├── knowledge.py         # Knowledge base CRUD and search
+│   ├── embeddings.py        # Vector embeddings for semantic search
+│   ├── agents.py            # Agent configuration and management
+│   ├── trust_registry.py    # Tool trust/approval system
+│   ├── lsp_client.py        # Language Server Protocol client
+│   ├── mcp_client.py        # Model Context Protocol client
+│   ├── plugins.py           # Plugin system
+│   ├── dynamic_tools.py     # Dynamic tool loading
+│   ├── custom_tools_loader.py # Custom tool discovery
+│   ├── cli.py               # CLI interface
+│   └── routes/              # API route modules
+│       ├── config.py        # Configuration endpoints
+│       ├── sessions.py      # Session management endpoints
+│       ├── skills.py        # Skill management endpoints
+│       ├── tools.py         # Tool management endpoints
+│       ├── git.py           # Git endpoints
+│       ├── knowledge.py     # Knowledge base endpoints
+│       ├── mcp.py           # MCP endpoints
+│       ├── plugins.py       # Plugin endpoints
+│       ├── kb_gui.py        # Knowledge base GUI
+│       ├── lsp.py           # LSP endpoints
+│       ├── agents.py        # Agent management endpoints
+│       └── custom_tools.py  # Custom tool endpoints
+├── tools/                   # Tool implementations
+│   ├── __init__.py          # ToolRegistry, Tool base class, ToolResult
+│   ├── read.py              # Read file contents
+│   ├── write.py             # Write file contents (with .bak backup)
+│   ├── edit.py              # String replacement (with stale-edit detection)
+│   ├── shell.py             # Execute shell commands
+│   ├── glob.py              # Find files by pattern
+│   ├── grep.py              # Search file contents (exclude, context lines)
+│   ├── webfetch.py          # Fetch web content
+│   ├── todo.py              # Task list management
+│   ├── git.py               # Git operations
+│   ├── fossil.py            # Fossil VCS operations
+│   ├── database.py          # SQLite queries
+│   ├── directory.py         # Directory listing
+│   ├── apply_patch.py       # Unified diff patches
+│   ├── documentation.py     # Source code documentation
+│   ├── http.py              # HTTP requests
+│   ├── process.py           # Background process management
+│   ├── advanced.py          # Web search
+│   ├── security.py          # SSRF protection, path validation, workspace enforcement
+│   ├── tool_manager.py      # Dynamic tool management
+│   ├── create_skill.py      # Skill creation
+│   └── create_tool.py       # Tool creation
+├── .codeassist/             # Skills and plugins
+│   └── skills/              # Skill markdown files
+├── static/                  # Web UI
+├── tests/                   # Test suite (198 tests)
+├── Dockerfile               # Container image definition
+├── docker-compose.yml       # One-command Docker startup
+├── config.toml              # Your config (gitignored)
+├── config.example.toml      # Config template
+└── config.docker.toml       # Config template for Docker
 ```
 
 ## Requirements

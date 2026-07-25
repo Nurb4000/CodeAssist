@@ -5,7 +5,7 @@
 ### 1. Install Test Dependencies
 
 ```bash
-cd /home/ziggy/Projects/CodeAssist
+cd /home/ziggy/Code-Projects/CodeAssist
 source .venv/bin/activate
 pip install pytest pytest-asyncio pytest-cov httpx
 ```
@@ -26,17 +26,31 @@ pytest tests/ -v --cov=codeassist --cov-report=term-missing
 
 ```
 tests/
-├── conftest.py                 # Shared fixtures (database cleanup, etc.)
+├── conftest.py                 # Shared fixtures (database cleanup, WAL/SHM, temp dirs)
 ├── test_config.py              # Configuration system tests
 ├── test_session.py             # Session CRUD operations
-├── test_skills.py              # Skills discovery and execution
 ├── test_session_manager.py     # Session fork/export/import
 ├── test_agents.py              # Multi-agent permissions
+├── test_agent.py               # Agent loop tests
+├── test_llm.py                 # LLM client tests
+├── test_routes.py              # API route tests
+├── test_skills.py              # Skills discovery and execution
+├── test_trust_registry.py      # Tool approval system tests
+├── test_dynamic_tools.py       # Dynamic tool loading tests
 ├── test_tools/
 │   ├── test_git.py            # Git integration tests
-│   └── ...                     # Other tool tests
+│   ├── test_fossil.py         # Fossil integration tests
+│   ├── test_apply_patch.py    # Apply patch tool tests
+│   ├── test_database.py       # Database tool tests
+│   ├── test_directory.py      # Directory tool tests
+│   ├── test_documentation.py  # Documentation tool tests
+│   ├── test_tool_manager.py   # Tool manager tests
+│   ├── test_http.py           # HTTP tool tests
+│   └── test_process.py        # Process tool tests
 └── test_integration.py         # End-to-end tests (TBD)
 ```
+
+**198 tests** across all modules.
 
 ## Running Specific Tests
 
@@ -85,10 +99,14 @@ pytest tests/ --cov=codeassist --cov-report=html
 
 Tests use these shared fixtures from `conftest.py`:
 
-- `clean_database` - Automatically cleans DB before each test
+- `clean_database` - Automatically cleans DB and WAL/SHM sidecar files before each test
 - `test_workspace` - Temporary workspace directory
 - `sample_skill_content` - Sample skill markdown
 - `sample_session_messages` - Sample message data
+- `test_config` - CodeAssistConfig with test defaults
+- `sample_agent_config` - Sample agent config dict
+- `sample_agents_config` - Sample agents.json with multiple agents
+- `async_reset_pool` - Resets the aiosqlite connection pool between tests
 
 ## Adding New Tests
 
@@ -157,8 +175,8 @@ jobs:
 Tests clean the database automatically, but if you see locked errors:
 
 ```bash
-# Clean manually
-rm -f data/codeassist.db
+# Clean manually (including WAL/SHM sidecar files)
+rm -f data/codeassist.db data/codeassist.db-wal data/codeassist.db-shm
 pytest tests/ -v
 ```
 
