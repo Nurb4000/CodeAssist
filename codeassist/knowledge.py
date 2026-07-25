@@ -628,7 +628,9 @@ class KnowledgeBase:
 # ── Helper Functions ─────────────────────────────────────────────────────
 
 async def _ensure_fts_populated(db):
-    """Ensure FTS tables are populated with current data."""
+    """Ensure FTS tables are populated with current data (fallback for initial setup)."""
+    # Note: Triggers in session.py handle incremental updates.
+    # This function only runs once during initial setup if triggers failed to create.
     try:
         # Check if knowledge_search exists and is empty
         cursor = await db.execute(

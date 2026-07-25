@@ -220,27 +220,49 @@ class EmbeddingManager:
                     limit=limit,
                 )
             
-            # Get all entries with embeddings
-            conditions = ["confidence >= ?", "embedding IS NOT NULL", "embedding != ''"]
-            params: list = [min_confidence]
-            
-            if entry_type:
-                conditions.append("entry_type = ?")
-                params.append(entry_type)
-            
-            where_clause = " AND ".join(conditions)
-            
             async with get_db() as db:
-                cursor = await db.execute(
-                    f"""SELECT id, entry_type, scope, scope_identifier, content, 
+                # Phase 1: Use FTS5 to get candidate entries (fast text pre-filter)
+                fts_conditions = ["confidence >= ?", "embedding IS NOT NULL", "embedding != ''"]
+                fts_params: list = [min_confidence]
+                
+                if entry_type:
+                    fts_conditions.append("entry_type = ?")
+                    fts_params.append(entry_type)
+                
+                # Get top candidates from FTS5 (much faster than loading all entries)
+                fts_where_clause = " AND ".join(fts_conditions)
+                candidate_limit = max(limit * 10, 50)  # Get more candidates for better ranking
+                
+                cursor = await db.execute(f"""
+                    SELECT k.* FROM knowledge_search ks
+                    JOIN knowledge_entries k ON ks.entry_id = k.id
+                    WHERE knowledge_search MATCH ? AND {fts_where_clause}
+                    LIMIT ?
+                """, [*fts_params, query, candidate_limit])
+                
+                entries = await cursor.fetchall()
+                
+                # If FTS5 didn't return results, fall back to loading all entries
+                if not entries:
+                    conditions = ["confidence >= ?", "embedding IS NOT NULL", "embedding != ''"]
+                    params = [min_confidence]
+                    
+                    if entry_type:
+                        conditions.append("entry_type = ?")
+                        params.append(entry_type)
+                    
+                    where_clause = " AND ".join(conditions)
+                    
+                    cursor = await db.execute(f"""
+                        SELECT id, entry_type, scope, scope_identifier, content, 
                                confidence, tags, embedding
                         FROM knowledge_entries 
-                        WHERE {where_clause}""",
-                    params,
-                )
-                entries = await cursor.fetchall()
+                        WHERE {where_clause}
+                        LIMIT ?
+                    """, [*params, candidate_limit])
+                    entries = await cursor.fetchall()
             
-            # Calculate similarities
+            # Phase 2: Calculate similarities only on candidates (much smaller set)
             results = []
             for entry in entries:
                 entry_embedding = deserialize_embedding(entry["embedding"])
@@ -251,7 +273,7 @@ class EmbeddingManager:
                     del result["embedding"]  # Don't return raw embedding
                     results.append(result)
             
-            # Sort by similarity
+            # Sort by similarity and return top results
             results.sort(key=lambda x: x["similarity"], reverse=True)
             
             return results[:limit]
@@ -274,7 +296,7 @@ class EmbeddingManager:
             async with get_db() as db:
                 # Get the source entry's embedding
                 cursor = await db.execute(
-                    "SELECT embedding FROM knowledge_entries WHERE id = ?",
+                    "SELECT embedding, content FROM knowledge_entries WHERE id = ?",
                     (entry_id,),
                 )
                 row = await cursor.fetchone()
@@ -284,19 +306,32 @@ class EmbeddingManager:
                 source_embedding = deserialize_embedding(row["embedding"])
                 if not source_embedding:
                     return []
-            
-            # Get all other entries with embeddings
-            async with get_db() as db:
-                cursor = await db.execute(
-                    """SELECT id, entry_type, scope, scope_identifier, content, 
-                              confidence, tags, embedding
-                       FROM knowledge_entries 
-                       WHERE id != ? AND embedding IS NOT NULL AND embedding != ''""",
-                    (entry_id,),
-                )
+                
+                # Use FTS5 to get candidate entries (faster than loading all)
+                candidate_limit = max(limit * 10, 50)
+                
+                cursor = await db.execute(f"""
+                    SELECT k.* FROM knowledge_search ks
+                    JOIN knowledge_entries k ON ks.entry_id = k.id
+                    WHERE ks.entry_id != ? AND k.embedding IS NOT NULL AND k.embedding != ''
+                    LIMIT ?
+                """, (entry_id, candidate_limit))
+                
                 entries = await cursor.fetchall()
+                
+                # If FTS5 didn't return results, fall back to loading all entries
+                if not entries:
+                    cursor = await db.execute(
+                        """SELECT id, entry_type, scope, scope_identifier, content, 
+                                  confidence, tags, embedding
+                           FROM knowledge_entries 
+                           WHERE id != ? AND embedding IS NOT NULL AND embedding != ''
+                           LIMIT ?""",
+                        (entry_id, candidate_limit),
+                    )
+                    entries = await cursor.fetchall()
             
-            # Calculate similarities
+            # Calculate similarities only on candidates
             results = []
             for entry in entries:
                 entry_embedding = deserialize_embedding(entry["embedding"])
@@ -307,7 +342,7 @@ class EmbeddingManager:
                     del result["embedding"]
                     results.append(result)
             
-            # Sort by similarity
+            # Sort by similarity and return top results
             results.sort(key=lambda x: x["similarity"], reverse=True)
             
             return results[:limit]
