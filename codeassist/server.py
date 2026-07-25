@@ -343,6 +343,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if confirm_id:
                     agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell)
 
+            elif data.get("type") == "question_response":
+                question_id = data.get("id")
+                answer = data.get("answer", "")
+                if question_id:
+                    agent.resolve_question(question_id, answer)
+
             elif data.get("type") == "switch_agent":
                 agent_name = data.get("agent_name")
                 if agent_name:
