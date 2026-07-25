@@ -85,6 +85,10 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from tools.advanced import WebSearchTool, QuestionTool
     from tools.create_tool import CreateTool
     from tools.create_skill import CreateSkill
+    from tools.diff_preview import DiffPreviewTool
+    from tools.test_runner import TestRunnerTool
+    from tools.symbol_search import SymbolSearchTool
+    from tools.package_manager import PackageManagerTool
     from codeassist.skills import SkillTool
     from codeassist.session_manager import SessionTool
 
@@ -155,6 +159,18 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     registry.register(CreateTool())
     registry.register(CreateSkill())
 
+    # Register Diff Preview tool
+    registry.register(DiffPreviewTool())
+
+    # Register Test Runner tool
+    registry.register(TestRunnerTool())
+
+    # Register Symbol Search tool
+    registry.register(SymbolSearchTool())
+
+    # Register Package Manager tool
+    registry.register(PackageManagerTool())
+
     # Register Skill tool (if skill registry exists)
     if skill_registry:
         registry.register(SkillTool(skill_registry))
@@ -197,6 +213,10 @@ def get_tools(config=None) -> dict:
     from tools.advanced import WebSearchTool, QuestionTool
     from tools.create_tool import CreateTool
     from tools.create_skill import CreateSkill
+    from tools.diff_preview import DiffPreviewTool
+    from tools.test_runner import TestRunnerTool
+    from tools.symbol_search import SymbolSearchTool
+    from tools.package_manager import PackageManagerTool
     
     tools = {}
     workspace = Path(".")
@@ -206,7 +226,8 @@ def get_tools(config=None) -> dict:
         ReadTool, WriteTool, EditTool, ShellTool, GlobTool, GrepTool,
         WebFetchTool, TodoTool, GitTool, FossilTool, ApplyPatchTool,
         DirectoryTool, ProcessTool, HTTPTool, DatabaseTool, DocumentationTool,
-        WebSearchTool, QuestionTool, CreateTool, CreateSkill,
+        WebSearchTool, QuestionTool, CreateTool, CreateSkill, DiffPreviewTool,
+        TestRunnerTool, SymbolSearchTool, PackageManagerTool,
     ]
     
     for tool_cls in tool_classes:
