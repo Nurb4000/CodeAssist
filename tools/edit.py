@@ -39,8 +39,17 @@ class EditTool(Tool):
 
         count = content.count(old_string)
         if count == 0:
+            # Provide helpful context for stale edits
+            lines = content.splitlines()
+            stripped = old_string.strip()
+            candidates = [l.strip() for l in lines if stripped[:30] in l]
+            hint = ""
+            if candidates:
+                hint = f"\nSimilar content found: {candidates[:3]}"
             return ToolResult(
-                output=f"Error: old_string not found in {file_path}. Make sure the string matches exactly including whitespace and indentation.",
+                output=f"Error: old_string not found in {file_path}. "
+                f"The file may have changed since it was last read. "
+                f"Re-read the file and try again with the current content.{hint}",
                 error=True,
             )
         if count > 1 and not replaceAll:

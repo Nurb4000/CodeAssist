@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 
 class WriteTool(Tool):
     name = "write"
-    description = "Write content to a file, overwriting if it exists. Creates parent directories."
+    description = "Write content to a file, overwriting if it exists. Creates parent directories. Backs up existing files to .bak before overwriting."
     workspace = Path(".")
 
     parameters = {
@@ -29,6 +29,9 @@ class WriteTool(Tool):
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                backup_path = path.with_suffix(path.suffix + ".bak")
+                backup_path.write_text(path.read_text(errors="replace"))
             path.write_text(content)
             lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
             return ToolResult(output=f"Wrote {lines} lines to {file_path}")
