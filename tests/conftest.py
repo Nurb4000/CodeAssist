@@ -1,5 +1,4 @@
 """Shared test fixtures and configuration."""
-import asyncio
 import pytest
 import codeassist.session as _session_mod
 from pathlib import Path
@@ -9,27 +8,23 @@ from pathlib import Path
 _TEST_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "codeassist_test.db"
 
 
+def _cleanup_db_files(db_path: Path):
+    """Remove the main DB file and all WAL/SHM sidecar files."""
+    for suffix in ("", "-shm", "-wal", "-journal"):
+        f = db_path if suffix == "" else Path(str(db_path) + suffix)
+        if f.exists():
+            f.unlink()
+
+
 @pytest.fixture(autouse=True)
 def clean_database(monkeypatch):
     """Clean test database before each test to ensure isolation."""
-    # Point the module-level DB_PATH to our test database
     monkeypatch.setattr(_session_mod, "DB_PATH", _TEST_DB_PATH)
-    # Also patch the pool so it uses the test path
     _session_mod.reset_pool()
-    if _TEST_DB_PATH.exists():
-        _TEST_DB_PATH.unlink()
+    _cleanup_db_files(_TEST_DB_PATH)
     yield
     _session_mod.reset_pool()
-    if _TEST_DB_PATH.exists():
-        _TEST_DB_PATH.unlink()
-
-
-@pytest.fixture
-def event_loop():
-    """Create an event loop for async tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+    _cleanup_db_files(_TEST_DB_PATH)
 
 
 @pytest.fixture
