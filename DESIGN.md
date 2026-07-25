@@ -434,20 +434,21 @@ A single-page chat interface:
 | Language | TypeScript/Bun | Python 3.11+ |
 | Framework | Effect v4 | Plain async/await |
 | LLM providers | 15+ via AI SDK | 1 via OpenAI-compatible API |
-| Protocols | MCP, LSP, ACP | MCP client, LSP client |
+| Protocols | MCP, LSP, ACP | MCP client, LSP client (full implementation) |
 | UI | TUI + Web + Desktop | Web only |
 | Database | SQLite + Drizzle | SQLite + aiosqlite |
-| Tools | 41+ with permissions | 20+ tools with trust/approval |
-| Agent types | build, plan, general, custom | Single agent (extensible via agents.json) |
-| Git integration | Snapshots, diffs, reverts | Shell-based via LLM |
+| Tools | 41+ with permissions | 27 tools with trust/approval |
+| Agent types | build, plan, general, custom | 3 built-in (default, research, review) + dynamic |
+| Git integration | Snapshots, diffs, reverts | Shell-based + git_snapshot tool |
 | Config | JSONC with schema | TOML |
 | Streaming | SSE + WebSocket | WebSocket only |
 | Context window | Compaction | Two-level compaction (summarize → drop) |
 | Parallel tools | Sequential | Parallel via asyncio.gather() |
 | SSRF protection | N/A (local only) | Full DNS validation, internal TLD blocking |
 | Custom tools | N/A | User-written Python files auto-discovered |
-| Skills | N/A | Markdown files with instructions |
+| Skills | N/A | Markdown files with instructions (4 built-in) |
 | Plugins | N/A | Python modules with hooks |
+| Cost tracking | N/A | Real-time token budget enforcement |
 | Workers | N/A | Local workstation daemon (planned) |
 
 ---
@@ -486,15 +487,23 @@ A single-page chat interface:
 - [x] Write tool backup, grep exclude/context, edit stale-edit detection
 
 ### Phase 4: Advanced Features
-- [x] Multi-agent support (agents.json config)
+- [x] Multi-agent support (default, research, review)
 - [x] MCP client integration
-- [x] LSP diagnostics
+- [x] LSP client (full implementation with response parsing)
 - [x] Plugin support
 - [x] Custom tools (user-written Python files)
-- [x] Skills system
+- [x] Skills system (4 built-in: refactor, debug, optimize, migrate)
 - [x] Trust registry (tool approval)
 - [x] Session manager (fork/export/import)
-- [ ] Git snapshot/revert (planned)
+- [x] Git snapshot/revert tool
+- [x] Diff preview tool
+- [x] Test runner with framework auto-detection
+- [x] Symbol search (ctags-based)
+- [x] Package manager detection and management
+- [x] Docker container management
+- [x] Image analysis (vision-capable LLMs)
+- [x] Cost tracker (real-time budget enforcement)
+- [x] Question tool (agent can ask user mid-task)
 
 ### Phase 5: Local Workstation Daemon (planned)
 - [ ] Worker registry on server
