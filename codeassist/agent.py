@@ -9,6 +9,7 @@ from typing import AsyncIterator
 import openai
 
 from .config import Config
+from .cost_tracker import CostTracker, BudgetConfig
 from .knowledge import KnowledgeBase
 from .llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
 from .prompts import build_system_prompt, build_openai_messages
@@ -41,6 +42,8 @@ class Agent:
         # Session trust flags
         self._trust_workspace_writes = False
         self._trust_shell = False
+        # Cost tracking
+        self.cost_tracker = CostTracker()
 
     def cancel(self):
         """Cancel the current agent run."""
@@ -176,6 +179,14 @@ class Agent:
             if self.cancel_event.is_set():
                 return
 
+            # Check budget before each iteration
+            budget_ok, budget_msg = self.cost_tracker.check_budget()
+            if not budget_ok:
+                log.warning("Budget exceeded: %s", budget_msg)
+                yield AgentEvent("error", {"message": f"Budget exceeded: {budget_msg}"})
+                yield AgentEvent("done")
+                return
+
             history = await self.session.get_messages()
 
             # Only rebuild and re-compact when new messages have been added
@@ -253,6 +264,12 @@ class Agent:
                     })
 
                 elif isinstance(event, Finish):
+                    # Record usage for cost tracking
+                    self.cost_tracker.record_usage(
+                        model=self.config.llm.model,
+                        prompt_tokens=event.usage.prompt_tokens,
+                        completion_tokens=event.usage.completion_tokens,
+                    )
                     yield AgentEvent("finish", {
                         "reason": event.finish_reason,
                         "usage": {

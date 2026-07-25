@@ -1,48 +1,57 @@
 ---
 name: optimize
-description: Optimize code for better performance, efficiency, or resource usage
+description: Performance profiling and optimization workflow
 slash: optimize
 ---
 
-# Performance Optimization Skill
+# Optimize Skill
 
-Analyze and optimize code for better performance.
+Use this skill when the user wants to improve performance. Follow this data-driven optimization process.
 
 ## Steps
 
-1. **Profile the code** - Identify bottlenecks
-2. **Analyze time complexity** - Big O of current implementation
-3. **Identify optimization opportunities:**
-   - Algorithm improvements
-   - Caching/memoization
-   - Reduce allocations
-   - Batch operations
-   - Lazy evaluation
-4. **Apply optimizations** carefully
-5. **Verify correctness** is maintained
+1. **Define the problem**
+   - Ask the user what specifically is slow (response time, memory, CPU, startup)
+   - Use `question` tool to clarify performance targets
+   - Establish baseline measurements
 
-## Optimization Checklist
+2. **Profile and measure**
+   - Use `shell` to run profiling tools:
+     - Python: `python -m cProfile -s cumulative <script>`, `py-spy`, `memory_profiler`
+     - Node: `node --prof <script>`, `clinic.js`
+     - Go: `go test -bench=. -benchmem`, `pprof`
+   - Use `test_runner` with timing to measure current performance
+   - Record baseline metrics
 
-- [ ] Is there an O(n²) that could be O(n)?
-- [ ] Can repeated computations be cached?
-- [ ] Are data structures optimal for access patterns?
-- [ ] Can loops be vectorized?
-- [ ] Is memory being freed properly?
+3. **Identify bottlenecks**
+   - Analyze profiling output for hot paths
+   - Use `symbol_search` and `grep` to trace slow code paths
+   - Look for common issues:
+     - N+1 queries or API calls
+     - Unnecessary loops or iterations
+     - Memory allocations in hot paths
+     - Missing caching opportunities
+     - Blocking I/O in async code
 
-## Common Optimizations
+4. **Plan optimizations**
+   - List optimizations ranked by expected impact
+   - Use `question` tool to confirm the plan with the user
+   - Consider trade-offs (readability vs performance)
 
-| Problem | Solution |
-|---------|----------|
-| Repeated work | Memoization/caching |
-| Slow lookups | Use hash maps |
-| String building | Join instead of concatenate |
-| Repeated I/O | Batch operations |
-| Unnecessary work | Lazy evaluation |
+5. **Apply optimizations**
+   - Use `diff_preview` before each change
+   - Apply one optimization at a time
+   - Measure after each change to verify improvement
 
-## Guidelines
+6. **Verify results**
+   - Run the full test suite to ensure correctness
+   - Compare final metrics against baseline
+   - Document the improvements
 
-- Measure before optimizing
-- Optimize hot paths first
-- Don't sacrifice readability for tiny gains
-- Document optimization decisions
-- Consider memory vs speed tradeoffs
+## Optimization Principles
+
+- Measure first — don't guess where the bottleneck is
+- Optimize the hot path, not the cold path
+- One change at a time — verify each optimization independently
+- If an optimization hurts readability, document why it's necessary
+- Consider caching before algorithmic changes
