@@ -303,13 +303,21 @@ Provide a JSON response with:
 - goals: list of goals achieved (if any)
 """
             
-            # Use the LLM client if available
-            if hasattr(self.llm_client, 'complete'):
-                response = await self.llm_client.complete(prompt, max_tokens=500)
+            # Use the LLM client's stream method to generate a response
+            if self.llm_client:
+                from codeassist.llm import TextDelta
+                llm_messages = [
+                    {"role": "user", "content": prompt},
+                ]
+                response_text = ""
+                async for event in self.llm_client.stream(llm_messages):
+                    if isinstance(event, TextDelta):
+                        response_text += event.content
+                
                 try:
-                    return json.loads(response)
+                    return json.loads(response_text)
                 except json.JSONDecodeError:
-                    return {"summary": response[:1000], "topics": [], "goals": []}
+                    return {"summary": response_text[:1000], "topics": [], "goals": []}
             
             # Fallback to simple summary
             return self._generate_simple_summary(messages, stats)
@@ -868,7 +876,7 @@ Provide a JSON response with:
     async def _suggest_skill_creation(self, sequence: tuple, count: int, session_id: str):
         """Suggest creating a skill for a repetitive pattern."""
         try:
-            from config import load_config
+            from codeassist.config import load_config
             config = load_config()
             
             if not config.agent.auto_create_skills:
@@ -920,8 +928,6 @@ This workflow is now available as a skill. The agent will use this pattern when 
                 name=skill_name,
                 description=skill_description,
                 content=skill_content,
-                tags=["auto_created", "repetitive_pattern"],
-                session_id=session_id,
             )
             
             log.info("Auto-created skill '%s' for repetitive pattern", skill_name)
