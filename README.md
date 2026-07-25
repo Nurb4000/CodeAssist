@@ -165,6 +165,8 @@ tool_result_max_tokens = 4000  # Max tokens per tool output
 - **Streaming timeout**: LLM streams time out after 120 seconds with a graceful error
 - **Max-iteration limit**: When the agent reaches the maximum iteration count, it notifies the user rather than silently stopping
 - **Confirmation prompts**: Destructive operations (file writes, shell commands) require user confirmation unless workspace is trusted
+- **Cost tracking**: Real-time token usage tracking with configurable budget limits (tokens and cost per session)
+- **Question flow**: The agent can pause and ask the user questions mid-task via the `question` tool
 
 ## Usage
 
@@ -319,8 +321,27 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `documentation` | Generate documentation from source code (Python, JS, TS) |
 | `http` | Make HTTP requests to REST APIs |
 | `process` | Manage long-running background processes |
+| `question` | Ask the user a question and wait for their response |
 | `create_skill` | Create new skills for repetitive workflows |
 | `create_tool` | Create custom Python tools |
+| `diff_preview` | Show unified diff before applying edits |
+| `test_runner` | Auto-detect test framework and run tests with structured results |
+| `symbol_search` | Go-to-definition and find-references using ctags |
+| `package_manager` | Detect and manage dependencies (pip, npm, yarn, cargo, etc.) |
+| `git_snapshot` | Auto-commit workspace state for safe experimentation |
+| `docker` | Container management (build, run, stop, logs, compose) |
+| `image_analyze` | Analyze screenshots and mockups using vision-capable LLMs |
+| `lsp` | Query language servers for diagnostics, completions, and formatting |
+
+### Agent Types
+
+CodeAssist supports multiple agent types with different tool permissions:
+
+| Agent | Purpose | Tools Allowed |
+|-------|---------|---------------|
+| **CodeAssist** (default) | Full development agent | All tools (writes require confirmation) |
+| **Research** | Read-only research | read, grep, glob, websearch, webfetch, symbol_search |
+| **Review** | Code review | read, grep, glob, test_runner, diff_preview, symbol_search |
 
 ### Tool Manager
 
@@ -346,17 +367,17 @@ Skills are reusable, guided workflows that extend CodeAssist's capabilities. The
 | Skill | Slash | Purpose |
 |-------|-------|---------|
 | `code-review` | `/review` | Review code for bugs, security, and quality |
-| `refactor` | `/refactor` | Improve code structure and readability |
-| `debug` | `/debug` | Systematic debugging workflow |
+| `refactor` | `/refactor` | Systematic refactoring with safety checks and test verification |
+| `debug` | `/debug` | Step-by-step debugging workflow |
 | `test` | `/test` | Write unit and integration tests |
 | `explain` | `/explain` | Explain how code works |
 | `document` | `/doc` | Generate docstrings and documentation |
-| `optimize` | `/optimize` | Improve performance |
+| `optimize` | `/optimize` | Data-driven performance profiling and optimization |
 | `clean` | `/clean` | Remove dead code, organize imports |
 | `security` | `/security` | Audit for vulnerabilities |
 | `convert` | `/convert` | Convert between languages/frameworks |
 | `generate` | `/generate` | Generate boilerplate code |
-| `migrate` | `/migrate` | Assist with framework/version upgrades |
+| `migrate` | `/migrate` | Database migration and data transformation |
 | `lint` | `/lint` | Fix linting and formatting issues |
 
 **Non-coding skill examples:**
@@ -408,9 +429,10 @@ CodeAssist/
 │   ├── tokens.py            # Token counting and context window management
 │   ├── knowledge.py         # Knowledge base CRUD and search
 │   ├── embeddings.py        # Vector embeddings for semantic search
-│   ├── agents.py            # Agent configuration and management
+│   ├── agents.py            # Agent configuration and management (default, research, review)
+│   ├── cost_tracker.py      # Real-time token budget enforcement
 │   ├── trust_registry.py    # Tool trust/approval system
-│   ├── lsp_client.py        # Language Server Protocol client
+│   ├── lsp_client.py        # Language Server Protocol client (full implementation)
 │   ├── mcp_client.py        # Model Context Protocol client
 │   ├── plugins.py           # Plugin system
 │   ├── dynamic_tools.py     # Dynamic tool loading
@@ -447,11 +469,18 @@ CodeAssist/
 │   ├── documentation.py     # Source code documentation
 │   ├── http.py              # HTTP requests
 │   ├── process.py           # Background process management
-│   ├── advanced.py          # Web search
+│   ├── advanced.py          # Web search, question asking
 │   ├── security.py          # SSRF protection, path validation, workspace enforcement
 │   ├── tool_manager.py      # Dynamic tool management
 │   ├── create_skill.py      # Skill creation
-│   └── create_tool.py       # Tool creation
+│   ├── create_tool.py       # Tool creation
+│   ├── diff_preview.py      # Unified diff preview
+│   ├── test_runner.py       # Test framework auto-detection and execution
+│   ├── symbol_search.py     # ctags-based symbol search
+│   ├── package_manager.py   # Dependency management
+│   ├── git_snapshot.py      # Auto-commit for safe experimentation
+│   ├── docker_tool.py       # Container management
+│   └── image_analyze.py     # Vision-capable image analysis
 ├── .codeassist/             # Skills and plugins
 │   └── skills/              # Skill markdown files
 ├── static/                  # Web UI
