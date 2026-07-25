@@ -18,7 +18,7 @@ class TestConfig:
         assert config.llm.provider == "openai"
         assert config.llm.model == "gpt-4o"
         assert config.server.host == "127.0.0.1"
-        assert config.server.port == 8000
+        assert config.server.port == 8090
         assert config.agent.max_iterations == 30
         assert config.tools.shell_timeout == 120
 

@@ -36,7 +36,7 @@ class ToolManagerTool(Tool):
 
     async def _list_tools(self) -> ToolResult:
         """List all available tools."""
-        import server as server_mod
+        import codeassist.server as server_mod
 
         if server_mod.tools is None:
             cfg = server_mod.get_config()
@@ -62,7 +62,7 @@ class ToolManagerTool(Tool):
     async def _reload_tools(self) -> ToolResult:
         """Reload tools from disk."""
         try:
-            from server import reload_all_tools
+            from codeassist.server import reload_all_tools
             
             reload_all_tools()
             return ToolResult(output="Tools reloaded successfully. New tools are now available.")

@@ -54,7 +54,7 @@ class DatabaseTool(Tool):
         try:
             # Default to CodeAssist's own database if not specified
             if not db_path:
-                from session import DB_PATH
+                from codeassist.session import DB_PATH
                 db_path = str(DB_PATH)
 
             # Validate database exists

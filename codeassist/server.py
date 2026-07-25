@@ -133,7 +133,7 @@ def _init_subsystems(cfg: Config):
     skill_registry = SkillRegistry(cfg.workspace, cfg.skills) if cfg.skills.enabled else None
     plugin_registry = PluginRegistry(cfg.workspace, cfg.plugins, trust_registry=trust_registry) if cfg.plugins.enabled else None
 
-    tools = create_registry(cfg.workspace, cfg.tools, mcp_client, skill_registry, plugin_registry, trust_registry=trust_registry)
+    tools = create_registry(cfg.workspace, cfg.tools, mcp_client, skill_registry, plugin_registry)
 
 
 async def init_agents():
@@ -156,7 +156,7 @@ def reload_all_tools():
     """Reload all tools from the tools directory."""
     global tools
     cfg = get_config()
-    from dynamic_tools import DynamicToolLoader
+    from codeassist.dynamic_tools import DynamicToolLoader
 
     if tools is None:
         _init_subsystems(cfg)
@@ -188,9 +188,13 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 
 @app.middleware("http")
 async def auth_middleware(request, call_next):
-    if request.url.path in ("/health", "/favicon.ico") or \
-       request.url.path.startswith("/static/") or \
-       request.url.path.startswith("/ws/"):
+    # Paths exempt from HTTP Basic Auth (WebSocket auth is handled separately
+    # in the WS endpoint — do NOT add new /ws/ prefixes here blindly)
+    _EXEMPT_PATHS = {"/health", "/favicon.ico"}
+    _EXEMPT_PREFIXES = ("/static/",)
+
+    path = request.url.path
+    if path in _EXEMPT_PATHS or any(path.startswith(p) for p in _EXEMPT_PREFIXES):
         return await call_next(request)
 
     cfg = get_config()
@@ -238,10 +242,10 @@ MAX_MESSAGE_LEN = 100_000
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    from session import Session, Agent as AgentRecord
-    from agent import Agent
-    from agents import agent_manager
-    from session_hook import get_session_hook
+    from codeassist.session import Session, Agent as AgentRecord
+    from codeassist.agent import Agent
+    from codeassist.agents import agent_manager
+    from codeassist.session_hook import get_session_hook
     import asyncio
     import hmac
 
@@ -361,7 +365,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     })
                     # Reload tools to pick up the newly trusted tool
                     if tools is not None:
-                        from dynamic_tools import DynamicToolLoader
+                        from codeassist.dynamic_tools import DynamicToolLoader
                         loader = DynamicToolLoader(cfg.workspace, trust_registry=trust_registry)
                         loader.reload_registry(tools)
 
