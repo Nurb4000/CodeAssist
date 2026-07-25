@@ -41,17 +41,16 @@ class ToolRegistry:
     def schemas(self) -> list[dict]:
         return [t.schema() for t in self._tools.values()]
 
-    async def execute(self, name: str, arguments: dict) -> str:
+    async def execute(self, name: str, arguments: dict) -> ToolResult:
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: unknown tool '{name}'"
+            return ToolResult(output=f"Error: unknown tool '{name}'", error=True)
 
         try:
-            result = await tool.execute(**arguments)
-            return result.output
+            return await tool.execute(**arguments)
         except Exception as e:
             log.exception("Tool '%s' failed", name)
-            return f"Error executing {name}: {e}"
+            return ToolResult(output=f"Error executing {name}: {e}", error=True)
 
     def list_names(self) -> list[str]:
         return list(self._tools.keys())
@@ -83,9 +82,9 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from tools.database import DatabaseTool
     from tools.documentation import DocumentationTool
     from tools.tool_manager import ToolManagerTool
-    from tools.advanced import WebSearchTool, QuestionTool, TaskTool
-    from skills import SkillTool
-    from session_manager import SessionTool
+    from tools.advanced import WebSearchTool
+    from codeassist.skills import SkillTool
+    from codeassist.session_manager import SessionTool
 
     registry = ToolRegistry(workspace)
 
@@ -147,9 +146,6 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
         websearch_tool.max_chars = tool_config.websearch_max_chars
     registry.register(websearch_tool)
 
-    registry.register(QuestionTool())
-    registry.register(TaskTool())
-
     # Register Skill tool (if skill registry exists)
     if skill_registry:
         registry.register(SkillTool(skill_registry))
@@ -159,7 +155,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     # Register MCP tools (if MCP client exists)
     if mcp_client:
-        from mcp_client import MCPToolWrapper
+        from codeassist.mcp_client import MCPToolWrapper
         for mcp_tool in mcp_client.get_tools():
             registry.register(MCPToolWrapper(mcp_tool, mcp_client))
 
@@ -189,7 +185,7 @@ def get_tools(config=None) -> dict:
     from tools.http import HTTPTool
     from tools.database import DatabaseTool
     from tools.documentation import DocumentationTool
-    from tools.advanced import WebSearchTool, QuestionTool, TaskTool
+    from tools.advanced import WebSearchTool
     
     tools = {}
     workspace = Path(".")
@@ -199,7 +195,7 @@ def get_tools(config=None) -> dict:
         ReadTool, WriteTool, EditTool, ShellTool, GlobTool, GrepTool,
         WebFetchTool, TodoTool, GitTool, FossilTool, ApplyPatchTool,
         DirectoryTool, ProcessTool, HTTPTool, DatabaseTool, DocumentationTool,
-        WebSearchTool, QuestionTool, TaskTool,
+        WebSearchTool,
     ]
     
     for tool_cls in tool_classes:
@@ -218,7 +214,7 @@ def get_tools(config=None) -> dict:
 
 def reload_tools(workspace: Path, registry: ToolRegistry) -> int:
     """Reload all tools from the tools directory. Returns count of loaded tools."""
-    from dynamic_tools import DynamicToolLoader
+    from codeassist.dynamic_tools import DynamicToolLoader
     
     loader = DynamicToolLoader(workspace)
     return loader.reload_registry(registry)

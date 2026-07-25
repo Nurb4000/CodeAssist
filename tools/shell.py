@@ -15,6 +15,14 @@ class ShellTool(Tool):
     timeout: int = 120
     max_output_chars: int = 20000
 
+    # SECURITY NOTE: This tool uses subprocess_shell which passes the command
+    # string to /bin/sh -c. Mitigations in place:
+    #   1. User confirmation required by default (see agent.py CONFIRM_TOOLS)
+    #   2. Working directory validated to stay within workspace boundary
+    #   3. Configurable timeout prevents runaway processes
+    # For an internal-only deployment this is acceptable. If exposing externally,
+    # consider switching to subprocess_exec with argument lists.
+
     parameters = {
         "type": "object",
         "properties": {

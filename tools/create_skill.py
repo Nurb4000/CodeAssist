@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from knowledge import KnowledgeBase
+from codeassist.knowledge import KnowledgeBase
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ async def execute(
         
         # Generate embedding for the skill
         try:
-            from embeddings import get_embedding_manager
+            from codeassist.embeddings import get_embedding_manager
             manager = get_embedding_manager()
             import asyncio
             asyncio.create_task(manager.generate_and_store_embedding(entry_id, f"{name}: {description} {content[:500]}"))
@@ -128,8 +128,8 @@ def _reload_skills(workspace: str):
     """Trigger skill reload in the registry."""
     try:
         # Import here to avoid circular imports
-        from skills import SkillRegistry
-        from config import load_config
+        from codeassist.skills import SkillRegistry
+        from codeassist.config import load_config
         
         config = load_config()
         registry = SkillRegistry(Path(workspace), config.skills)

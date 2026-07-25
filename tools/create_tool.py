@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from knowledge import KnowledgeBase
+from codeassist.knowledge import KnowledgeBase
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ TOOLS = {{
         
         # Generate embedding for the tool
         try:
-            from embeddings import get_embedding_manager
+            from codeassist.embeddings import get_embedding_manager
             manager = get_embedding_manager()
             import asyncio
             asyncio.create_task(manager.generate_and_store_embedding(entry_id, f"{name}: {description}"))
