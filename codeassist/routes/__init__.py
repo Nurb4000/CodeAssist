@@ -1,0 +1,31 @@
+"""API route registration."""
+from fastapi import FastAPI
+
+
+def register_routes(app: FastAPI):
+    """Register all API route routers with the FastAPI app."""
+    from routes.sessions import router as sessions_router
+    from routes.config import router as config_router
+    from routes.agents import router as agents_router
+    from routes.mcp import router as mcp_router
+    from routes.skills import router as skills_router
+    from routes.plugins import router as plugins_router
+    from routes.lsp import router as lsp_router
+    from routes.git import router as git_router
+    from routes.tools import router as tools_router
+    from routes.knowledge import router as knowledge_router
+    from routes.custom_tools import router as custom_tools_router
+    from routes.kb_gui import router as kb_router
+
+    app.include_router(sessions_router)
+    app.include_router(config_router)
+    app.include_router(agents_router)
+    app.include_router(mcp_router)
+    app.include_router(skills_router)
+    app.include_router(plugins_router)
+    app.include_router(lsp_router)
+    app.include_router(git_router)
+    app.include_router(tools_router)
+    app.include_router(knowledge_router)
+    app.include_router(custom_tools_router)
+    app.include_router(kb_router)

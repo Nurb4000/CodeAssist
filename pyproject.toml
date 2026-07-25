@@ -22,8 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codeassist = "cli:main"
+codeassist = "codeassist.cli:main"
 
-[tool.setuptools]
-py-modules = ["cli", "agent", "config", "llm", "prompts", "server", "session", "tokens", "mcp_client", "skills", "plugins", "lsp_client", "session_manager", "agents"]
-packages = ["tools"]
+[tool.setuptools.packages.find]
+include = ["codeassist*", "tools*"]

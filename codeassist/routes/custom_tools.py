@@ -9,7 +9,7 @@ router = APIRouter(prefix="/api/custom-tools", tags=["custom_tools"])
 @router.get("")
 async def list_custom_tools():
     from custom_tools_loader import get_custom_tool_registry
-    from server import get_trust_registry
+    from ..server import get_trust_registry
     from config import load_config
 
     config = load_config()
@@ -24,7 +24,7 @@ async def list_custom_tools():
 @router.post("/reload")
 async def reload_custom_tools():
     from custom_tools_loader import get_custom_tool_registry
-    from server import get_trust_registry
+    from ..server import get_trust_registry
     from config import load_config
 
     config = load_config()

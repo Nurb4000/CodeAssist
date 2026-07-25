@@ -1,3 +1,3 @@
-from cli import main
+from codeassist.cli import main
 
 main()

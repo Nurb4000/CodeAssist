@@ -11,9 +11,9 @@ from typing import Optional
 
 import openai
 
-from config import Config
-from session import get_db
-from knowledge import KnowledgeBase
+from .config import Config
+from .session import get_db
+from .knowledge import KnowledgeBase
 
 log = logging.getLogger(__name__)
 

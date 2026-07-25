@@ -16,9 +16,9 @@ from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
+from codeassist.session import init_db, get_db, DB_PATH, reset_pool, Session
 
-from session import init_db, get_db, DB_PATH, reset_pool, Session
-from knowledge import KnowledgeBase
+from codeassist.knowledge import KnowledgeBase
 
 
 class TestResult:

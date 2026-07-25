@@ -2,8 +2,8 @@
 import json
 import pytest
 
-from session import Session, init_db
-from session_manager import SessionManager
+from codeassist.session import Session, init_db
+from codeassist.session_manager import SessionManager
 
 
 class TestSessionManager:
@@ -102,7 +102,7 @@ class TestSessionManager:
         session = await Session.create(name="Tool Test")
         await session.add_message("user", "Test")
         
-        from session_manager import SessionTool
+        from codeassist.session_manager import SessionTool
         tool = SessionTool(session.id)
         
         result = await tool.execute(action="fork", name="Forked via Tool")
@@ -116,7 +116,7 @@ class TestSessionManager:
         session = await Session.create(name="Export Tool Test")
         await session.add_message("user", "Test message")
         
-        from session_manager import SessionTool
+        from codeassist.session_manager import SessionTool
         tool = SessionTool(session.id)
         
         result = await tool.execute(action="export")
@@ -132,7 +132,7 @@ class TestSessionManager:
         session = await Session.create(name="Summary Tool Test")
         await session.add_message("user", "Test")
         
-        from session_manager import SessionTool
+        from codeassist.session_manager import SessionTool
         tool = SessionTool(session.id)
         
         result = await tool.execute(action="summary")
@@ -142,7 +142,7 @@ class TestSessionManager:
 
     def test_session_tool_schema(self):
         """Test session tool schema."""
-        from session_manager import SessionTool
+        from codeassist.session_manager import SessionTool
         tool = SessionTool("test-id")
         
         schema = tool.schema()

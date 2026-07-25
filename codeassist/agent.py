@@ -8,13 +8,13 @@ from typing import AsyncIterator
 
 import openai
 
-from config import Config
-from knowledge import KnowledgeBase
-from llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
-from prompts import build_system_prompt, build_openai_messages
-from session import Session
+from .config import Config
+from .knowledge import KnowledgeBase
+from .llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
+from .prompts import build_system_prompt, build_openai_messages
+from .session import Session
 from tools import ToolRegistry
-from tokens import compact_messages, check_context_limit, truncate_tool_result
+from .tokens import compact_messages, check_context_limit, truncate_tool_result
 
 log = logging.getLogger(__name__)
 

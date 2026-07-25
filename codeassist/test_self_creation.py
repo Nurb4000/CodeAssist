@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import AgentConfig
+from codeassist.config import AgentConfig
 
 
 class TestAutoCreationConfig(unittest.TestCase):
