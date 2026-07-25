@@ -84,12 +84,42 @@ def get_trust_registry() -> TrustRegistry | None:
     return trust_registry
 
 
+async def broadcast_message(message: dict):
+    """Broadcast a message to all connected WebSocket clients."""
+    if not _active_websockets:
+        return
+    
+    disconnected = set()
+    for ws in _active_websockets:
+        try:
+            await ws.send_json(message)
+        except Exception as e:
+            log.warning("Failed to broadcast to websocket: %s", e)
+            disconnected.add(ws)
+    
+    # Remove disconnected clients
+    _active_websockets -= disconnected
+
+
+def register_websocket(ws: WebSocket):
+    """Register a WebSocket connection."""
+    _active_websockets.add(ws)
+
+
+def unregister_websocket(ws: WebSocket):
+    """Unregister a WebSocket connection."""
+    _active_websockets.discard(ws)
+
+
 # Subsystems are initialized lazily in the lifespan using the resolved config
 mcp_client: MCPClient | None = None
 skill_registry: SkillRegistry | None = None
 plugin_registry: PluginRegistry | None = None
 tools: ToolRegistry | None = None
 trust_registry: TrustRegistry | None = None
+
+# Track active WebSocket connections for broadcasting
+_active_websockets: set[WebSocket] = set()
 
 
 def _init_subsystems(cfg: Config):
@@ -218,6 +248,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     cfg = get_config()
 
     await websocket.accept()
+    register_websocket(websocket)
+    
+    # Set up trust registry callback to broadcast approval requests
+    if trust_registry:
+        async def on_trust_request(request, approved):
+            if not approved:
+                await broadcast_message({
+                    "type": "trust_approval_required",
+                    **request.to_dict(),
+                })
+        
+        trust_registry.set_approval_callback(on_trust_request)
 
     # Authenticate WebSocket connections via header only (never query params for security)
     password = cfg.server.password
@@ -335,6 +377,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     except WebSocketDisconnect:
         log.info("Client disconnected from session %s", session_id)
+        unregister_websocket(websocket)
         if agent_task and not agent_task.done():
             agent.cancel()
         try:
@@ -344,6 +387,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             log.warning("Failed to generate session summary: %s", e)
     except Exception as e:
         log.exception("WebSocket error")
+        unregister_websocket(websocket)
         if agent_task and not agent_task.done():
             agent.cancel()
         try:

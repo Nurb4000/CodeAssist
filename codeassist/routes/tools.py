@@ -262,3 +262,37 @@ async def llm_stats(
         model=model,
         period_days=period_days,
     )
+
+
+# ── Trust Management ────────────────────────────────────────────
+
+@router.get("/trust/pending")
+async def get_pending_trust_requests():
+    """Get all pending trust approval requests."""
+    from server import get_trust_registry
+    
+    registry = get_trust_registry()
+    if not registry:
+        return {"pending": []}
+    
+    pending = registry.get_pending_requests()
+    return {
+        "pending": [req.to_dict() for req in pending],
+        "count": len(pending),
+    }
+
+
+@router.get("/trust/trusted")
+async def get_trusted_tools():
+    """Get all trusted tools/plugins."""
+    from server import get_trust_registry
+    
+    registry = get_trust_registry()
+    if not registry:
+        return {"trusted": []}
+    
+    trusted = registry.list_trusted()
+    return {
+        "trusted": trusted,
+        "count": len(trusted),
+    }
