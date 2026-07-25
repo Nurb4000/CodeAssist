@@ -152,36 +152,87 @@ class Agent:
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
         recent_texts: list[str] = []
         max_repeats = 3
+        hit_max_iterations = False
+
+        # Cache tool schema tokens once (they don't change within a loop)
+        tool_schemas = self.tools.schemas()
+        openai_tools = self.llm.format_tools(tool_schemas) if tool_schemas else None
+
+        compaction_cfg = self.config.compaction
+        compaction_escalation = 0
+
+        # Compaction cache: avoid re-compacting when no new messages arrived
+        _cached_messages = None
+        _cached_history_len = 0
 
         for iteration in range(self.config.agent.max_iterations):
             if self.cancel_event.is_set():
                 return
 
             history = await self.session.get_messages()
-            messages = build_openai_messages(self.system_prompt, history)
 
-            # Check context limits and compact if needed
-            ctx = check_context_limit(messages, self.config.llm.model, self.config.llm.context_window)
-            yield AgentEvent("context", {
-                "tokens": ctx["total_tokens"],
-                "usage_pct": ctx["usage_pct"],
-                "severity": ctx["severity"],
-            })
+            # Only rebuild and re-compact when new messages have been added
+            if len(history) != _cached_history_len:
+                messages = build_openai_messages(self.system_prompt, history)
 
-            if ctx["needs_compaction"]:
-                log.info("Context at %s%%, compacting messages", ctx["usage_pct"])
-                messages = compact_messages(messages, keep_recent=20, model=self.config.llm.model)
-                yield AgentEvent("compacted", {"message": "Context window compressed to make room"})
+                # Check context limits and compact if needed
+                ctx = check_context_limit(
+                    messages, self.config.llm.model, self.config.llm.context_window,
+                    tool_schemas=tool_schemas,
+                )
+                yield AgentEvent("context", {
+                    "tokens": ctx["total_tokens"],
+                    "usage_pct": ctx["usage_pct"],
+                    "severity": ctx["severity"],
+                })
 
-            tool_schemas = self.tools.schemas()
-            openai_tools = self.llm.format_tools(tool_schemas) if tool_schemas else None
+                if ctx["needs_compaction"] and compaction_cfg.enabled:
+                    log.info("Context at %s%%, compacting messages (level %d)", ctx["usage_pct"], compaction_escalation)
+                    messages = compact_messages(
+                        messages,
+                        keep_recent=compaction_cfg.keep_recent,
+                        model=self.config.llm.model,
+                        escalation_level=compaction_escalation,
+                    )
+                    # Check if first pass was enough, escalate if not
+                    recheck = check_context_limit(
+                        messages, self.config.llm.model, self.config.llm.context_window,
+                        tool_schemas=tool_schemas,
+                    )
+                    if recheck["needs_compaction"] and compaction_escalation == 0:
+                        compaction_escalation = 1
+                        messages = compact_messages(
+                            messages,
+                            keep_recent=compaction_cfg.keep_recent,
+                            model=self.config.llm.model,
+                            escalation_level=compaction_escalation,
+                        )
+                        log.info("Escalated compaction to level 1 (dropping old tool messages)")
+                    elif not recheck["needs_compaction"]:
+                        compaction_escalation = 0
+                    yield AgentEvent("compacted", {"message": "Context window compressed to make room"})
+
+                _cached_messages = messages
+                _cached_history_len = len(history)
+            else:
+                # Reuse cached compacted messages — no new data to process
+                messages = _cached_messages
 
             accumulated_text = ""
             tool_calls: list[ToolCall] = []
+            stream_timed_out = False
+
+            stream_start = time.monotonic()
+            stream_timeout = 120.0  # seconds
 
             async for event in self.llm.stream(messages, openai_tools):
                 if self.cancel_event.is_set():
                     return
+                if time.monotonic() - stream_start > stream_timeout:
+                    log.warning("LLM stream timed out after %.0fs", stream_timeout)
+                    yield AgentEvent("error", {"message": f"LLM stream timed out after {stream_timeout:.0f}s"})
+                    stream_timed_out = True
+                    break
                 if isinstance(event, TextDelta):
                     accumulated_text += event.content
                     yield AgentEvent("text_delta", {"content": event.content})
@@ -214,12 +265,11 @@ class Agent:
                     tool_calls=tc_dicts,
                 )
 
+                # Phase 1: Handle confirmations sequentially (interactive)
+                confirmed_tool_calls = []
                 for tc in tool_calls:
                     if self.cancel_event.is_set():
                         return
-
-                    # Check if tool requires confirmation
-                    log.info("Executing tool: %s args=%s", tc.name, tc.arguments)
                     if self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
                         yield AgentEvent("confirm_request", {
@@ -229,7 +279,6 @@ class Agent:
                             "in_workspace": self._is_in_workspace(tc.arguments.get("file_path", tc.arguments.get("path", ""))) if tc.name in ("write", "edit") else None,
                         })
                         approved = await self.wait_for_confirm(confirm_id)
-
                         if not approved:
                             await self.session.add_message(
                                 "tool",
@@ -239,38 +288,41 @@ class Agent:
                             yield AgentEvent("tool_result", {
                                 "id": tc.id,
                                 "name": tc.name,
-                                "output": f"Denied by user",
+                                "output": "Denied by user",
                             })
                             continue
+                    confirmed_tool_calls.append(tc)
 
+                # Phase 2: Execute confirmed tools in parallel
+                async def _exec_tool(tc):
                     start = time.monotonic()
                     result = await self.tools.execute(tc.name, tc.arguments)
                     duration_ms = int((time.monotonic() - start) * 1000)
-                    # Truncate large tool results before saving
-                    truncated = truncate_tool_result(result, max_tokens=self.config.tools.tool_output_max_tokens)
-                    await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
-                    yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
+                    truncated = truncate_tool_result(result.output, max_tokens=self.config.tools.tool_output_max_tokens)
+                    return tc, result, truncated, duration_ms
 
-                    # Log tool execution to knowledge base
-                    try:
-                        await KnowledgeBase.log_tool_execution(
-                            session_id=self.session.id,
-                            tool_name=tc.name,
-                            arguments=tc.arguments,
-                            result_summary=truncated[:1000] if truncated else None,
-                            result_full=truncated,
-                            duration_ms=duration_ms,
-                            success=not result.error,
-                            error_message=truncated[:500] if result.error else None,
-                        )
-                    except Exception:
-                        log.debug("Failed to log tool execution")
-
-                    # Send plan update when todo tool is used
-                    if tc.name == "todo":
-                        todo_tool = self.tools.get("todo")
-                        if todo_tool and hasattr(todo_tool, "get_tasks"):
-                            yield AgentEvent("plan_update", {"tasks": todo_tool.get_tasks()})
+                if confirmed_tool_calls:
+                    results = await asyncio.gather(*[_exec_tool(tc) for tc in confirmed_tool_calls])
+                    for tc, result, truncated, duration_ms in results:
+                        await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
+                        yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
+                        try:
+                            await KnowledgeBase.log_tool_execution(
+                                session_id=self.session.id,
+                                tool_name=tc.name,
+                                arguments=tc.arguments,
+                                result_summary=truncated[:1000] if truncated else None,
+                                result_full=truncated,
+                                duration_ms=duration_ms,
+                                success=not result.error,
+                                error_message=truncated[:500] if result.error else None,
+                            )
+                        except Exception:
+                            log.debug("Failed to log tool execution")
+                        if tc.name == "todo":
+                            todo_tool = self.tools.get("todo")
+                            if todo_tool and hasattr(todo_tool, "get_tasks"):
+                                yield AgentEvent("plan_update", {"tasks": todo_tool.get_tasks()})
 
                 continue
 
@@ -288,5 +340,13 @@ class Agent:
                     break
 
             break
+        else:
+            hit_max_iterations = True
+
+        if not self.cancel_event.is_set() and hit_max_iterations:
+            yield AgentEvent("error", {
+                "message": f"Reached maximum iterations ({self.config.agent.max_iterations}). "
+                           "The task may not be fully complete. You can continue in a new message."
+            })
 
         yield AgentEvent("done")

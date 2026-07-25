@@ -129,7 +129,7 @@ class Config:
             ),
             server=ServerConfig(
                 host=raw.get("server", {}).get("host", "127.0.0.1"),
-                port=raw.get("server", {}).get("port", 8000),
+                port=raw.get("server", {}).get("port", 8090),
                 workspace=raw.get("server", {}).get("workspace", "."),
                 password=raw.get("server", {}).get("password", ""),
             ),
