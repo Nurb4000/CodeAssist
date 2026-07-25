@@ -1,42 +1,51 @@
 ---
 name: debug
-description: Help debug issues by analyzing code, adding diagnostics, and tracing problems
+description: Step-by-step debugging workflow
 slash: debug
 ---
 
-# Debugging Skill
+# Debug Skill
 
-Systematically debug an issue by analyzing code and tracing the problem.
+Use this skill when the user reports a bug or error. Follow this systematic debugging process.
 
 ## Steps
 
-1. **Understand the symptoms** - What is the observed behavior vs expected?
-2. **Gather context:**
-   - Read relevant code files
-   - Check error messages and stack traces
-   - Look for recent changes
-3. **Form hypotheses** - What could cause this behavior?
-4. **Add diagnostics** if needed:
-   - Print statements
-   - Logging calls
-   - Assertions
-5. **Test hypotheses** systematically
-6. **Fix the root cause** - Not just symptoms
-7. **Verify the fix** works
+1. **Reproduce the issue**
+   - Ask the user for the exact steps to reproduce
+   - Use `shell` to run the failing command
+   - Capture and analyze the error output
+   - Note the exact error message, stack trace, and file/line numbers
 
-## Debugging Checklist
+2. **Isolate the cause**
+   - Read the file(s) mentioned in the stack trace
+   - Use `grep` to search for related error patterns
+   - Use `read` to examine the failing code and its surrounding context
+   - Check recent changes with `git log` and `git diff`
 
-- [ ] Reproduce the issue reliably
-- [ ] Check for null/undefined values
-- [ ] Verify assumptions about data types
-- [ ] Look for race conditions
-- [ ] Check boundary conditions
-- [ ] Review error handling paths
-- [ ] Verify external dependencies
+3. **Form a hypothesis**
+   - Based on the evidence, form 1-3 hypotheses about the root cause
+   - Use `question` tool to share your hypotheses with the user
+   - Prioritize the most likely hypothesis
 
-## Common Patterns
+4. **Test the hypothesis**
+   - Add debug logging or use `shell` to run diagnostic commands
+   - Use `symbol_search` to trace data flow through the code
+   - Verify the hypothesis with concrete evidence
 
-- **Off-by-one errors**: Check loop bounds
-- **Null references**: Add null checks
-- **Async issues**: Verify promise handling
-- **State mutations**: Check for unintended side effects
+5. **Implement the fix**
+   - Use `diff_preview` to show the proposed fix before applying
+   - Apply the fix with `edit` (prefer surgical changes)
+   - Run `test_runner` to verify the fix works
+   - Check that no existing tests were broken
+
+6. **Verify the fix**
+   - Run the original failing command to confirm it's fixed
+   - Run the full test suite
+   - Use `question` tool to ask the user to confirm the fix
+
+## Debugging Tips
+
+- Start with the error message — it usually contains the key clue
+- Check the simplest explanation first (typos, missing imports, wrong paths)
+- Use `grep -r "TODO\\|FIXME\\|HACK" --include="*.py"` to find known issues
+- If the bug is in a dependency, check the dependency's issue tracker with `websearch`

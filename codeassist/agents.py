@@ -169,6 +169,62 @@ class AgentManager:
                 },
             )
 
+        # Add research agent (read-only, web search enabled)
+        if "research" not in self._agents:
+            self._agents["research"] = AgentConfig(
+                name="Research",
+                description="Read-only research agent. Gathers information without modifying code. "
+                           "Use for answering questions, finding documentation, and troubleshooting.",
+                instructions=(
+                    "You are a research assistant. You can read files, search code, and browse the web, "
+                    "but you MUST NOT modify any files. When you need to share findings, present them "
+                    "clearly with file references and line numbers."
+                ),
+                permissions={
+                    "read": ["allow"],
+                    "write": ["deny"],
+                    "edit": ["deny"],
+                    "shell": ["deny"],
+                    "glob": ["allow"],
+                    "grep": ["allow"],
+                    "webfetch": ["allow"],
+                    "websearch": ["allow"],
+                    "todo": ["allow"],
+                    "symbol_search": ["allow"],
+                    "diff_preview": ["deny"],
+                },
+            )
+
+        # Add review agent (read-only, code review focused)
+        if "review" not in self._agents:
+            self._agents["review"] = AgentConfig(
+                name="Review",
+                description="Code review agent. Analyzes code for issues, suggests improvements, "
+                           "and produces structured reviews. Read-only — never modifies files.",
+                instructions=(
+                    "You are a code review assistant. When reviewing code:\n"
+                    "1. Read the target files and understand the changes\n"
+                    "2. Check for bugs, security issues, and style violations\n"
+                    "3. Suggest improvements with specific line references\n"
+                    "4. Produce a structured review with severity levels\n"
+                    "Use 'git diff' to see changes, 'read' to examine files, and 'grep' to check patterns. "
+                    "NEVER modify files — your role is to analyze and report."
+                ),
+                permissions={
+                    "read": ["allow"],
+                    "write": ["deny"],
+                    "edit": ["deny"],
+                    "shell": ["confirm"],
+                    "glob": ["allow"],
+                    "grep": ["allow"],
+                    "webfetch": ["allow"],
+                    "todo": ["allow"],
+                    "symbol_search": ["allow"],
+                    "diff_preview": ["allow"],
+                    "test_runner": ["allow"],
+                },
+            )
+
     def get_agent(self, name: str) -> AgentConfig | None:
         """Get an agent by name."""
         return self._agents.get(name)

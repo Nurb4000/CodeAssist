@@ -1,45 +1,52 @@
 ---
 name: migrate
-description: Help with code migrations, framework upgrades, or API version changes
+description: Database migration and data transformation workflow
 slash: migrate
 ---
 
-# Migration Skill
+# Migrate Skill
 
-Assist with code migrations, upgrades, and breaking changes.
+Use this skill when the user needs to perform database migrations or data transformations.
 
 ## Steps
 
-1. **Understand current state** - What version/dependency are we on?
-2. **Identify changes** - What changed in the new version?
-3. **Find affected code** - What files/functions need updating?
-4. **Create migration plan** - Order of changes
-5. **Apply changes** systematically
-6. **Verify** - Run tests, check for deprecation warnings
+1. **Understand the current schema**
+   - Read the existing migration files or schema definitions
+   - Use `grep` to find all database-related code
+   - Use `symbol_search` to find model definitions and queries
+   - Document the current schema state
 
-## Common Migrations
+2. **Plan the migration**
+   - Describe the schema changes precisely
+   - List all affected models, queries, and APIs
+   - Plan a rollback strategy for each change
+   - Use `question` tool to confirm the migration plan with the user
 
-- **Framework upgrades** (Django, Flask, React, etc.)
-- **Language versions** (Python 3.9 → 3.12)
-- **API version changes** (REST v1 → v2)
-- **Database migrations** (schema changes)
-- **Library major versions** (breaking changes)
+3. **Write the migration**
+   - Create the migration file following the project's conventions
+   - Include both forward (upgrade) and backward (downgrade) operations
+   - Use `diff_preview` to show the migration before applying
 
-## Migration Checklist
+4. **Test the migration**
+   - Run the migration against a test database
+   - Use `test_runner` to verify existing tests still pass
+   - Test the rollback path
+   - Verify data integrity after migration
 
-- [ ] Review changelog/release notes
-- [ ] Identify deprecated features used
-- [ ] Find breaking changes affecting codebase
-- [ ] Update dependencies
-- [ ] Fix compilation/type errors
-- [ ] Update tests
-- [ ] Remove deprecated code
-- [ ] Run full test suite
+5. **Apply the migration**
+   - Apply to development first
+   - Run the full test suite
+   - Apply to staging/production with user confirmation
 
-## Guidelines
+6. **Verify and document**
+   - Verify the schema matches expectations
+   - Update documentation if needed
+   - Log the migration to the knowledge base
 
-- Migrate in small commits
-- Keep tests passing throughout
-- Document migration decisions
-- Handle backward compatibility when possible
-- Use migration tools when available
+## Safety Rules
+
+- ALWAYS backup data before running migrations
+- ALWAYS test the rollback path
+- NEVER apply migrations directly to production without testing
+- If the migration involves data transformation, verify row counts before/after
+- Use transactions when possible to ensure atomicity

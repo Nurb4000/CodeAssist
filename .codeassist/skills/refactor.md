@@ -1,37 +1,48 @@
 ---
 name: refactor
-description: Refactor code to improve structure, readability, and maintainability
+description: Systematic refactoring workflow with safety checks
 slash: refactor
 ---
 
-# Refactoring Skill
+# Refactor Skill
 
-Refactor the specified code to improve its quality while preserving behavior.
+Use this skill when the user wants to refactor code. Follow these steps systematically.
 
 ## Steps
 
-1. **Understand the current code** - Read and analyze the target code
-2. **Identify refactoring opportunities:**
-   - Extract functions/methods
-   - Simplify complex conditionals
-   - Remove code duplication
-   - Improve naming
-   - Reduce nesting depth
-   - Split large functions
-3. **Apply refactoring** using edit tool with precise changes
-4. **Verify behavior is preserved** - Ensure no functional changes
+1. **Understand the target**
+   - Read the file(s) to be refactored
+   - Use `symbol_search` to find all definitions and references
+   - Use `grep` to find all usages across the codebase
+   - Ask the user clarifying questions if the scope is unclear
 
-## Common Refactorings
+2. **Plan the changes**
+   - List every file that needs modification
+   - Describe each change precisely
+   - Use `question` tool to confirm the plan with the user before proceeding
 
-- **Extract Function**: Pull code into a named function
-- **Rename**: Improve variable/function names
-- **Simplify Conditionals**: Use early returns, guard clauses
-- **Remove Duplication**: DRY principle
-- **Split Large Functions**: Break into smaller pieces
+3. **Create a safety snapshot**
+   - Run `git_snapshot` to auto-commit the current state
+   - This provides a rollback point if the refactoring goes wrong
 
-## Guidelines
+4. **Apply changes incrementally**
+   - Make one logical change at a time
+   - Use `diff_preview` before each `edit` or `write` to verify the change
+   - Prefer `edit` (surgical string replacement) over `write` (full file replacement)
 
-- Make small, incremental changes
-- Preserve all existing behavior
-- Keep the same public interface
-- Add comments only if complexity requires it
+5. **Verify after each change**
+   - Run the test suite with `test_runner`
+   - If tests fail, revert the last change and try a different approach
+   - Use `read` to verify the modified code looks correct
+
+6. **Final verification**
+   - Run the full test suite one more time
+   - Use `diff_preview` to show a summary of all changes
+   - Summarize what was changed and why
+
+## Safety Rules
+
+- NEVER refactor without first understanding the codebase
+- ALWAYS create a git snapshot before starting
+- ALWAYS verify with tests after each change
+- If more than 3 tests fail, STOP and ask the user for guidance
