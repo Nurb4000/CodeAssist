@@ -19,6 +19,7 @@ async def list_knowledge(
     min_confidence: float = 0.0,
     limit: int = 50,
 ):
+    """List knowledge entries with optional filters for type, scope, and confidence."""
     from knowledge import KnowledgeBase
     return await KnowledgeBase.search_knowledge(
         entry_type=entry_type,
@@ -31,6 +32,7 @@ async def list_knowledge(
 
 @router.get("/search")
 async def search_knowledge(q: str, entry_type: str = None, limit: int = 20):
+    """Search knowledge entries using full-text search (FTS5) or fallback to filter."""
     from knowledge import KnowledgeBase
     try:
         results = await KnowledgeBase.fulltext_search_knowledge(q, entry_type=entry_type, limit=limit)
@@ -47,6 +49,7 @@ async def search_knowledge(q: str, entry_type: str = None, limit: int = 20):
 
 @router.post("")
 async def create_knowledge(body: dict):
+    """Create a new knowledge entry. Body must contain 'entry_type', 'scope', and 'content'."""
     from knowledge import KnowledgeBase
     entry_type = body.get("entry_type")
     scope = body.get("scope")
@@ -70,6 +73,7 @@ async def create_knowledge(body: dict):
 
 @router.get("/{entry_id}")
 async def get_knowledge(entry_id: str):
+    """Get a single knowledge entry by ID."""
     from knowledge import KnowledgeBase
     entry = await KnowledgeBase.get_knowledge_entry(entry_id)
     if not entry:
@@ -79,6 +83,7 @@ async def get_knowledge(entry_id: str):
 
 @router.put("/{entry_id}")
 async def update_knowledge(entry_id: str, body: dict):
+    """Update a knowledge entry. Pass only the fields you want to change."""
     from knowledge import KnowledgeBase
     updated = await KnowledgeBase.update_knowledge_entry(entry_id, **body)
     if not updated:
@@ -88,6 +93,7 @@ async def update_knowledge(entry_id: str, body: dict):
 
 @router.delete("/{entry_id}")
 async def delete_knowledge(entry_id: str):
+    """Delete a knowledge entry by ID."""
     from knowledge import KnowledgeBase
     deleted = await KnowledgeBase.delete_knowledge_entry(entry_id)
     if not deleted:
@@ -97,6 +103,7 @@ async def delete_knowledge(entry_id: str):
 
 @router.get("/semantic")
 async def semantic_search(q: str, entry_type: str = None, limit: int = 10):
+    """Search knowledge entries using vector embeddings (requires configured embedding model)."""
     from embeddings import get_embedding_manager
     manager = get_embedding_manager()
     return await manager.search_by_embedding(q, limit=limit, entry_type=entry_type)
@@ -104,6 +111,7 @@ async def semantic_search(q: str, entry_type: str = None, limit: int = 10):
 
 @router.get("/{entry_id}/similar")
 async def find_similar_knowledge(entry_id: str, limit: int = 5):
+    """Find entries similar to the one with the given ID using embeddings."""
     from embeddings import get_embedding_manager
     manager = get_embedding_manager()
     return await manager.search_by_entry_embedding(entry_id, limit=limit)
@@ -111,6 +119,7 @@ async def find_similar_knowledge(entry_id: str, limit: int = 5):
 
 @router.post("/embeddings/generate")
 async def generate_embeddings(batch_size: int = 10):
+    """Trigger batch embedding generation for all knowledge entries."""
     from embeddings import get_embedding_manager
     manager = get_embedding_manager()
     count = await manager.generate_embeddings_for_all(batch_size=batch_size)
@@ -121,6 +130,7 @@ async def generate_embeddings(batch_size: int = 10):
 
 @router.get("/files/history")
 async def file_history(file_path: str, limit: int = 50):
+    """Get modification history for a specific file across sessions."""
     from knowledge import KnowledgeBase
     return await KnowledgeBase.get_file_history(file_path, limit=limit)
 
@@ -129,12 +139,14 @@ async def file_history(file_path: str, limit: int = 50):
 
 @router.get("/export")
 async def export_knowledge():
+    """Export all knowledge base data (entries, summaries, embeddings)."""
     from knowledge import KnowledgeBase
     return await KnowledgeBase.export_all()
 
 
 @router.post("/import")
 async def import_knowledge(body: dict):
+    """Import knowledge base data. Body must contain 'data' (JSON object or string)."""
     from knowledge import KnowledgeBase
     data = body.get("data")
     if not data:
@@ -153,6 +165,7 @@ async def import_knowledge(body: dict):
 
 @router.get("/auto-creation/status")
 async def auto_creation_status():
+    """Get the status of the self-creation system (skills/tools auto-detection)."""
     from config import load_config
     from knowledge import KnowledgeBase
 

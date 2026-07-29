@@ -6,6 +6,7 @@ router = APIRouter(tags=["config"])
 
 @router.get("/api/config")
 async def api_config():
+    """Get current server configuration (model, workspace, enabled features)."""
     from ..server import get_config
     cfg = get_config()
     return {
@@ -26,6 +27,7 @@ async def api_config():
 # Todo endpoints
 @router.get("/api/todos")
 async def get_todos():
+    """Get the current todo list from the active agent."""
     from ..server import tools
     if tools is None:
         return {"tasks": []}
@@ -37,6 +39,7 @@ async def get_todos():
 
 @router.post("/api/todos/clear")
 async def clear_todos():
+    """Clear all tasks from the active agent's todo list."""
     from ..server import tools
     if tools is None:
         return {"ok": True}

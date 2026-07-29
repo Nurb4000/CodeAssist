@@ -6,6 +6,7 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 @router.get("")
 async def list_skills():
+    """List all discovered skills from configured directories."""
     from ..server import get_config, skill_registry
     cfg = get_config()
     if not cfg.skills.enabled or not skill_registry:
@@ -15,6 +16,7 @@ async def list_skills():
 
 @router.post("")
 async def create_skill(body: dict):
+    """Create a new skill stored in the database. Body must contain 'name', 'description', and 'content'."""
     from ..server import get_config
     from session import Skill
     cfg = get_config()
@@ -31,6 +33,7 @@ async def create_skill(body: dict):
 
 @router.delete("/{skill_id}")
 async def delete_skill(skill_id: str):
+    """Delete a skill by ID (soft-delete, sets enabled=0)."""
     from session import Skill
     skill = Skill(skill_id)
     await skill.delete()
@@ -39,6 +42,7 @@ async def delete_skill(skill_id: str):
 
 @router.get("/list")
 async def list_all_skills():
+    """List all skills discovered from disk (bypasses database)."""
     from skills import SkillRegistry
     from config import load_config
     from pathlib import Path
@@ -51,6 +55,7 @@ async def list_all_skills():
 
 @router.post("/reload")
 async def reload_skills():
+    """Hot-reload skills from disk without restarting the server."""
     from skills import SkillRegistry
     from config import load_config
     from pathlib import Path
