@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
@@ -13,6 +14,7 @@ log = logging.getLogger(__name__)
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 30.0
+JITTER_FACTOR = 0.2
 
 
 @dataclass
@@ -84,11 +86,23 @@ class LLMClient:
             try:
                 response = await self.client.chat.completions.create(**kwargs)
                 break
+            except openai.APITimeoutError as e:
+                log.warning("LLM timeout (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
+                if attempt < MAX_RETRIES - 1:
+                    jitter = backoff * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
+                    sleep_time = max(0.1, backoff + jitter)
+                    log.info("Retrying in %.1fs...", sleep_time)
+                    await asyncio.sleep(sleep_time)
+                    backoff = min(backoff * 2, MAX_BACKOFF)
+                else:
+                    raise
             except openai.APIConnectionError as e:
                 log.warning("LLM connection error (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
                 if attempt < MAX_RETRIES - 1:
-                    log.info("Retrying in %.1fs...", backoff)
-                    await asyncio.sleep(backoff)
+                    jitter = backoff * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
+                    sleep_time = max(0.1, backoff + jitter)
+                    log.info("Retrying in %.1fs...", sleep_time)
+                    await asyncio.sleep(sleep_time)
                     backoff = min(backoff * 2, MAX_BACKOFF)
                 else:
                     raise
@@ -96,8 +110,10 @@ class LLMClient:
                 log.warning("LLM rate limit hit (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
                 if attempt < MAX_RETRIES - 1:
                     retry_after = float(e.headers.get("retry-after", backoff)) if hasattr(e, 'headers') else backoff
-                    log.info("Rate limited. Retrying in %.1fs...", retry_after)
-                    await asyncio.sleep(retry_after)
+                    jitter = retry_after * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
+                    sleep_time = max(0.1, retry_after + jitter)
+                    log.info("Rate limited. Retrying in %.1fs...", sleep_time)
+                    await asyncio.sleep(sleep_time)
                     backoff = min(backoff * 2, MAX_BACKOFF)
                 else:
                     raise
@@ -110,40 +126,56 @@ class LLMClient:
 
         current_tool_calls: dict[int, dict] = {}
         accumulated_text = ""
+        stream_backoff = INITIAL_BACKOFF
 
-        async for chunk in response:
-            choice = chunk.choices[0] if chunk.choices else None
+        for stream_attempt in range(MAX_RETRIES):
+            try:
+                async for chunk in response:
+                    choice = chunk.choices[0] if chunk.choices else None
 
-            if choice and choice.delta:
-                if choice.delta.content:
-                    accumulated_text += choice.delta.content
-                    yield TextDelta(choice.delta.content)
+                    if choice and choice.delta:
+                        if choice.delta.content:
+                            accumulated_text += choice.delta.content
+                            yield TextDelta(choice.delta.content)
 
-                if choice.delta.tool_calls:
-                    for tc_delta in choice.delta.tool_calls:
-                        idx = tc_delta.index
-                        if idx not in current_tool_calls:
-                            current_tool_calls[idx] = {
-                                "id": tc_delta.id or "",
-                                "name": "",
-                                "arguments": "",
-                            }
-                        if tc_delta.id:
-                            current_tool_calls[idx]["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name:
-                                current_tool_calls[idx]["name"] = tc_delta.function.name
-                            if tc_delta.function.arguments:
-                                current_tool_calls[idx]["arguments"] += tc_delta.function.arguments
+                        if choice.delta.tool_calls:
+                            for tc_delta in choice.delta.tool_calls:
+                                idx = tc_delta.index
+                                if idx not in current_tool_calls:
+                                    current_tool_calls[idx] = {
+                                        "id": tc_delta.id or "",
+                                        "name": "",
+                                        "arguments": "",
+                                    }
+                                if tc_delta.id:
+                                    current_tool_calls[idx]["id"] = tc_delta.id
+                                if tc_delta.function:
+                                    if tc_delta.function.name:
+                                        current_tool_calls[idx]["name"] = tc_delta.function.name
+                                    if tc_delta.function.arguments:
+                                        current_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
-            if chunk.usage:
-                yield Finish(
-                    finish_reason=choice.finish_reason if choice else "stop",
-                    usage=Usage(
-                        prompt_tokens=chunk.usage.prompt_tokens or 0,
-                        completion_tokens=chunk.usage.completion_tokens or 0,
-                    ),
-                )
+                    if chunk.usage:
+                        yield Finish(
+                            finish_reason=choice.finish_reason if choice else "stop",
+                            usage=Usage(
+                                prompt_tokens=chunk.usage.prompt_tokens or 0,
+                                completion_tokens=chunk.usage.completion_tokens or 0,
+                            ),
+                        )
+                break
+            except (openai.APIConnectionError, openai.APITimeoutError, asyncio.TimeoutError) as e:
+                log.warning("LLM stream interrupted (attempt %d/%d): %s", stream_attempt + 1, MAX_RETRIES, e)
+                if stream_attempt < MAX_RETRIES - 1:
+                    jitter = stream_backoff * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
+                    sleep_time = max(0.1, stream_backoff + jitter)
+                    log.info("Stream reconnecting in %.1fs...", sleep_time)
+                    await asyncio.sleep(sleep_time)
+                    stream_backoff = min(stream_backoff * 2, MAX_BACKOFF)
+                    # Re-create the response to retry streaming
+                    response = await self.client.chat.completions.create(**kwargs)
+                else:
+                    raise
 
         for idx in sorted(current_tool_calls.keys()):
             tc = current_tool_calls[idx]
