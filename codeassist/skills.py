@@ -6,6 +6,11 @@ from typing import Any, Callable
 log = logging.getLogger(__name__)
 
 
+class SkillValidationError(Exception):
+    """Raised when a skill file fails validation."""
+    pass
+
+
 class Skill:
     """Represents a reusable agent-guided workflow."""
 
@@ -24,6 +29,34 @@ class Skill:
             "slash_command": self.slash_command,
             "source": self.source,
         }
+
+
+def validate_skill_frontmatter(frontmatter: dict[str, str], path: Path) -> None:
+    """Validate skill frontmatter fields.
+
+    Raises SkillValidationError if required fields are missing or invalid.
+    """
+    errors = []
+
+    name = frontmatter.get("name", "")
+    if not name or not name.strip():
+        errors.append("missing required field 'name'")
+    elif not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        errors.append(f"name must contain only alphanumeric characters, hyphens, and underscores (got: '{name}')")
+
+    description = frontmatter.get("description", "")
+    if not description or not description.strip():
+        errors.append("missing required field 'description'")
+
+    slash = frontmatter.get("slash")
+    if slash is not None:
+        if not re.match(r'^[a-zA-Z0-9_-]+$', slash):
+            errors.append(f"slash command must contain only alphanumeric characters, hyphens, and underscores (got: '{slash}')")
+
+    if errors:
+        raise SkillValidationError(
+            f"Invalid frontmatter in {path}: {'; '.join(errors)}"
+        )
 
 
 class SkillRegistry:
@@ -63,15 +96,25 @@ class SkillRegistry:
             try:
                 skill = self._parse_skill_file(skill_file)
                 if skill:
+                    # Check for duplicate slash commands
+                    if skill.slash_command and skill.slash_command in self._slash_commands:
+                        existing = self._slash_commands[skill.slash_command]
+                        log.warning(
+                            "Duplicate slash command '/%s': '%s' (from %s) overrides '%s' (from %s)",
+                            skill.slash_command, skill.name, skill_file,
+                            existing.name, existing.source,
+                        )
                     self._skills[skill.name] = skill
                     if skill.slash_command:
                         self._slash_commands[skill.slash_command] = skill
                     log.debug("Discovered skill: %s from %s", skill.name, skill_file)
+            except SkillValidationError as e:
+                log.warning("Skipping invalid skill file %s: %s", skill_file, e)
             except Exception as e:
                 log.error("Failed to parse skill file %s: %s", skill_file, e)
 
     def _parse_skill_file(self, path: Path) -> Skill | None:
-        """Parse a skill markdown file with frontmatter."""
+        """Parse a skill markdown file with frontmatter and validate it."""
         try:
             content = path.read_text(encoding="utf-8")
         except Exception as e:
@@ -97,6 +140,9 @@ class SkillRegistry:
         name = frontmatter.get("name", path.stem)
         description = frontmatter.get("description", "")
         slash_command = frontmatter.get("slash")
+
+        # Validate frontmatter before creating the skill
+        validate_skill_frontmatter(frontmatter, path)
 
         return Skill(
             name=name,

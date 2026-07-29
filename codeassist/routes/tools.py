@@ -9,6 +9,7 @@ router = APIRouter(prefix="/api/tools", tags=["tools"])
 
 @router.post("/reload")
 async def reload_tools_endpoint():
+    """Hot-reload all tools (built-in + custom) without restarting the server."""
     from ..server import reload_all_tools
     try:
         reload_all_tools()
@@ -19,6 +20,7 @@ async def reload_tools_endpoint():
 
 @router.get("/list")
 async def list_tools():
+    """List all available tool names."""
     from ..server import tools
     if tools is None:
         return {"tools": []}
@@ -29,6 +31,7 @@ async def list_tools():
 
 @router.get("/manage/list")
 async def list_all_tools():
+    """List all tools (built-in + custom) with usage stats and trust status."""
     from ..server import get_config, get_trust_registry
     from tools import get_tools
     from custom_tools_loader import get_custom_tool_registry
@@ -78,6 +81,7 @@ async def list_all_tools():
 
 @router.get("/manage/{tool_name}")
 async def get_tool_details(tool_name: str):
+    """Get detailed information about a specific tool including its schema and source code."""
     from ..server import get_config, get_trust_registry
     from tools import get_tools
     from custom_tools_loader import get_custom_tool_registry
@@ -123,6 +127,7 @@ async def get_tool_details(tool_name: str):
 
 @router.put("/manage/{tool_name}/trust")
 async def set_tool_trust(tool_name: str, body: dict):
+    """Set the trust level for a custom tool. Body must contain 'trusted' (boolean)."""
     from ..server import get_config, get_trust_registry
     from custom_tools_loader import get_custom_tool_registry
 
@@ -145,6 +150,7 @@ async def set_tool_trust(tool_name: str, body: dict):
 
 @router.delete("/manage/{tool_name}")
 async def delete_custom_tool(tool_name: str):
+    """Delete a custom tool file and remove it from the registry."""
     from ..server import get_config, get_trust_registry
     from custom_tools_loader import get_custom_tool_registry
 
@@ -170,6 +176,7 @@ async def delete_custom_tool(tool_name: str):
 
 @router.get("/manage/usage")
 async def get_tool_usage_stats(period_days: int = 30):
+    """Get tool usage statistics for the specified period (default: 30 days)."""
     from knowledge import KnowledgeBase
 
     stats = await KnowledgeBase.get_tool_stats(period_days=period_days)
@@ -185,6 +192,7 @@ async def get_tool_usage_stats(period_days: int = 30):
 
 @router.post("/manage/scan")
 async def scan_custom_tools():
+    """Scan all custom tools for potentially dangerous patterns (network, file system, subprocess)."""
     from ..server import get_config, get_trust_registry
     from custom_tools_loader import get_custom_tool_registry
 
@@ -242,6 +250,7 @@ async def tool_stats(
     tool_name: str = None,
     period_days: int = None,
 ):
+    """Get tool usage analytics, optionally filtered by session, tool, or time period."""
     from knowledge import KnowledgeBase
     return await KnowledgeBase.get_tool_stats(
         session_id=session_id,
@@ -256,6 +265,7 @@ async def llm_stats(
     model: str = None,
     period_days: int = None,
 ):
+    """Get LLM usage analytics (token counts, costs), optionally filtered."""
     from knowledge import KnowledgeBase
     return await KnowledgeBase.get_llm_stats(
         session_id=session_id,
@@ -268,7 +278,7 @@ async def llm_stats(
 
 @router.get("/trust/pending")
 async def get_pending_trust_requests():
-    """Get all pending trust approval requests."""
+    """Get all pending trust approval requests for custom tools/plugins."""
     from ..server import get_trust_registry
     
     registry = get_trust_registry()
@@ -284,7 +294,7 @@ async def get_pending_trust_requests():
 
 @router.get("/trust/trusted")
 async def get_trusted_tools():
-    """Get all trusted tools/plugins."""
+    """Get all tools/plugins that have been explicitly trusted."""
     from ..server import get_trust_registry
     
     registry = get_trust_registry()

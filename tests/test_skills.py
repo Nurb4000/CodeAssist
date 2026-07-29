@@ -200,3 +200,164 @@ Test content here.
         assert schema["name"] == "skill"
         assert "description" in schema
         assert "parameters" in schema
+
+
+class TestSkillValidation:
+    """Test skill frontmatter validation."""
+
+    def test_valid_frontmatter(self, tmp_path):
+        """Test that valid frontmatter passes validation."""
+        from codeassist.skills import validate_skill_frontmatter
+        
+        frontmatter = {
+            "name": "my-skill",
+            "description": "A valid skill",
+            "slash": "myskill",
+        }
+        
+        # Should not raise
+        validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_missing_name(self, tmp_path):
+        """Test that missing name is caught."""
+        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        
+        frontmatter = {
+            "description": "A valid skill",
+        }
+        
+        with pytest.raises(SkillValidationError, match="missing required field 'name'"):
+            validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_invalid_name_chars(self, tmp_path):
+        """Test that invalid characters in name are caught."""
+        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        
+        frontmatter = {
+            "name": "my skill!",
+            "description": "A valid skill",
+        }
+        
+        with pytest.raises(SkillValidationError, match="alphanumeric characters"):
+            validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_missing_description(self, tmp_path):
+        """Test that missing description is caught."""
+        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        
+        frontmatter = {
+            "name": "my-skill",
+        }
+        
+        with pytest.raises(SkillValidationError, match="missing required field 'description'"):
+            validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_invalid_slash_command(self, tmp_path):
+        """Test that invalid slash command characters are caught."""
+        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        
+        frontmatter = {
+            "name": "my-skill",
+            "description": "A valid skill",
+            "slash": "my skill!",
+        }
+        
+        with pytest.raises(SkillValidationError, match="alphanumeric characters"):
+            validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_empty_name(self, tmp_path):
+        """Test that empty name is caught."""
+        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        
+        frontmatter = {
+            "name": "",
+            "description": "A valid skill",
+        }
+        
+        with pytest.raises(SkillValidationError, match="missing required field 'name'"):
+            validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_skill_with_no_slash_command(self, tmp_path):
+        """Test that skills without slash command pass validation."""
+        from codeassist.skills import validate_skill_frontmatter
+        
+        frontmatter = {
+            "name": "my-skill",
+            "description": "A valid skill",
+        }
+        
+        # Should not raise
+        validate_skill_frontmatter(frontmatter, tmp_path / "test.md")
+
+    def test_discover_skips_invalid_skills(self, tmp_path):
+        """Test that invalid skill files are skipped during discovery."""
+        from codeassist.skills import SkillRegistry
+        
+        config = type('Config', (), {
+            'enabled': True,
+            'directories': ['.skills']
+        })()
+        
+        skill_dir = tmp_path / '.skills'
+        skill_dir.mkdir()
+        
+        # Create a valid skill
+        (skill_dir / "valid.md").write_text("""---
+name: valid-skill
+description: A valid skill
+slash: valid
+---
+Content here.
+""")
+        
+        # Create an invalid skill (missing description)
+        (skill_dir / "invalid.md").write_text("""---
+name: invalid-skill
+slash: invalid
+---
+Content here.
+""")
+        
+        registry = SkillRegistry(tmp_path, config)
+        skills = registry.discover()
+        
+        assert len(skills) == 1
+        assert skills[0].name == "valid-skill"
+
+    def test_discover_skips_duplicate_slash_commands(self, tmp_path, caplog):
+        """Test that duplicate slash commands log a warning."""
+        import logging
+        from codeassist.skills import SkillRegistry
+        
+        config = type('Config', (), {
+            'enabled': True,
+            'directories': ['.skills']
+        })()
+        
+        skill_dir = tmp_path / '.skills'
+        skill_dir.mkdir()
+        
+        # Create two skills with the same slash command
+        (skill_dir / "first.md").write_text("""---
+name: first-skill
+description: First skill
+slash: duplicate
+---
+First content.
+""")
+        
+        (skill_dir / "second.md").write_text("""---
+name: second-skill
+description: Second skill
+slash: duplicate
+---
+Second content.
+""")
+        
+        registry = SkillRegistry(tmp_path, config)
+        skills = registry.discover()
+        
+        assert len(skills) == 2
+        
+        # Warning should be logged for duplicate slash command
+        assert any("Duplicate slash command" in record.message for record in caplog.records)

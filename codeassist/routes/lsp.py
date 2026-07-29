@@ -6,12 +6,14 @@ router = APIRouter(prefix="/api/lsp/servers", tags=["lsp"])
 
 @router.get("")
 async def list_lsp_servers():
+    """List all configured Language Server Protocol servers."""
     from session import LSPServer
     return await LSPServer.list_all()
 
 
 @router.post("")
 async def create_lsp_server(body: dict):
+    """Create a new LSP server configuration. Body must contain 'name' and 'command'."""
     from session import LSPServer
     server = await LSPServer.create(
         name=body.get("name"),
@@ -24,6 +26,7 @@ async def create_lsp_server(body: dict):
 
 @router.delete("/{server_id}")
 async def delete_lsp_server(server_id: str):
+    """Delete an LSP server by ID."""
     from session import LSPServer
     server = LSPServer(server_id)
     await server.delete()

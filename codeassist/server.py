@@ -221,6 +221,7 @@ async def auth_middleware(request, call_next):
 
 @app.get("/health")
 async def health_check():
+    """Health check endpoint. Returns server status, model, and workspace path."""
     cfg = get_config()
     return {
         "status": "ok",
@@ -231,6 +232,7 @@ async def health_check():
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    """Serve the main chat UI (index.html)."""
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
