@@ -135,7 +135,7 @@ class TestCompactMessages:
         assert result[0]["role"] == "system"
         assert result[0]["content"] == "You are a helpful assistant."
 
-    def test_compaction_marker_added(self):
+    def test_no_compaction_markers(self):
         msgs = [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "a" * 100},
@@ -145,7 +145,7 @@ class TestCompactMessages:
         ]
         result = compact_messages(msgs, keep_recent=2, escalation_level=0)
         markers = [m for m in result if "[Context compaction:" in (m.get("content") or "")]
-        assert len(markers) == 1
+        assert len(markers) == 0
 
     def test_no_compaction_when_within_limit(self):
         msgs = [

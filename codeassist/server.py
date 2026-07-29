@@ -247,8 +247,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     from codeassist.agents import agent_manager
     from codeassist.session_hook import get_session_hook
     import asyncio
-    import hmac
-
     cfg = get_config()
 
     await websocket.accept()
