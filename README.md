@@ -138,6 +138,7 @@ CodeAssist includes several security layers:
 - **Tool trust system**: Custom tools are scanned for dangerous patterns and require explicit approval
 - **Auth middleware**: Password-based HTTP Basic Auth with WebSocket support via `sec-websocket-protocol` header
 - **Secure WebSocket**: Frontend derives `wss://` or `ws://` from page protocol automatically
+- **Vendored frontend dependencies**: `highlight.js` and `marked` are bundled locally in `static/vendor/` instead of loaded from CDNs, eliminating external network requests at page load and removing the attack surface from CDN compromise or supply-chain attacks
 
 ### Context window management
 
