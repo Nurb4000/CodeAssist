@@ -159,6 +159,20 @@ keep_recent = 20        # Number of recent messages to preserve unchanged
 tool_result_max_tokens = 4000  # Max tokens per tool output
 ```
 
+### Tuning & reliability
+
+CodeAssist includes several quality-of-life improvements:
+
+- **Message cache** — session history is fetched from the database once per iteration, then tracked in-memory with a dirty flag. Subsequent iterations reuse the cache unless new messages were added.
+- **Streaming persistence** — assistant messages are saved to the database at stream start (as a placeholder) and updated when the stream completes. If the server crashes mid-stream, the partial message is preserved.
+- **Embedding throttling** — concurrent embedding generation is capped at 2 tasks via `asyncio.Semaphore`, preventing overload of the embedding API.
+- **Session hook lock** — `on_session_end` processing is serialized per-singleton with `asyncio.Lock`, preventing races between concurrent WebSocket disconnects.
+- **Configurable web search engine** — choose the backend via `config.toml`:
+  ```toml
+  [tools]
+  websearch_engine = "duckduckgo"  # or "generic" (HTML scrape fallback)
+  ```
+
 ### Agent behavior
 
 - **Parallel tool execution**: Multiple independent tool calls from the LLM execute simultaneously via `asyncio.gather()`
