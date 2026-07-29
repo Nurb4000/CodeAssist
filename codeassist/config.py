@@ -45,6 +45,7 @@ class ToolConfig:
     max_output_chars: int = 20000
     webfetch_max_chars: int = 30000
     websearch_max_chars: int = 30000
+    websearch_engine: str = "duckduckgo"
     tool_output_max_tokens: int = 4000
 
 
@@ -143,6 +144,7 @@ class Config:
                 max_output_chars=raw.get("tools", {}).get("max_output_chars", 20000),
                 webfetch_max_chars=raw.get("tools", {}).get("webfetch_max_chars", 30000),
                 websearch_max_chars=raw.get("tools", {}).get("websearch_max_chars", 30000),
+                websearch_engine=raw.get("tools", {}).get("websearch_engine", "duckduckgo"),
                 tool_output_max_tokens=raw.get("tools", {}).get("tool_output_max_tokens", 4000),
             ),
             mcp=MCPConfig(

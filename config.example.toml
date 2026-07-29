@@ -66,6 +66,10 @@ webfetch_max_chars = 30000
 # Maximum output size for websearch (characters)
 websearch_max_chars = 30000
 
+# Web search engine backend: "duckduckgo" (default) or "generic"
+# Use "generic" if duckduckgo_search is blocked on your network
+websearch_engine = "duckduckgo"
+
 # Maximum tokens for tool output truncation
 tool_output_max_tokens = 4000
 

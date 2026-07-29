@@ -30,6 +30,7 @@ shell_timeout = 120
 max_output_chars = 20000
 webfetch_max_chars = 30000
 websearch_max_chars = 30000
+websearch_engine = "duckduckgo"
 tool_output_max_tokens = 4000
 
 [mcp]

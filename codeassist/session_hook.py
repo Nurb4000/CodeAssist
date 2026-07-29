@@ -120,47 +120,49 @@ class SessionHook:
     def __init__(self, llm_client=None):
         self.llm_client = llm_client
         self._session_content_hashes: set[str] = set()
+        self._lock = asyncio.Lock()
     
     async def on_session_end(self, session: Session, agent=None):
         """Called when a session ends. Generates summary and extracts knowledge."""
-        self._session_content_hashes.clear()
-        try:
-            # Get session messages
-            messages = await session.get_messages()
-            if not messages:
-                return
-            
-            # Calculate session stats
-            stats = self._calculate_stats(messages)
-            
-            # Generate summary using LLM if available, otherwise use simple extraction
-            if self.llm_client:
-                summary_data = await self._generate_llm_summary(session.id, messages, stats)
-            else:
-                summary_data = self._generate_simple_summary(messages, stats)
-            
-            # Store session summary
-            await KnowledgeBase.create_session_summary(
-                session_id=session.id,
-                summary=summary_data["summary"],
-                key_topics=summary_data.get("topics", []),
-                goals_achieved=summary_data.get("goals", []),
-                tools_used=summary_data.get("tools_used", []),
-                files_modified=summary_data.get("files_modified", []),
-                duration_seconds=stats["duration_seconds"],
-                message_count=stats["message_count"],
-                token_usage=stats.get("total_tokens"),
-                model=stats.get("model"),
-                quality_score=self._calculate_quality_score(stats),
-            )
-            
-            log.info("Session summary created for %s", session.id)
-            
-            # Extract knowledge entries
-            await self._extract_knowledge(session.id, messages, summary_data)
-            
-        except Exception as e:
-            log.exception("Error generating session summary for %s", session.id)
+        async with self._lock:
+            self._session_content_hashes.clear()
+            try:
+                # Get session messages
+                messages = await session.get_messages()
+                if not messages:
+                    return
+                
+                # Calculate session stats
+                stats = self._calculate_stats(messages)
+                
+                # Generate summary using LLM if available, otherwise use simple extraction
+                if self.llm_client:
+                    summary_data = await self._generate_llm_summary(session.id, messages, stats)
+                else:
+                    summary_data = self._generate_simple_summary(messages, stats)
+                
+                # Store session summary
+                await KnowledgeBase.create_session_summary(
+                    session_id=session.id,
+                    summary=summary_data["summary"],
+                    key_topics=summary_data.get("topics", []),
+                    goals_achieved=summary_data.get("goals", []),
+                    tools_used=summary_data.get("tools_used", []),
+                    files_modified=summary_data.get("files_modified", []),
+                    duration_seconds=stats["duration_seconds"],
+                    message_count=stats["message_count"],
+                    token_usage=stats.get("total_tokens"),
+                    model=stats.get("model"),
+                    quality_score=self._calculate_quality_score(stats),
+                )
+                
+                log.info("Session summary created for %s", session.id)
+                
+                # Extract knowledge entries
+                await self._extract_knowledge(session.id, messages, summary_data)
+                
+            except Exception as e:
+                log.exception("Error generating session summary for %s", session.id)
     
     def _calculate_stats(self, messages: list[dict]) -> dict:
         """Calculate basic statistics from messages."""
@@ -980,19 +982,27 @@ This workflow is now available as a skill. The agent will use this pattern when 
                 tags=tags,
             )
             
-            # Generate embedding in background (non-blocking)
+            # Generate embedding in background (non-blocking, throttled)
             if entry_id:
                 try:
                     from embeddings import get_embedding_manager
                     manager = get_embedding_manager()
                     # Don't await - let it run in background
-                    asyncio.create_task(manager.generate_and_store_embedding(entry_id, content))
+                    asyncio.create_task(self._throttled_embedding(manager, entry_id, content))
                 except Exception as e:
                     log.debug("Embedding generation skipped: %s", e)
             
         except Exception as e:
             log.warning("Failed to create knowledge entry: %s", e)
     
+    async def _throttled_embedding(self, manager, entry_id: str, content: str):
+        """Generate embedding with concurrency throttling."""
+        async with _embedding_semaphore:
+            try:
+                await manager.generate_and_store_embedding(entry_id, content)
+            except Exception as e:
+                log.debug("Embedding generation failed: %s", e)
+
     def _content_overlap(self, a: str, b: str) -> float:
         """Simple content overlap calculation."""
         if not a or not b:
@@ -1009,6 +1019,9 @@ This workflow is now available as a skill. The agent will use this pattern when 
         
         return len(intersection) / len(union) if union else 0.0
 
+
+# Throttle concurrent embedding tasks (avoid overloading the embedding API)
+_embedding_semaphore = asyncio.Semaphore(2)
 
 # Singleton instance
 _session_hook: SessionHook | None = None

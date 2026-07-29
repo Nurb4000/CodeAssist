@@ -44,6 +44,9 @@ class Agent:
         self._trust_shell = False
         # Cost tracking
         self.cost_tracker = CostTracker()
+        # Incremental message cache — avoids DB fetch on every iteration
+        self._messages: list[dict] | None = None
+        self._messages_dirty: bool = True
 
     def cancel(self):
         """Cancel the current agent run."""
@@ -187,7 +190,11 @@ class Agent:
                 yield AgentEvent("done")
                 return
 
-            history = await self.session.get_messages()
+            # Fetch messages once, then track incrementally
+            if self._messages is None or self._messages_dirty:
+                self._messages = await self.session.get_messages()
+                self._messages_dirty = False
+            history = self._messages
 
             # Only rebuild and re-compact when new messages have been added
             if len(history) != _cached_history_len:
@@ -243,6 +250,9 @@ class Agent:
             stream_start = time.monotonic()
             stream_timeout = 120.0  # seconds
 
+            # Save placeholder immediately so partial responses survive crashes
+            stream_msg_id = await self.session.add_message("assistant", content="")
+
             async for event in self.llm.stream(messages, openai_tools):
                 if self.cancel_event.is_set():
                     return
@@ -283,11 +293,12 @@ class Agent:
                     {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                     for tc in tool_calls
                 ]
-                await self.session.add_message(
-                    "assistant",
+                await self.session.update_message(
+                    stream_msg_id,
                     content=accumulated_text or None,
                     tool_calls=tc_dicts,
                 )
+                self._messages_dirty = True
 
                 # Phase 1: Handle confirmations and questions sequentially (interactive)
                 confirmed_tool_calls = []
@@ -308,6 +319,7 @@ class Agent:
                         answer = self._confirm_results.pop(question_id, "")
                         self._confirm_events.pop(question_id, None)
                         await self.session.add_message("tool", content=str(answer), tool_call_id=tc.id)
+                        self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": "question", "output": str(answer)})
                         continue
                     if self.needs_confirmation(tc.name, tc.arguments):
@@ -325,6 +337,7 @@ class Agent:
                                 content=f"Tool '{tc.name}' was denied by user.",
                                 tool_call_id=tc.id,
                             )
+                            self._messages_dirty = True
                             yield AgentEvent("tool_result", {
                                 "id": tc.id,
                                 "name": tc.name,
@@ -345,6 +358,7 @@ class Agent:
                     results = await asyncio.gather(*[_exec_tool(tc) for tc in confirmed_tool_calls])
                     for tc, result, truncated, duration_ms in results:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
+                        self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
                         try:
                             await KnowledgeBase.log_tool_execution(
@@ -367,7 +381,8 @@ class Agent:
                 continue
 
             if accumulated_text:
-                await self.session.add_message("assistant", content=accumulated_text)
+                await self.session.update_message(stream_msg_id, content=accumulated_text)
+                self._messages_dirty = True
 
                 # Repetition detection: break if the LLM keeps producing the same output
                 normalized = accumulated_text.strip().lower()
