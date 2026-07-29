@@ -125,6 +125,30 @@ async def file_history(file_path: str, limit: int = 50):
     return await KnowledgeBase.get_file_history(file_path, limit=limit)
 
 
+# ── Export / Import ────────────────────────────────────────────────
+
+@router.get("/export")
+async def export_knowledge():
+    from knowledge import KnowledgeBase
+    return await KnowledgeBase.export_all()
+
+
+@router.post("/import")
+async def import_knowledge(body: dict):
+    from knowledge import KnowledgeBase
+    data = body.get("data")
+    if not data:
+        raise HTTPException(status_code=400, detail="data is required")
+    import json
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON data")
+    counts = await KnowledgeBase.import_all(data)
+    return counts
+
+
 # ── Auto-Creation Status ────────────────────────────────────────
 
 @router.get("/auto-creation/status")

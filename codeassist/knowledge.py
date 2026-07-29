@@ -627,6 +627,86 @@ class KnowledgeBase:
 
 # ── Helper Functions ─────────────────────────────────────────────────────
 
+    # ── Export / Import ────────────────────────────────────────────────
+
+    EXPORT_TABLES = [
+        "session_summaries", "knowledge_entries", "tool_executions",
+        "llm_usage", "session_tags", "file_snapshots", "qa_pairs",
+    ]
+
+    @staticmethod
+    async def export_all() -> dict:
+        """Export all KB data as a JSON-serializable dict (without embeddings)."""
+        from .session import get_db  # local import to avoid circular
+        export = {"version": 1, "exported_at": datetime.now(timezone.utc).isoformat(), "data": {}}
+        async with get_db() as db:
+            for table in KnowledgeBase.EXPORT_TABLES:
+                cursor = await db.execute(f"SELECT * FROM {table}")
+                rows = [dict(r) for r in await cursor.fetchall()]
+                # Strip binary embedding column from knowledge_entries
+                for row in rows:
+                    row.pop("embedding", None)
+                export["data"][table] = rows
+        return export
+
+    @staticmethod
+    async def import_all(export: dict, source_session_id: str | None = None) -> dict:
+        """Import KB data from an export dict. Returns counts per table."""
+        from .session import get_db
+        counts = {}
+        async with get_db() as db:
+            for table in KnowledgeBase.EXPORT_TABLES:
+                rows = export.get("data", {}).get(table, [])
+                if not rows:
+                    counts[table] = 0
+                    continue
+                # Get column names from the first row, skip id and auto-generated fields
+                inserted = 0
+                for row in rows:
+                    cols = []
+                    vals = []
+                    for k, v in row.items():
+                        if k == "id":
+                            cols.append(k)
+                            import uuid
+                            vals.append(str(uuid.uuid4()))
+                        elif k in ("created_at", "updated_at"):
+                            cols.append(k)
+                            vals.append(datetime.now(timezone.utc).isoformat())
+                        elif k == "source_session_id" and source_session_id:
+                            cols.append(k)
+                            vals.append(source_session_id)
+                        elif k == "embedding":
+                            continue  # skip binary blobs
+                        else:
+                            cols.append(k)
+                            vals.append(v)
+                    placeholders = ",".join("?" for _ in cols)
+                    try:
+                        await db.execute(
+                            f"INSERT OR IGNORE INTO {table} ({','.join(cols)}) VALUES ({placeholders})",
+                            vals,
+                        )
+                        inserted += 1
+                    except Exception as e:
+                        log.debug("Skipping row in %s: %s", table, e)
+                await db.commit()
+                counts[table] = inserted
+        # Rebuild FTS indexes after import
+        await KnowledgeBase._rebuild_fts()
+        return counts
+
+    @staticmethod
+    async def _rebuild_fts():
+        """Rebuild FTS5 virtual tables after import."""
+        from .session import get_db, _ensure_fts_populated
+        try:
+            async with get_db() as db:
+                await _ensure_fts_populated(db)
+        except Exception as e:
+            log.warning("FTS rebuild failed: %s", e)
+
+
 async def _ensure_fts_populated(db):
     """Ensure FTS tables are populated with current data (fallback for initial setup)."""
     # Note: Triggers in session.py handle incremental updates.

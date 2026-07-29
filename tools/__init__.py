@@ -13,6 +13,42 @@ class ToolResult:
     error: bool = False
 
 
+def _validate_args(schema: dict, args: dict) -> str | None:
+    """Validate tool arguments against JSON Schema. Returns error message or None."""
+    props = schema.get("properties", {})
+
+    # Check required fields
+    for field_name in schema.get("required", []):
+        if field_name not in args or args[field_name] is None:
+            return f"Missing required argument '{field_name}'"
+
+    # Check types and enum values
+    for field_name, field_schema in props.items():
+        if field_name not in args:
+            continue
+        value = args[field_name]
+        expected = field_schema.get("type", "string")
+
+        if expected == "string" and not isinstance(value, str):
+            return f"Argument '{field_name}' must be a string, got {type(value).__name__}"
+        if expected == "integer" and not isinstance(value, int):
+            return f"Argument '{field_name}' must be an integer, got {type(value).__name__}"
+        if expected == "boolean" and not isinstance(value, bool):
+            return f"Argument '{field_name}' must be a boolean, got {type(value).__name__}"
+        if expected == "number" and not isinstance(value, (int, float)):
+            return f"Argument '{field_name}' must be a number, got {type(value).__name__}"
+        if expected == "array" and not isinstance(value, list):
+            return f"Argument '{field_name}' must be an array, got {type(value).__name__}"
+        if expected == "object" and not isinstance(value, dict):
+            return f"Argument '{field_name}' must be an object, got {type(value).__name__}"
+
+        enum_vals = field_schema.get("enum")
+        if enum_vals is not None and value not in enum_vals:
+            return f"Argument '{field_name}' must be one of {enum_vals}, got '{value}'"
+
+    return None
+
+
 class Tool(ABC):
     name: str = ""
     description: str = ""
@@ -45,6 +81,11 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if not tool:
             return ToolResult(output=f"Error: unknown tool '{name}'", error=True)
+
+        # Validate arguments against tool schema before execution
+        err = _validate_args(tool.parameters, arguments)
+        if err:
+            return ToolResult(output=f"Error: {name}: {err}", error=True)
 
         try:
             return await tool.execute(**arguments)
