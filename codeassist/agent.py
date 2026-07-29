@@ -77,7 +77,7 @@ class Agent:
             workspace = self.config.workspace.resolve()
             path.relative_to(workspace)
             return True
-        except (ValueError, OSError):
+        except (ValueError, OSError, RuntimeError):
             return False
 
     def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:

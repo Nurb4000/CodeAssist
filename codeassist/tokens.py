@@ -164,17 +164,6 @@ def compact_messages(
             else:
                 compacted.append(msg)
 
-    # Add compaction marker as a user message (more cross-provider compatible)
-    compacted.append({
-        "role": "user",
-        "content": f"[Context compaction: {len(old)} earlier messages compacted. "
-                   f"Tool outputs summarized. Conversation continues below.]",
-    })
-    compacted.append({
-        "role": "assistant",
-        "content": "Understood.",
-    })
-
     compacted.extend(recent)
     return compacted
 
