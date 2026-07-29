@@ -419,7 +419,7 @@ A single-page chat interface:
 
 - **Layout:** Sidebar (sessions) + main chat area + optional tool output panel
 - **Streaming:** WebSocket connection, append text deltas in real-time
-- **Markdown:** Render assistant messages with `marked.js` + syntax highlighting via `highlight.js`
+- **Markdown:** Render assistant messages with vendored `marked.js` + `highlight.js` (bundled in `static/vendor/`, no CDN dependency)
 - **Tool display:** Collapsible sections showing tool calls and their output
 - **Session management:** Create/switch/delete sessions
 - **Model selector:** Switch between configured models
