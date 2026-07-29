@@ -335,6 +335,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if agent_task and not agent_task.done():
                     agent.cancel()
 
+            elif data.get("type") == "undo":
+                deleted = await session.undo_last_turn()
+                await websocket.send_json({
+                    "type": "undo_done",
+                    "deleted": deleted,
+                })
+
+            elif data.get("type") == "rollback":
+                message_id = data.get("message_id")
+                if message_id:
+                    deleted = await session.delete_messages_after(message_id)
+                    await websocket.send_json({
+                        "type": "rollback_done",
+                        "deleted": deleted,
+                    })
+
             elif data.get("type") == "confirm_response":
                 confirm_id = data.get("id")
                 approved = data.get("approved", False)

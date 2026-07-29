@@ -613,6 +613,46 @@ class Session:
             await db.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
             await db.commit()
 
+    async def delete_messages_after(self, message_id: str) -> int:
+        """Delete all messages after a given message ID. Returns count of deleted messages."""
+        async with get_db() as db:
+            # Get timestamp of the reference message
+            cursor = await db.execute(
+                "SELECT created_at FROM messages WHERE id = ? AND session_id = ?",
+                (message_id, self.id),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return 0
+            ref_ts = row["created_at"]
+            cursor = await db.execute(
+                "DELETE FROM messages WHERE session_id = ? AND created_at > ?",
+                (self.id, ref_ts),
+            )
+            deleted = cursor.rowcount
+            now = datetime.now(timezone.utc).isoformat()
+            await db.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (now, self.id),
+            )
+            await db.commit()
+            return deleted
+
+    async def undo_last_turn(self) -> int:
+        """Remove the last assistant message and associated tool messages.
+        Returns the number of deleted messages, or 0 if there's nothing to undo."""
+        msgs = await self.get_messages()
+        # Find the last assistant message
+        last_assistant_idx = None
+        for i in range(len(msgs) - 1, -1, -1):
+            if msgs[i]["role"] == "assistant":
+                last_assistant_idx = i
+                break
+        if last_assistant_idx is None:
+            return 0
+        # Delete from that point onward (assistant + any subsequent tool messages)
+        return await self.delete_messages_after(msgs[last_assistant_idx]["id"])
+
     async def fork(self, name: str | None = None) -> "Session":
         """Create a fork of this session."""
         new_session = await Session.create(name=name, parent_id=self.id, fork_point=datetime.now(timezone.utc).isoformat())

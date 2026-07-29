@@ -54,6 +54,30 @@ async def fork_session(session_id: str, body: dict):
     return {"id": new_session.id}
 
 
+@router.post("/{session_id}/rollback/{message_id}")
+async def rollback_session(session_id: str, message_id: str):
+    from session import Session
+    session = Session(session_id)
+    deleted = await session.delete_messages_after(message_id)
+    return {"deleted": deleted}
+
+
+@router.post("/{session_id}/undo")
+async def undo_session(session_id: str):
+    from session import Session
+    session = Session(session_id)
+    deleted = await session.undo_last_turn()
+    return {"deleted": deleted}
+
+
+@router.delete("/{session_id}/messages/{message_id}")
+async def delete_message(session_id: str, message_id: str):
+    from session import Session
+    session = Session(session_id)
+    deleted = await session.delete_messages_after(message_id)
+    return {"deleted": deleted}
+
+
 @router.get("/{session_id}/summary")
 async def session_summary(session_id: str):
     from session_manager import SessionManager
