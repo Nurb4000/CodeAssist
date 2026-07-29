@@ -576,6 +576,31 @@ class Session:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def update_message(self, message_id: str, content: str | None = None, tool_calls: list[dict] | None = None):
+        """Update an existing message's content and/or tool_calls."""
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            if content is not None and tool_calls is not None:
+                await db.execute(
+                    "UPDATE messages SET content = ?, tool_calls = ?, created_at = ? WHERE id = ? AND session_id = ?",
+                    (content, json.dumps(tool_calls), now, message_id, self.id),
+                )
+            elif content is not None:
+                await db.execute(
+                    "UPDATE messages SET content = ?, created_at = ? WHERE id = ? AND session_id = ?",
+                    (content, now, message_id, self.id),
+                )
+            elif tool_calls is not None:
+                await db.execute(
+                    "UPDATE messages SET tool_calls = ?, created_at = ? WHERE id = ? AND session_id = ?",
+                    (json.dumps(tool_calls), now, message_id, self.id),
+                )
+            await db.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (now, self.id),
+            )
+            await db.commit()
+
     async def rename(self, name: str):
         now = datetime.now(timezone.utc).isoformat()
         async with get_db() as db:

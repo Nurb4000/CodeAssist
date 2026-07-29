@@ -153,6 +153,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     websearch_tool = WebSearchTool()
     if tool_config:
         websearch_tool.max_chars = tool_config.websearch_max_chars
+        websearch_tool._search_engine = tool_config.websearch_engine
     registry.register(websearch_tool)
 
     # Register Question tool

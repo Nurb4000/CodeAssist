@@ -79,13 +79,54 @@ class WebSearchTool(Tool):
             return await self._search_generic(query, num_results)
 
     async def _search_generic(self, query: str, num_results: int) -> ToolResult:
-        """Generic web search using a simple HTTP approach."""
-        # This is a fallback implementation
-        # In production, you'd use a proper search API or library
-        return ToolResult(
-            output=f"Web search for '{query}'\n\nNote: Install 'duckduckgo_search' package for full search functionality.\n"
-                   f"pip install duckduckgo_search"
-        )
+        """Generic web search using HTML scraping of search results."""
+        import re
+        search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(search_url, headers=headers, follow_redirects=True)
+                resp.raise_for_status()
+
+            results = []
+            # Simple regex extraction of result links from DDG HTML
+            for match in re.finditer(
+                r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
+                resp.text,
+            ):
+                results.append({"title": match.group(2), "url": match.group(1)})
+                if len(results) >= num_results:
+                    break
+
+            if not results:
+                # Fallback: try extracting from SERP snippet
+                for match in re.finditer(
+                    r'class="result__snippet"[^>]*>([^<]+)',
+                    resp.text,
+                ):
+                    pass
+                return ToolResult(
+                    output=f"Web search for '{query}'\n\nNo structured results found. "
+                           f"The duckduckgo_search package provides better results.\n"
+                           f"pip install duckduckgo_search"
+                )
+
+            output_lines = [f"**Search Results for: {query}**\n"]
+            for i, r in enumerate(results, 1):
+                output_lines.append(f"{i}. **{r['title']}**")
+                output_lines.append(f"   {r['url']}")
+                output_lines.append("")
+
+            return ToolResult(output="\n".join(output_lines))
+
+        except Exception as e:
+            return ToolResult(
+                output=f"Web search for '{query}' failed: {e}\n\n"
+                       f"Install 'duckduckgo_search' package for a more reliable search backend:\n"
+                       f"pip install duckduckgo_search"
+            )
 
 
 class QuestionTool(Tool):
