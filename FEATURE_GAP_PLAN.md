@@ -51,7 +51,7 @@ After thorough review of both codebases, opencode has added several significant 
 
 ---
 
-### 2. Subagent System (Task Tool)
+### 2. Subagent System (Task Tool) ✅ COMPLETE
 **What:** A `task` tool that lets the main agent spawn subagents with specialized capabilities. Supports foreground (wait for result) and background (notify on completion) modes. Enforces depth limits to prevent infinite nesting.
 
 **Key agents:**
@@ -62,35 +62,35 @@ After thorough review of both codebases, opencode has added several significant 
 - `compaction` - hidden agent for context summarization
 
 **Implementation:**
-- [ ] Add `task` tool to `tools/` with parameters: `description`, `prompt`, `subagent_type`, `task_id` (resume), `background` (bool)
-- [ ] Create subagent session management: child sessions linked to parent via `parent_id`
-- [ ] Implement depth limit config (`subagent_depth` in config, default 1)
-- [ ] Permission inheritance: derive child permissions from parent + agent type restrictions
-- [ ] Background mode: async task execution with notification injection into parent session
-- [ ] Foreground mode: wait for subagent result, inject into parent conversation
-- [ ] Add `explore` and `general` agent types to `agents.py`
-- [ ] Task result formatting: `<task id="..." state="completed|error|running">` XML structure
-- [ ] Deny subagents from using `task` and `todowrite` unless explicitly permitted
+- [x] Add `task` tool to `tools/` with parameters: `description`, `prompt`, `subagent_type`, `task_id` (resume), `background` (bool)
+- [x] Create subagent session management: child sessions linked to parent via `parent_id`
+- [x] Implement depth limit config (`subagent_depth` in config, default 1)
+- [x] Permission inheritance: derive child permissions from parent + agent type restrictions
+- [x] Background mode: async task execution with notification injection into parent session
+- [x] Foreground mode: wait for subagent result, inject into parent conversation
+- [x] Add `explore`, `general`, `build` agent types to `agents.py`
+- [x] Task result formatting: `<task id="..." state="completed|error|running">` XML structure
+- [x] Deny subagents from using `task` and `todowrite` unless explicitly permitted
 
-**Effort:** 3-4 days
+**Effort:** 3-4 days ✅
 
 ---
 
-### 3. Snapshot and Revert System
+### 3. Snapshot and Revert System ✅ COMPLETE
 **What:** Git-based snapshot tracking at session boundaries. Captures workspace state before/after each turn. Enables reverting changes made by the agent. Uses a separate hidden git repo to avoid polluting user's git history.
 
 **Implementation:**
-- [ ] Create `snapshot.py` module: track workspace state using git at session boundaries
-- [ ] Use a separate hidden git repo (`.codeassist/snapshot/`) to avoid polluting user's git history
-- [ ] Snapshot before each agent turn starts, after each turn completes
-- [ ] Store snapshot hashes in session metadata
-- [ ] Add `revert` capability: stage revert, preview diff, commit revert
-- [ ] Compute file-level diffs between snapshots (additions, deletions, modifications)
-- [ ] Session summary: aggregate diff stats per session (files changed, lines added/removed)
-- [ ] Config option to disable snapshots (`snapshot = false`)
-- [ ] Cleanup: prune old snapshots after configurable retention period
+- [x] Create `snapshot.py` module: track workspace state using git at session boundaries
+- [x] Use a separate hidden git repo (`.codeassist/snapshot/`) to avoid polluting user's git history
+- [x] Snapshot before each agent turn starts, after each turn completes
+- [x] Store snapshot hashes in session metadata (DB snapshots table)
+- [x] Add `revert` tool: list snapshots, preview diff, apply revert
+- [x] Compute file-level diffs between snapshots (additions, deletions, modifications)
+- [x] Session summary: aggregate diff stats per session (files changed, lines added/removed)
+- [x] Config option to disable snapshots (`snapshot.enabled = false`)
+- [x] Cleanup: prune old snapshots after configurable retention period
 
-**Effort:** 3-4 days
+**Effort:** 3-4 days ✅
 
 ---
 
@@ -296,9 +296,9 @@ Phase A (Week 1): Foundation ✅ COMPLETE
   2. Structured Question System (1-2 days) ✅ COMPLETE
   3. LSP Tool                 (1-2 days) ✅ COMPLETE
 
-Phase B (Week 2): Core Features
-  4. Subagent System          (3-4 days)
-  5. Snapshot and Revert      (3-4 days)
+Phase B (Week 2): Core Features ✅ COMPLETE
+  4. Subagent System          (3-4 days) ✅ COMPLETE
+  5. Snapshot and Revert      (3-4 days) ✅ COMPLETE
 
 Phase C (Week 3): Polish
   6. Advanced Compaction      (3-4 days)
@@ -316,6 +316,7 @@ Phase D (Week 4): Extras
 
 **Total estimated effort: ~4 weeks of focused development**
 **Phase A completed: 2026-08-05**
+**Phase B completed: 2026-08-05**
 
 ---
 
@@ -357,8 +358,8 @@ Add to `config.toml`:
 
 ```toml
 [agent]
-subagent_depth = 1                    # Max nested subagent depth
-default_agent = "build"               # Default agent type
+subagent_depth = 1                    # Max nested subagent depth ✅ APPLIED
+default_agent = "build"               # Default agent type ✅ APPLIED
 
 [compaction]
 enabled = true
@@ -373,7 +374,8 @@ max_bytes = 51200                     # 50KB
 retention_days = 7
 
 [snapshot]
-enabled = true                        # Enable git-based snapshots
+enabled = true                        # Enable git-based snapshots ✅ APPLIED
+retention_days = 7                    # Prune old snapshots after N days ✅ APPLIED
 
 [instructions]
 paths = []                            # Additional instruction file paths/URLs
