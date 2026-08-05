@@ -225,6 +225,81 @@ class AgentManager:
                 },
             )
 
+        # Add build agent (primary agent with full tool access)
+        if "build" not in self._agents:
+            self._agents["build"] = AgentConfig(
+                name="Build",
+                description="Primary build agent with full tool access. Executes plans, writes code, runs tests.",
+                instructions=(
+                    "You are the build agent. You have full access to all tools. "
+                    "Your job is to execute tasks, write code, and implement features. "
+                    "When you receive a plan, follow it carefully. Use todo tool to track progress."
+                ),
+                permissions={
+                    "read": ["allow"],
+                    "write": ["allow"],
+                    "edit": ["allow"],
+                    "shell": ["allow"],
+                    "glob": ["allow"],
+                    "grep": ["allow"],
+                    "webfetch": ["allow"],
+                    "todo": ["allow"],
+                    "git": ["allow"],
+                    "task": ["allow"],
+                },
+            )
+
+        # Add general agent (multi-step task execution subagent)
+        if "general" not in self._agents:
+            self._agents["general"] = AgentConfig(
+                name="General",
+                description="General-purpose subagent for multi-step task execution. Has full tool access but cannot spawn subagents.",
+                instructions=(
+                    "You are a general-purpose subagent. Execute the given task thoroughly. "
+                    "You have access to most tools but CANNOT use 'task' or 'todowrite' — "
+                    "those are reserved for the parent agent. Report your findings clearly."
+                ),
+                permissions={
+                    "read": ["allow"],
+                    "write": ["allow"],
+                    "edit": ["allow"],
+                    "shell": ["allow"],
+                    "glob": ["allow"],
+                    "grep": ["allow"],
+                    "webfetch": ["allow"],
+                    "todo": ["allow"],
+                    "git": ["allow"],
+                    "task": ["deny"],
+                },
+            )
+
+        # Add explore agent (fast codebase exploration, read-only)
+        if "explore" not in self._agents:
+            self._agents["explore"] = AgentConfig(
+                name="Explore",
+                description="Fast read-only subagent for codebase exploration. Use for parallel discovery tasks.",
+                instructions=(
+                    "You are an explore subagent. Your job is to quickly gather information about the codebase. "
+                    "You can ONLY use read-only tools: read, glob, grep, directory, symbol_search, lsp. "
+                    "DO NOT modify any files. Report your findings concisely with file paths and line numbers."
+                ),
+                permissions={
+                    "read": ["allow"],
+                    "write": ["deny"],
+                    "edit": ["deny"],
+                    "shell": ["deny"],
+                    "glob": ["allow"],
+                    "grep": ["allow"],
+                    "webfetch": ["allow"],
+                    "todo": ["deny"],
+                    "git": ["deny"],
+                    "task": ["deny"],
+                    "symbol_search": ["allow"],
+                    "directory": ["allow"],
+                    "lsp": ["allow"],
+                },
+            )
+
     def get_agent(self, name: str) -> AgentConfig | None:
         """Get an agent by name."""
         return self._agents.get(name)

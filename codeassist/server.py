@@ -17,6 +17,7 @@ from .mcp_client import MCPClient
 from .skills import SkillRegistry
 from .plugins import PluginRegistry
 from .trust_registry import TrustRegistry
+from .snapshot import get_snapshot_manager
 from tools import ToolRegistry, create_registry
 from .agents import agent_manager
 
@@ -191,6 +192,13 @@ async def lifespan(app: FastAPI):
     await init_skills()
     await init_plugins()
     log.info("CodeAssist starting | model=%s workspace=%s", cfg.llm.model, cfg.workspace)
+
+    # Initialize snapshot manager
+    from codeassist.snapshot import get_snapshot_manager
+    sm = get_snapshot_manager(cfg.workspace, enabled=True)
+    await sm.initialize()
+    await sm.load_snapshots()
+
     yield
     if mcp_client:
         await mcp_client.close()
@@ -306,6 +314,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     session_tool = tools.get("session")
     if session_tool and hasattr(session_tool, "current_session_id"):
         session_tool.current_session_id = session_id
+
+    # Configure TaskTool with session context for subagent spawning
+    task_tool = tools.get("task")
+    if task_tool and hasattr(task_tool, "configure"):
+        task_tool.configure(session_id, cfg, tools)
 
     agent = Agent(cfg, session, tools, system_prompt)
     agent.reset_trust()

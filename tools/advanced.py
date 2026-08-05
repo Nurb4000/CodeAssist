@@ -340,68 +340,144 @@ def datetime_now() -> str:
 class TaskTool(Tool):
     name = "task"
     description = (
-        "Run a background task or subagent. Use this for long-running operations "
-        "or to delegate complex work to a subagent. Returns a task ID that can be "
-        "used to check status or get results."
+        "Spawn a subagent to execute a task. Supports foreground (wait for result) "
+        "and background (fire-and-forget with notification) modes.\n\n"
+        "Subagent types:\n"
+        "- **explore**: Fast, read-only codebase exploration. Use glob, grep, read only.\n"
+        "- **general**: Multi-step task execution with full tool access (except task/todowrite).\n"
+        "- **build**: Full-access agent for complex implementation tasks.\n\n"
+        "In foreground mode, the tool waits for the subagent to complete and returns its result. "
+        "In background mode, the tool returns immediately with a task ID; the parent agent will "
+        "receive a notification when the subagent completes.\n\n"
+        "Use `task_id` parameter to resume an existing task session."
     )
     parameters = {
         "type": "object",
         "properties": {
             "description": {
                 "type": "string",
-                "description": "Description of the task",
+                "description": "Short description (3-5 words) of what the subagent should do",
             },
             "prompt": {
                 "type": "string",
-                "description": "Instructions for the task",
+                "description": "Detailed instructions for the subagent. Be specific about what to explore, implement, or analyze.",
             },
-            "tool": {
+            "subagent_type": {
                 "type": "string",
-                "description": "Specific tool to use (optional)",
+                "enum": ["explore", "general", "build"],
+                "description": "Type of subagent to spawn. 'explore' is read-only and fast. 'general' has full tool access. 'build' is for complex implementation.",
+            },
+            "task_id": {
+                "type": "string",
+                "description": "Existing task ID to resume. If not provided, a new task is created.",
+            },
+            "background": {
+                "type": "boolean",
+                "description": "If true, run in background and return immediately. Parent will be notified on completion. Default: false (foreground).",
             },
         },
-        "required": ["description", "prompt"],
+        "required": ["description", "prompt", "subagent_type"],
     }
 
     def __init__(self):
-        self._tasks: dict[str, dict] = {}
+        self._parent_session_id = ""
+        self._config = None
+        self._tools_registry = None
 
-    async def execute(self, description: str, prompt: str, tool: str | None = None) -> ToolResult:
-        import uuid
+    def configure(self, session_id: str, config=None, tools_registry=None):
+        """Configure the task tool with session context."""
+        self._parent_session_id = session_id
+        self._config = config
+        self._tools_registry = tools_registry
 
-        task_id = str(uuid.uuid4())[:8]
-        self._tasks[task_id] = {
-            "id": task_id,
-            "description": description,
-            "prompt": prompt,
-            "tool": tool,
-            "status": "running",
-            "result": None,
-        }
+    async def execute(
+        self,
+        description: str,
+        prompt: str,
+        subagent_type: str,
+        task_id: str | None = None,
+        background: bool = False,
+    ) -> ToolResult:
+        from codeassist.subagent import subagent_manager
 
-        # In a real implementation, this would spawn a background task
-        # For now, we'll simulate completion
-        self._tasks[task_id]["status"] = "completed"
-        self._tasks[task_id]["result"] = f"Task '{description}' completed successfully."
+        # Validate config
+        if not self._config:
+            return ToolResult(output="Error: TaskTool not configured. Subagents require server context.", error=True)
 
-        return ToolResult(
-            output=f"**Task Created:** {description}\n"
-                   f"**Task ID:** {task_id}\n"
-                   f"**Status:** Completed\n"
-                   f"**Result:** {self._tasks[task_id]['result']}"
+        # Check depth limit
+        max_depth = self._config.agent.subagent_depth
+        if max_depth <= 0:
+            return ToolResult(output="Error: Subagents are disabled (subagent_depth=0).", error=True)
+
+        # Create or resume task
+        task = await subagent_manager.create_task(
+            description=description,
+            prompt=prompt,
+            subagent_type=subagent_type,
+            parent_session_id=self._parent_session_id,
+            background=background,
+            task_id=task_id,
         )
 
-    def get_task(self, task_id: str) -> dict | None:
-        """Get task status and result."""
-        return self._tasks.get(task_id)
+        if background:
+            # Background mode: start async and return immediately
+            async def _run_background():
+                try:
+                    await subagent_manager.start_task(
+                        task.id,
+                        self._agent_runner,
+                        self._config,
+                        self._tools_registry,
+                        depth=0,
+                    )
+                except Exception as e:
+                    log.exception("Background subagent %s failed", task.id)
+
+            asyncio.create_task(_run_background())
+
+            return ToolResult(
+                output=f'<task id="{task.id}" state="running">\n'
+                       f'Subagent "{subagent_type}" started in background.\n'
+                       f'Description: {description}\n'
+                       f'The parent agent will be notified when this task completes.\n'
+                       f'</task>'
+            )
+        else:
+            # Foreground mode: wait for result
+            try:
+                result = await subagent_manager.start_task(
+                    task.id,
+                    self._agent_runner,
+                    self._config,
+                    self._tools_registry,
+                    depth=0,
+                )
+
+                status = "completed" if task.status == "completed" else "error"
+                return ToolResult(
+                    output=f'<task id="{task.id}" state="{status}">\n'
+                           f'{result}\n'
+                           f'</task>'
+                )
+            except Exception as e:
+                return ToolResult(
+                    output=f'<task id="{task.id}" state="error">\n'
+                           f'Error running subagent: {e}\n'
+                           f'</task>',
+                    error=True,
+                )
+
+    def _agent_runner(self, agent, prompt):
+        """Default agent runner — runs the agent loop."""
+        return agent.run(prompt)
+
+    def get_task_status(self, task_id: str) -> dict | None:
+        """Get task status."""
+        from codeassist.subagent import subagent_manager
+        task = subagent_manager.get_task(task_id)
+        return task.to_dict() if task else None
 
     def list_tasks(self) -> list[dict]:
         """List all tasks."""
-        return [
-            {
-                "id": t["id"],
-                "description": t["description"],
-                "status": t["status"],
-            }
-            for t in self._tasks.values()
-        ]
+        from codeassist.subagent import subagent_manager
+        return subagent_manager.list_tasks()

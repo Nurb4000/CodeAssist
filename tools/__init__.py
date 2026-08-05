@@ -124,6 +124,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from tools.documentation import DocumentationTool
     from tools.tool_manager import ToolManagerTool
     from tools.advanced import WebSearchTool, QuestionTool
+    from tools.revert import RevertTool
     from tools.create_tool import CreateTool
     from tools.create_skill import CreateSkill
     from tools.diff_preview import DiffPreviewTool
@@ -231,6 +232,9 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     # Register Session tool
     registry.register(SessionTool(current_session_id=""))  # Will be updated per-session
+
+    # Register Revert tool
+    registry.register(RevertTool())
 
     # Register LSP tool (if LSP client exists)
     if lsp_client:

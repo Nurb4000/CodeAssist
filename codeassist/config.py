@@ -32,6 +32,7 @@ class AgentConfig:
     max_iterations: int = 30
     name: str = "CodeAssist"
     default_agent: str = "default"
+    subagent_depth: int = 1  # Max nested subagent depth (0 = no subagents)
     # Auto-creation settings
     auto_create_skills: bool = True
     auto_create_tools: bool = False  # Disabled by default (security)
@@ -80,6 +81,12 @@ class GitConfig:
 
 
 @dataclass
+class SnapshotConfig:
+    enabled: bool = True
+    retention_days: int = 7
+
+
+@dataclass
 class CompactionConfig:
     enabled: bool = True
     threshold_pct: int = 75
@@ -98,6 +105,7 @@ class Config:
     plugins: PluginConfig = field(default_factory=PluginConfig)
     lsp: LSPConfig = field(default_factory=LSPConfig)
     git: GitConfig = field(default_factory=GitConfig)
+    snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
@@ -138,6 +146,7 @@ class Config:
                 max_iterations=raw.get("agent", {}).get("max_iterations", 30),
                 name=raw.get("agent", {}).get("name", "CodeAssist"),
                 default_agent=raw.get("agent", {}).get("default_agent", "default"),
+                subagent_depth=raw.get("agent", {}).get("subagent_depth", 1),
             ),
             tools=ToolConfig(
                 shell_timeout=raw.get("tools", {}).get("shell_timeout", 120),
@@ -166,6 +175,10 @@ class Config:
             git=GitConfig(
                 enabled=raw.get("git", {}).get("enabled", True),
                 auto_detect=raw.get("git", {}).get("auto_detect", True),
+            ),
+            snapshot=SnapshotConfig(
+                enabled=raw.get("snapshot", {}).get("enabled", True),
+                retention_days=raw.get("snapshot", {}).get("retention_days", 7),
             ),
             compaction=CompactionConfig(
                 enabled=raw.get("compaction", {}).get("enabled", True),
