@@ -288,11 +288,174 @@ class LSPClient:
                 log.debug("get_completions failed on %s: %s", name, e)
         return []
 
+    async def get_definition(self, uri: str, line: int, character: int) -> list[dict]:
+        """Get definition locations for a symbol at position."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/definition", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    return self._format_locations(result)
+                elif isinstance(result, dict) and result.get("targets"):
+                    return self._format_locations(result["targets"])
+                elif isinstance(result, dict):
+                    return self._format_locations([result])
+            except Exception as e:
+                log.debug("get_definition failed on %s: %s", name, e)
+        return []
+
+    async def get_references(self, uri: str, line: int, character: int, include_declaration: bool = True) -> list[dict]:
+        """Get all references to a symbol at position."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/references", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                    "context": {"includeDeclaration": include_declaration},
+                }, timeout=10.0)
+                if isinstance(result, list):
+                    return self._format_locations(result)
+            except Exception as e:
+                log.debug("get_references failed on %s: %s", name, e)
+        return []
+
+    async def get_hover(self, uri: str, line: int, character: int) -> dict:
+        """Get hover information for a symbol at position."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/hover", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                }, timeout=5.0)
+                if result and result.get("contents"):
+                    contents = result["contents"]
+                    if isinstance(contents, dict):
+                        return {"value": contents.get("value", ""), "kind": contents.get("kind", "")}
+                    elif isinstance(contents, list):
+                        parts = []
+                        for c in contents:
+                            if isinstance(c, dict):
+                                parts.append(c.get("value", ""))
+                            else:
+                                parts.append(str(c))
+                        return {"value": "\n".join(parts), "kind": "markdown"}
+                    else:
+                        return {"value": str(contents), "kind": "plain"}
+            except Exception as e:
+                log.debug("get_hover failed on %s: %s", name, e)
+        return {}
+
+    async def get_document_symbols(self, uri: str) -> list[dict]:
+        """Get all symbols in a document."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/documentSymbol", {
+                    "textDocument": {"uri": uri},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    symbols = []
+                    for sym in result:
+                        symbols.append({
+                            "name": sym.get("name", ""),
+                            "kind": sym.get("kind", ""),
+                            "range": sym.get("range", {}),
+                            "children": sym.get("children", []),
+                        })
+                    return symbols
+            except Exception as e:
+                log.debug("get_document_symbols failed on %s: %s", name, e)
+        return []
+
+    async def get_workspace_symbols(self, query: str) -> list[dict]:
+        """Search for symbols across the workspace."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "workspace/symbol", {
+                    "query": query,
+                }, timeout=10.0)
+                if isinstance(result, list):
+                    symbols = []
+                    for sym in result:
+                        loc = sym.get("location", {})
+                        symbols.append({
+                            "name": sym.get("name", ""),
+                            "kind": sym.get("kind", ""),
+                            "uri": loc.get("uri", ""),
+                            "range": loc.get("range", {}),
+                            "container_name": sym.get("containerName", ""),
+                        })
+                    return symbols[:50]
+            except Exception as e:
+                log.debug("get_workspace_symbols failed on %s: %s", name, e)
+        return []
+
+    async def rename_symbol(self, uri: str, line: int, character: int, new_name: str) -> dict | None:
+        """Rename a symbol and all its references."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/rename", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                    "newName": new_name,
+                }, timeout=10.0)
+                if result:
+                    return result
+            except Exception as e:
+                log.debug("rename_symbol failed on %s: %s", name, e)
+        return None
+
+    async def get_type_definition(self, uri: str, line: int, character: int) -> list[dict]:
+        """Get type definition locations for a symbol at position."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/typeDefinition", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    return self._format_locations(result)
+                elif isinstance(result, dict):
+                    return self._format_locations([result])
+            except Exception as e:
+                log.debug("get_type_definition failed on %s: %s", name, e)
+        return []
+
+    async def get_implementation(self, uri: str, line: int, character: int) -> list[dict]:
+        """Get implementation locations for a symbol at position."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/implementation", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    return self._format_locations(result)
+                elif isinstance(result, dict):
+                    return self._format_locations([result])
+            except Exception as e:
+                log.debug("get_implementation failed on %s: %s", name, e)
+        return []
+
+    def _format_locations(self, locations: list) -> list[dict]:
+        """Format LSP location objects for agent consumption."""
+        result = []
+        for loc in locations:
+            if isinstance(loc, dict):
+                uri = loc.get("uri", "")
+                rng = loc.get("range", {})
+                result.append({
+                    "uri": uri,
+                    "line": rng.get("start", {}).get("line", 0),
+                    "character": rng.get("start", {}).get("character", 0),
+                })
+        return result
+
     async def shutdown(self):
         """Shutdown all LSP servers."""
         for name, proc in self._servers.items():
             try:
-                # Cancel reader
                 reader = self._readers.pop(name, None)
                 if reader:
                     reader.cancel()
@@ -308,25 +471,39 @@ class LSPClient:
 
 
 class LSPTool(Tool):
-    """Tool for interacting with LSP servers."""
+    """Tool for interacting with LSP servers. Supports 9 operations."""
 
     name = "lsp"
     description = (
-        "Query language servers for diagnostics, completions, and formatting. "
-        "Use 'diagnostics' to check a file for errors, 'format' to format code, "
-        "or 'completions' to get suggestions at a position."
+        "Query language servers for code intelligence. Read-only operation, always allowed.\n\n"
+        "Actions:\n"
+        "- diagnostics: Check file for errors/warnings\n"
+        "- format: Format the document\n"
+        "- completions: Get autocomplete suggestions at position\n"
+        "- definition: Find symbol definition at position\n"
+        "- references: Find all references to symbol at position\n"
+        "- hover: Get hover info (docstring, type) at position\n"
+        "- document_symbols: List all symbols in file\n"
+        "- workspace_symbols: Search symbols across workspace\n"
+        "- rename: Rename symbol and all references\n"
+        "- type_definition: Find type definition at position\n"
+        "- implementation: Find implementations at position"
     )
     parameters = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["diagnostics", "format", "completions"],
+                "enum": [
+                    "diagnostics", "format", "completions", "definition",
+                    "references", "hover", "document_symbols",
+                    "workspace_symbols", "rename", "type_definition", "implementation"
+                ],
                 "description": "LSP action to perform",
             },
             "file_path": {
                 "type": "string",
-                "description": "Path to the file",
+                "description": "Path to the file (required except for workspace_symbols)",
             },
             "language": {
                 "type": "string",
@@ -334,32 +511,75 @@ class LSPTool(Tool):
             },
             "line": {
                 "type": "integer",
-                "description": "Line number (0-indexed, for completions)",
+                "description": "Line number (0-indexed, for position-based actions)",
             },
             "character": {
                 "type": "integer",
-                "description": "Character position (0-indexed, for completions)",
+                "description": "Character position (0-indexed, for position-based actions)",
+            },
+            "query": {
+                "type": "string",
+                "description": "Search query (for workspace_symbols)",
+            },
+            "new_name": {
+                "type": "string",
+                "description": "New symbol name (for rename action)",
             },
         },
-        "required": ["action", "file_path"],
+        "required": ["action"],
     }
 
     def __init__(self, lsp_client: LSPClient):
         self.lsp_client = lsp_client
 
-    async def execute(self, action: str, file_path: str, language: str | None = None,
-                     line: int | None = None, character: int | None = None) -> ToolResult:
+    async def execute(
+        self,
+        action: str,
+        file_path: str | None = None,
+        language: str | None = None,
+        line: int | None = None,
+        character: int | None = None,
+        query: str | None = None,
+        new_name: str | None = None,
+    ) -> ToolResult:
         from tools.security import validate_path
 
         try:
+            # Check if any LSP server is available
+            if not self.lsp_client._servers:
+                return ToolResult(output="No LSP servers available. Configure LSP in config.toml or via /api/lsp.")
+
+            # workspace_symbols doesn't need a file path
+            if action == "workspace_symbols":
+                if not query:
+                    return ToolResult(output="Error: query is required for workspace_symbols", error=True)
+                symbols = await self.lsp_client.get_workspace_symbols(query)
+                if not symbols:
+                    return ToolResult(output=f"No symbols found matching '{query}'.")
+                result = [f"**Workspace Symbols for '{query}':**\n"]
+                for sym in symbols[:30]:
+                    uri = Path(sym["uri"]).name if sym.get("uri") else "unknown"
+                    ln = sym.get("range", {}).get("start", {}).get("line", 0) + 1
+                    container = f" (in {sym['container_name']})" if sym.get("container_name") else ""
+                    result.append(f"- **{sym['name']}** ({sym['kind']}) at {uri}:{ln}{container}")
+                return ToolResult(output="\n".join(result))
+
+            # All other actions need file_path
+            if not file_path:
+                return ToolResult(output=f"Error: file_path is required for action '{action}'", error=True)
+
             path = Path(file_path).resolve()
+
+            # File existence check
+            if not path.exists():
+                return ToolResult(output=f"Error: file does not exist: {file_path}", error=True)
+
             uri = validate_path(path)
 
             if action == "diagnostics":
                 diagnostics = await self.lsp_client.get_diagnostics(uri, language or "")
                 if not diagnostics:
                     return ToolResult(output="No diagnostics found.")
-
                 result = ["**Diagnostics:**\n"]
                 for diag in diagnostics:
                     severity = {
@@ -368,36 +588,106 @@ class LSPTool(Tool):
                         LSPDiagnostic.SEVERITY_INFORMATION: "INFO",
                         LSPDiagnostic.SEVERITY_HINT: "HINT",
                     }.get(diag.severity, "UNKNOWN")
-
                     ln = diag.range.get("start", {}).get("line", 0) + 1
                     col = diag.range.get("start", {}).get("character", 0) + 1
                     result.append(f"- [{severity}] Line {ln}:{col}: {diag.message}")
-
                 return ToolResult(output="\n".join(result))
 
             elif action == "format":
-                text = path.read_text(encoding="utf-8") if path.exists() else ""
+                text = path.read_text(encoding="utf-8")
                 formatted = await self.lsp_client.format_document(uri, text)
                 if formatted:
                     return ToolResult(output=f"```{language or 'text'}\n{formatted}\n```")
-                else:
-                    return ToolResult(output="Formatting not available or no changes needed.")
+                return ToolResult(output="Formatting not available or no changes needed.")
 
             elif action == "completions":
                 if line is None or character is None:
                     return ToolResult(output="Error: line and character are required for completions", error=True)
-
                 completions = await self.lsp_client.get_completions(uri, line, character)
                 if not completions:
                     return ToolResult(output="No completions available.")
-
                 result = ["**Completions:**\n"]
                 for comp in completions[:20]:
                     label = comp.get("label", "")
                     kind = comp.get("kind", "")
                     detail = comp.get("detail", "")
                     result.append(f"- **{label}** ({kind}): {detail}")
+                return ToolResult(output="\n".join(result))
 
+            elif action == "definition":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for definition", error=True)
+                locations = await self.lsp_client.get_definition(uri, line, character)
+                if not locations:
+                    return ToolResult(output="No definition found.")
+                result = ["**Definition:**\n"]
+                for loc in locations:
+                    fname = Path(loc["uri"]).name
+                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "references":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for references", error=True)
+                locations = await self.lsp_client.get_references(uri, line, character)
+                if not locations:
+                    return ToolResult(output="No references found.")
+                result = [f"**References ({len(locations)}):**\n"]
+                for loc in locations[:30]:
+                    fname = Path(loc["uri"]).name
+                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "hover":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for hover", error=True)
+                hover = await self.lsp_client.get_hover(uri, line, character)
+                if not hover:
+                    return ToolResult(output="No hover information available.")
+                return ToolResult(output=f"**Hover Info:**\n{hover['value']}")
+
+            elif action == "document_symbols":
+                symbols = await self.lsp_client.get_document_symbols(uri)
+                if not symbols:
+                    return ToolResult(output="No symbols found in document.")
+                result = ["**Document Symbols:**\n"]
+                for sym in symbols[:50]:
+                    ln = sym.get("range", {}).get("start", {}).get("line", 0) + 1
+                    result.append(f"- {sym['name']} ({sym['kind']}) at line {ln}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "rename":
+                if line is None or character is None or not new_name:
+                    return ToolResult(output="Error: line, character, and new_name are required for rename", error=True)
+                result = await self.lsp_client.rename_symbol(uri, line, character, new_name)
+                if not result:
+                    return ToolResult(output="Rename not available or failed.")
+                changes = result.get("changes", {})
+                total = sum(len(v) for v in changes.values())
+                return ToolResult(output=f"Rename would change {total} locations. (Preview only — use edit tool to apply.)")
+
+            elif action == "type_definition":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for type_definition", error=True)
+                locations = await self.lsp_client.get_type_definition(uri, line, character)
+                if not locations:
+                    return ToolResult(output="No type definition found.")
+                result = ["**Type Definition:**\n"]
+                for loc in locations:
+                    fname = Path(loc["uri"]).name
+                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "implementation":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for implementation", error=True)
+                locations = await self.lsp_client.get_implementation(uri, line, character)
+                if not locations:
+                    return ToolResult(output="No implementations found.")
+                result = ["**Implementations:**\n"]
+                for loc in locations:
+                    fname = Path(loc["uri"]).name
+                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
                 return ToolResult(output="\n".join(result))
 
             else:

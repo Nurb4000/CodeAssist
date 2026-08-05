@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 DB_PATH = Path(__file__).parent / "data" / "codeassist.db"
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class _DBPool:
@@ -124,8 +124,12 @@ async def init_db():
             await _add_v3_tables(db)
             current_version = 3
 
-        if current_version < SCHEMA_VERSION:
+        if current_version < 4:
             await _add_v4_tables(db)
+            current_version = 4
+
+        if current_version < SCHEMA_VERSION:
+            await _add_v5_tables(db)
             current_version = SCHEMA_VERSION
 
         await db.execute(
@@ -415,6 +419,61 @@ async def _add_v4_tables(db):
     for idx in indexes:
         await db.execute(idx)
     
+    await db.commit()
+
+
+async def _add_v5_tables(db):
+    """Add tables for Phase A features: questions, snapshots, todos, permission_saves."""
+
+    # Question persistence for structured questions
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS questions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            message_id TEXT,
+            tool_call_id TEXT,
+            questions TEXT,
+            answers TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT
+        )
+    """)
+
+    # Snapshot tracking for revert system
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS snapshots (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            turn_number INTEGER,
+            git_hash TEXT,
+            created_at TEXT
+        )
+    """)
+
+    # Todo persistence for subagent isolation
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS todos (
+            id TEXT PRIMARY KEY,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            priority TEXT NOT NULL DEFAULT 'medium',
+            position INTEGER,
+            created_at TEXT
+        )
+    """)
+
+    # Saved permission preferences
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS permission_saves (
+            id TEXT PRIMARY KEY,
+            tool_name TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            action TEXT NOT NULL,
+            created_at TEXT
+        )
+    """)
+
     await db.commit()
 
 

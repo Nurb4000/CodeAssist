@@ -333,6 +333,132 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function showQuestionDialog(questionId, data) {
+    const div = document.createElement('div');
+    div.className = 'question-dialog';
+    div.id = `question-${questionId}`;
+
+    const structured = data.questions && data.questions.length > 0;
+
+    if (structured) {
+        let questionsHtml = '';
+        data.questions.forEach((q, idx) => {
+            const isMultiple = q.multiple === true;
+            const inputType = isMultiple ? 'checkbox' : (idx === 0 && data.questions.length === 1 && !q.options ? 'text' : (isMultiple ? 'checkbox' : 'radio'));
+
+            let optionsHtml = '';
+            if (q.options && q.options.length > 0) {
+                optionsHtml = q.options.map((opt, oIdx) => `
+                    <label class="question-option">
+                        <input type="${inputType}" name="q${idx}" value="${escapeHtml(opt.label)}" data-idx="${idx}">
+                        <span class="option-label">${escapeHtml(opt.label)}</span>
+                        ${opt.description ? `<span class="option-desc">${escapeHtml(opt.description)}</span>` : ''}
+                    </label>
+                `).join('');
+            }
+
+            questionsHtml += `
+                <div class="question-item">
+                    ${q.header ? `<div class="question-header">${escapeHtml(q.header)}</div>` : ''}
+                    <div class="question-text">${escapeHtml(q.question)}</div>
+                    <div class="question-options">${optionsHtml}</div>
+                    <input type="text" class="question-custom" name="q${idx}_custom" data-idx="${idx}" placeholder="Type your own answer...">
+                </div>
+            `;
+        });
+
+        div.innerHTML = `
+            <div class="question-title">Agent has a question</div>
+            ${questionsHtml}
+            <div class="question-actions">
+                <button class="question-btn submit">Submit</button>
+                <button class="question-btn dismiss">Dismiss</button>
+            </div>
+        `;
+    } else {
+        const question = data.question || '';
+        const options = data.options || [];
+        let optionsHtml = '';
+
+        if (options.length > 0) {
+            optionsHtml = options.map((opt, oIdx) => `
+                <label class="question-option">
+                    <input type="radio" name="q0" value="${escapeHtml(opt)}">
+                    <span class="option-label">${escapeHtml(opt)}</span>
+                </label>
+            `).join('');
+        }
+
+        div.innerHTML = `
+            <div class="question-title">Agent has a question</div>
+            <div class="question-item">
+                <div class="question-text">${escapeHtml(question)}</div>
+                <div class="question-options">${optionsHtml}</div>
+                <input type="text" class="question-custom" name="q0_custom" data-idx="0" placeholder="Type your answer...">
+            </div>
+            <div class="question-actions">
+                <button class="question-btn submit">Submit</button>
+                <button class="question-btn dismiss">Dismiss</button>
+            </div>
+        `;
+    }
+
+    messagesEl.appendChild(div);
+    scrollToBottom();
+
+    const submitBtn = div.querySelector('.submit');
+    const dismissBtn = div.querySelector('.dismiss');
+
+    submitBtn.onclick = () => {
+        let answers;
+        if (structured) {
+            answers = [];
+            data.questions.forEach((q, idx) => {
+                const customInput = div.querySelector(`[name="q${idx}_custom"]`);
+                const selected = div.querySelectorAll(`input[name="q${idx}"]:checked`);
+                if (selected.length > 0) {
+                    const vals = Array.from(selected).map(s => s.value);
+                    answers.push(q.multiple ? vals : vals[0]);
+                } else if (customInput && customInput.value.trim()) {
+                    answers.push(customInput.value.trim());
+                } else {
+                    answers.push("");
+                }
+            });
+        } else {
+            const customInput = div.querySelector('[name="q0_custom"]');
+            const selected = div.querySelector('input[name="q0"]:checked');
+            if (selected) {
+                answers = selected.value;
+            } else if (customInput && customInput.value.trim()) {
+                answers = customInput.value.trim();
+            } else {
+                answers = "";
+            }
+        }
+
+        div.remove();
+        showProgress('Processing answer...');
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'question_response',
+                id: questionId,
+                answer: answers,
+            }));
+        }
+    };
+
+    dismissBtn.onclick = () => {
+        div.remove();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'question_rejected',
+                id: questionId,
+            }));
+        }
+    };
+}
+
 function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     const div = document.createElement('div');
     div.className = 'confirm-dialog';
@@ -443,6 +569,9 @@ function connectWS() {
             showError(data.message);
         } else if (data.type === 'plan_update') {
             updatePlanDisplay(data.tasks);
+        } else if (data.type === 'question_request') {
+            hideProgress();
+            showQuestionDialog(data.id, data);
         } else if (data.type === 'confirm_request') {
             hideProgress();
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
