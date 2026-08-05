@@ -94,40 +94,41 @@ After thorough review of both codebases, opencode has added several significant 
 
 ---
 
-### 4. Structured Question System
+### 4. Structured Question System ✅ COMPLETE
 **What:** A proper question/answer protocol where the agent can ask the user structured questions with multiple-choice options, custom answers, and headers. Questions are persisted and trackable.
 
 **Current CodeAssist state:** CodeAssist has a basic `QuestionTool` in `tools/advanced.py` but it's simple free-text.
 
 **Implementation:**
-- [ ] Enhance `QuestionTool` to support structured questions with:
+- [x] Enhance `QuestionTool` to support structured questions with:
   - `questions[]` array, each with `question`, `header`, `options[]`, `multiple` (bool)
   - Options: `label`, `description`
   - Custom answer option (always available)
-- [ ] Persist pending questions in session state
-- [ ] Add question rejection handling (user dismisses question)
-- [ ] Format answers back to agent as: `"question"="answer1, answer2"`
-- [ ] WebSocket events: `question_request` (enhanced), `question_response`, `question_rejected`
-- [ ] UI: render structured questions with radio buttons / checkboxes
+- [x] Persist pending questions in session state (questions table, v5 schema)
+- [x] Add question rejection handling (user dismisses question)
+- [x] Format answers back to agent as: `"question"="answer1, answer2"`
+- [x] WebSocket events: `question_request` (enhanced), `question_response`, `question_rejected`
+- [x] UI: render structured questions with radio buttons / checkboxes
 
-**Effort:** 1-2 days
+**Effort:** 1-2 days ✅
 
 ---
 
-### 5. LSP Tool
+### 5. LSP Tool ✅ COMPLETE
 **What:** A tool that lets the agent query language servers for code intelligence operations.
 
 **Current CodeAssist state:** CodeAssist has `lsp_client.py` but no LSP tool exposed to the agent.
 
 **Implementation:**
-- [ ] Create `lsp` tool in `tools/` with operation parameter
-- [ ] Wire up existing `lsp_client.py` to support all 9 operations
-- [ ] File existence check before LSP queries
-- [ ] LSP server availability check per file type
-- [ ] Result formatting: structured JSON output for agent consumption
-- [ ] Permission: always allow (read-only operation)
+- [x] Create `lsp` tool in `tools/` with operation parameter (11 actions)
+- [x] Wire up existing `lsp_client.py` to support all 9+ operations
+- [x] File existence check before LSP queries
+- [x] LSP server availability check per file type
+- [x] Result formatting: structured output for agent consumption
+- [x] Permission: always allow (read-only operation)
+- [x] Registered in tool registry via `create_registry(lsp_client=...)`
 
-**Effort:** 1-2 days
+**Effort:** 1-2 days ✅
 
 ---
 
@@ -290,10 +291,10 @@ After thorough review of both codebases, opencode has added several significant 
 ## Implementation Order Recommendation
 
 ```
-Phase A (Week 1): Foundation
+Phase A (Week 1): Foundation ✅ COMPLETE
   1. Plan Mode Agent          (2-3 days) ✅ COMPLETE
-  2. Structured Question System (1-2 days)
-  3. LSP Tool                 (1-2 days)
+  2. Structured Question System (1-2 days) ✅ COMPLETE
+  3. LSP Tool                 (1-2 days) ✅ COMPLETE
 
 Phase B (Week 2): Core Features
   4. Subagent System          (3-4 days)
@@ -314,6 +315,7 @@ Phase D (Week 4): Extras
 ```
 
 **Total estimated effort: ~4 weeks of focused development**
+**Phase A completed: 2026-08-05**
 
 ---
 
@@ -383,6 +385,7 @@ disable_project_config = false        # Disable AGENTS.md discovery
 ## Database Schema Changes Needed
 
 ```sql
+-- ✅ APPLIED in v5 schema (Phase A)
 -- Todo persistence (for subagent todo isolation)
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
@@ -412,7 +415,7 @@ CREATE TABLE IF NOT EXISTS permission_saves (
     created_at TEXT
 );
 
--- Question persistence
+-- Question persistence ✅ APPLIED in v5 schema (Phase A)
 CREATE TABLE IF NOT EXISTS questions (
     id TEXT PRIMARY KEY,
     session_id TEXT REFERENCES sessions(id),
@@ -424,6 +427,8 @@ CREATE TABLE IF NOT EXISTS questions (
     created_at TEXT
 );
 ```
+
+**Schema version bumped to 5.** Tables created in `_add_v5_tables()`.
 
 ---
 
