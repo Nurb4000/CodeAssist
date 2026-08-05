@@ -307,9 +307,12 @@ class Agent:
                         return
                     if tc.name == "question":
                         question_id = f"{tc.id}_question"
+                        structured_questions = tc.arguments.get("questions")
+                        legacy_question = tc.arguments.get("question", "")
                         yield AgentEvent("question_request", {
                             "id": question_id,
-                            "question": tc.arguments.get("question", ""),
+                            "question": legacy_question,
+                            "questions": structured_questions,
                             "options": tc.arguments.get("options"),
                             "required": tc.arguments.get("required", False),
                         })
@@ -318,7 +321,14 @@ class Agent:
                         await event.wait()
                         answer = self._confirm_results.pop(question_id, "")
                         self._confirm_events.pop(question_id, None)
-                        await self.session.add_message("tool", content=str(answer), tool_call_id=tc.id)
+                        if not answer:
+                            await self.session.add_message(
+                                "tool",
+                                content="Question was dismissed by user.",
+                                tool_call_id=tc.id,
+                            )
+                        else:
+                            await self.session.add_message("tool", content=str(answer), tool_call_id=tc.id)
                         self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": "question", "output": str(answer)})
                         continue

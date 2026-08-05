@@ -12,7 +12,7 @@ async def reload_tools_endpoint():
     """Hot-reload all tools (built-in + custom) without restarting the server."""
     from ..server import reload_all_tools
     try:
-        reload_all_tools()
+        await reload_all_tools()
         return {"ok": True, "message": "Tools reloaded successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reload tools: {e}")

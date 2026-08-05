@@ -64,7 +64,7 @@ class ToolManagerTool(Tool):
         try:
             from codeassist.server import reload_all_tools
             
-            reload_all_tools()
+            await reload_all_tools()
             return ToolResult(output="Tools reloaded successfully. New tools are now available.")
         except Exception as e:
             log.exception("Failed to reload tools")

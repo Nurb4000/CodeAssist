@@ -104,7 +104,7 @@ class ToolRegistry:
         self._tools.clear()
 
 
-def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_registry=None, plugin_registry=None) -> ToolRegistry:
+def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_registry=None, plugin_registry=None, lsp_client=None) -> ToolRegistry:
     """Create a tool registry with all tools registered."""
     from tools.read import ReadTool
     from tools.write import WriteTool
@@ -231,6 +231,11 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     # Register Session tool
     registry.register(SessionTool(current_session_id=""))  # Will be updated per-session
+
+    # Register LSP tool (if LSP client exists)
+    if lsp_client:
+        from codeassist.lsp_client import LSPTool
+        registry.register(LSPTool(lsp_client))
 
     # Register MCP tools (if MCP client exists)
     if mcp_client:

@@ -117,14 +117,15 @@ skill_registry: SkillRegistry | None = None
 plugin_registry: PluginRegistry | None = None
 tools: ToolRegistry | None = None
 trust_registry: TrustRegistry | None = None
+lsp_client: "LSPClient | None" = None
 
 # Track active WebSocket connections for broadcasting
 _active_websockets: set[WebSocket] = set()
 
 
-def _init_subsystems(cfg: Config):
+async def _init_subsystems(cfg: Config):
     """Initialize all subsystems with the given config."""
-    global mcp_client, skill_registry, plugin_registry, tools, trust_registry
+    global mcp_client, skill_registry, plugin_registry, tools, trust_registry, lsp_client
 
     # Initialize trust registry for secure tool/plugin loading
     trust_registry = TrustRegistry()
@@ -133,7 +134,20 @@ def _init_subsystems(cfg: Config):
     skill_registry = SkillRegistry(cfg.workspace, cfg.skills) if cfg.skills.enabled else None
     plugin_registry = PluginRegistry(cfg.workspace, cfg.plugins, trust_registry=trust_registry) if cfg.plugins.enabled else None
 
-    tools = create_registry(cfg.workspace, cfg.tools, mcp_client, skill_registry, plugin_registry)
+    # Initialize LSP client
+    from .lsp_client import LSPClient
+    lsp_client = LSPClient()
+    if cfg.lsp.enabled and cfg.lsp.servers:
+        for server_name, server_cfg in cfg.lsp.servers.items():
+            await lsp_client.start_server(
+                name=server_name,
+                command=server_cfg.get("command", ""),
+                args=server_cfg.get("args", []),
+                languages=server_cfg.get("languages", []),
+                workspace=cfg.workspace,
+            )
+
+    tools = create_registry(cfg.workspace, cfg.tools, mcp_client, skill_registry, plugin_registry, lsp_client)
 
 
 async def init_agents():
@@ -152,14 +166,14 @@ async def init_plugins():
         plugin_registry.discover()
 
 
-def reload_all_tools():
+async def reload_all_tools():
     """Reload all tools from the tools directory."""
     global tools
     cfg = get_config()
     from codeassist.dynamic_tools import DynamicToolLoader
 
     if tools is None:
-        _init_subsystems(cfg)
+        await _init_subsystems(cfg)
         return
 
     loader = DynamicToolLoader(cfg.workspace, trust_registry=trust_registry)
@@ -170,7 +184,7 @@ def reload_all_tools():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_config()
-    _init_subsystems(cfg)
+    await _init_subsystems(cfg)
     await init_db()
     await init_agents()
     await init_mcp()
@@ -363,7 +377,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 question_id = data.get("id")
                 answer = data.get("answer", "")
                 if question_id:
-                    agent.resolve_question(question_id, answer)
+                    agent.resolve_confirm(question_id, True)
+                    # Also resolve the question tool itself
+                    question_tool = tools.get("question")
+                    if question_tool and hasattr(question_tool, "set_answer"):
+                        question_tool.set_answer(question_id, json.dumps(answer) if isinstance(answer, list) else answer)
+
+            elif data.get("type") == "question_rejected":
+                question_id = data.get("id")
+                if question_id:
+                    agent.resolve_confirm(question_id, False)
+                    question_tool = tools.get("question")
+                    if question_tool and hasattr(question_tool, "reject_question"):
+                        question_tool.reject_question(question_id)
 
             elif data.get("type") == "switch_agent":
                 agent_name = data.get("agent_name")
