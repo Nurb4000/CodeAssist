@@ -17,10 +17,11 @@ from .session import Session
 from tools import ToolRegistry
 from .tokens import compact_messages, check_context_limit, truncate_tool_result, llm_compact_messages, strip_media_from_messages
 from .tool_output_store import get_tool_output_store
+from .permissions import permission_manager, PermissionRuleset
 
 log = logging.getLogger(__name__)
 
-# Tools that require user confirmation before execution
+# Legacy: tools that require user confirmation (replaced by permission_manager)
 CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 
 
@@ -31,12 +32,13 @@ class AgentEvent:
 
 
 class Agent:
-    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str = None):
+    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str = None, agent_ruleset: PermissionRuleset = None):
         self.config = config
         self.session = session
         self.tools = tools
         self.llm = LLMClient(config.llm)
         self.system_prompt = system_prompt or build_system_prompt(config.workspace, config.llm.model)
+        self.agent_ruleset = agent_ruleset  # Agent-specific permission rules
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
@@ -92,23 +94,39 @@ class Agent:
             return False
 
     def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:
-        """Check if a tool call requires user confirmation."""
-        if tool_name not in CONFIRM_TOOLS:
-            return False
+        """Check if a tool call requires user confirmation.
 
-        # Check shell trust
+        Uses the new permission system with pattern-based rules and saved preferences.
+        Falls back to legacy trust flags for backwards compatibility.
+        """
+        file_path = arguments.get("file_path", arguments.get("path", ""))
+
+        # Check shell trust (legacy)
         if tool_name == "shell" and self._trust_shell:
             return False
 
-        # Check workspace write trust — only skip confirmation for in-workspace paths
+        # Check workspace write trust (legacy) — only skip for in-workspace paths
         if tool_name in ("write", "edit") and self._trust_workspace_writes:
-            file_path = arguments.get("file_path", arguments.get("path", ""))
-            if self._is_in_workspace(file_path):
-                log.debug("needs_confirmation: trust=%s, file_path=%s (in workspace)", self._trust_workspace_writes, file_path)
+            if file_path and self._is_in_workspace(file_path):
                 return False
-            log.debug("needs_confirmation: trust=%s, file_path=%s (outside workspace, requires confirmation)", self._trust_workspace_writes, file_path)
 
-        return True
+        # Use permission manager for granular checks
+        try:
+            action = permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
+            if action == "allow":
+                return False
+            if action == "deny":
+                return True  # Will be handled as denied below
+        except Exception as e:
+            log.debug("Permission check failed, falling back to legacy: %s", e)
+
+        # Legacy fallback: tools in CONFIRM_TOOLS need confirmation
+        return tool_name in CONFIRM_TOOLS
+
+    async def get_permission_action(self, tool_name: str, arguments: dict) -> str:
+        """Get the permission action for a tool call. Returns 'allow', 'deny', or 'ask'."""
+        file_path = arguments.get("file_path", arguments.get("path", ""))
+        return await permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
 
     async def wait_for_confirm(self, confirm_id: str) -> bool:
         """Wait for user to approve/deny a tool execution."""
@@ -119,15 +137,19 @@ class Agent:
         self._confirm_events.pop(confirm_id, None)
         return result
 
-    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False):
+    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, remember: bool = False):
         """Resolve a pending confirmation from WebSocket."""
-        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s",
-                 confirm_id, approved, trust_workspace, trust_shell)
+        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, remember=%s",
+                 confirm_id, approved, trust_workspace, trust_shell, remember)
         if approved:
             self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell)
         if confirm_id in self._confirm_events:
             self._confirm_results[confirm_id] = approved
             self._confirm_events[confirm_id].set()
+
+    async def save_permission(self, tool_name: str, file_path: str, action: str):
+        """Save a permission choice for future reference."""
+        await permission_manager.save_permission_choice(tool_name, file_path, action)
 
     def resolve_question(self, question_id: str, answer: str):
         """Resolve a pending question from WebSocket."""
@@ -441,13 +463,38 @@ class Agent:
                         self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": "question", "output": str(answer)})
                         continue
-                    if self.needs_confirmation(tc.name, tc.arguments):
+
+                    # Check permission action (allow/deny/ask)
+                    file_path = tc.arguments.get("file_path", tc.arguments.get("path", ""))
+                    perm_action = await self.get_permission_action(tc.name, tc.arguments)
+
+                    if perm_action == "deny":
+                        # Tool is explicitly denied — skip without asking
+                        await self.session.add_message(
+                            "tool",
+                            content=f"Tool '{tc.name}' is not permitted by your permission rules.",
+                            tool_call_id=tc.id,
+                        )
+                        self._messages_dirty = True
+                        yield AgentEvent("tool_result", {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "output": "Denied by permission rules",
+                        })
+                        continue
+
+                    if perm_action == "ask" or self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
+                        # Check if there's a saved permission hint
+                        saved_hint = permission_manager.saved.check_saved(tc.name, file_path)
                         yield AgentEvent("confirm_request", {
                             "id": confirm_id,
                             "tool": tc.name,
+                            "file_path": file_path,
                             "arguments": tc.arguments,
-                            "in_workspace": self._is_in_workspace(tc.arguments.get("file_path", tc.arguments.get("path", ""))) if tc.name in ("write", "edit") else None,
+                            "in_workspace": self._is_in_workspace(file_path) if tc.name in ("write", "edit") else None,
+                            "permission_action": perm_action,
+                            "saved_permission": saved_hint,
                         })
                         approved = await self.wait_for_confirm(confirm_id)
                         if not approved:
