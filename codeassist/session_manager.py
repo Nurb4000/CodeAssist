@@ -18,20 +18,41 @@ class SessionManager:
         return await original.fork(name)
 
     @staticmethod
-    async def export_session(session_id: str, redact: bool = False) -> dict:
-        """Export session data for sharing or backup."""
+    async def export_session(session_id: str, redact: bool = False, as_bundle: bool = False) -> dict | Path:
+        """Export session data for sharing or backup.
+
+        Args:
+            session_id: Session to export.
+            redact: Whether to redact PII.
+            as_bundle: If True, write a self-contained JSON file to .codeassist/exports/.
+
+        Returns:
+            dict if as_bundle=False, Path to exported file if as_bundle=True.
+        """
         session = Session(session_id)
         messages = await session.get_messages()
+        summary = await SessionManager.get_session_summary(session_id)
 
         export_data = {
-            "version": 1,
+            "version": 2,
             "session_id": session_id,
+            "name": summary.get("first_message", "Untitled")[:80],
             "exported_at": datetime.now(timezone.utc).isoformat(),
+            "summary": summary,
             "messages": messages,
         }
 
         if redact:
             export_data = SessionManager._redact_pii(export_data)
+
+        if as_bundle:
+            export_dir = Path(".codeassist") / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = re.sub(r'[^\w\-]', '_', summary.get("first_message", "session")[:40])
+            filename = f"{safe_name}_{session_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+            filepath = export_dir / filename
+            filepath.write_text(json.dumps(export_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            return filepath
 
         return export_data
 
@@ -97,22 +118,22 @@ class SessionTool:
 
     name = "session"
     description = (
-        "Manage sessions: fork, export, import, or get summary. "
+        "Manage sessions: fork, export, import, share, or get summary. "
         "Use 'fork' to create a copy of the current session, "
-        "'export' to export session data, 'import' to import from JSON, "
-        "or 'summary' to get session statistics."
+        "'export' to export session data as JSON, 'share' to create a self-contained export file, "
+        "'import' to import from JSON, or 'summary' to get session statistics."
     )
     parameters = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["fork", "export", "import", "summary"],
+                "enum": ["fork", "export", "share", "import", "summary"],
                 "description": "Session action to perform",
             },
             "session_id": {
                 "type": "string",
-                "description": "Session ID (for fork, export, import)",
+                "description": "Session ID (for fork, export, share, import)",
             },
             "name": {
                 "type": "string",
@@ -158,6 +179,20 @@ class SessionTool:
                 return json.dumps(export_data, indent=2)
             except Exception as e:
                 return f"Error exporting session: {e}"
+
+        elif action == "share":
+            target_id = session_id or self.current_session_id
+            try:
+                result = await SessionManager.export_session(target_id, redact=True, as_bundle=True)
+                if isinstance(result, Path):
+                    return (
+                        f"Session exported to: {result}\n"
+                        f"This is a self-contained JSON bundle with PII redacted. "
+                        f"You can share this file or import it later."
+                    )
+                return str(result)
+            except Exception as e:
+                return f"Error sharing session: {e}"
 
         elif action == "import":
             if not data:
