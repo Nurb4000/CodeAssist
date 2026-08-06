@@ -134,65 +134,65 @@ After thorough review of both codebases, opencode has added several significant 
 
 ## Priority 2: Significant Impact, More Complex
 
-### 6. Advanced Compaction with LLM Summaries
+### 6. Advanced Compaction with LLM Summaries ✅ COMPLETE
 **What:** Use the LLM to generate structured summaries of conversation history when context is full. Preserves recent turns intact. Both text truncation and LLM summarization available as options.
 
 **Current CodeAssist state:** Two-level text compaction (summarize tool outputs, then drop old messages). No LLM-based summarization.
 
 **Implementation:**
-- [ ] Add `compaction` agent type (hidden, read-only) to `agents.py`
-- [ ] Create compaction prompt template (similar to opencode's SUMMARY_TEMPLATE)
-- [ ] When context exceeds threshold:
+- [x] Add `compaction` agent type (hidden, read-only) to `agents.py`
+- [x] Create compaction prompt template (similar to opencode's SUMMARY_TEMPLATE)
+- [x] When context exceeds threshold:
   - **LLM mode (default):** Select head messages, send to LLM for compact summarization, replace head with summary message, preserve recent turns intact
   - **Text mode:** Existing two-level truncation (summarize tool outputs → drop old messages)
-- [ ] Track compaction state per session (previous summary, tail start ID)
-- [ ] Configurable: `compaction.mode` ("llm" or "text"), `compaction.model` (cheaper model), `compaction.tail_turns`, `compaction.preserve_recent_tokens`
-- [ ] Auto-continue: after compaction, inject "Continue if you have next steps" prompt
-- [ ] Overflow handling: if even compaction can't fit, strip media and retry
+- [x] Track compaction state per session (previous summary, tail start ID)
+- [x] Configurable: `compaction.mode` ("llm" or "text"), `compaction.model` (cheaper model), `compaction.tail_turns`, `compaction.preserve_recent_tokens`
+- [x] Auto-continue: after compaction, inject "Continue if you have next steps" prompt
+- [x] Overflow handling: if even compaction can't fit, strip media and retry
 
 **Default:** LLM-based summarization (preserves more meaning, better for complex tasks)
 **Fallback:** Text truncation (faster, cheaper, good for simple tasks)
 
-**Effort:** 3-4 days
+**Effort:** 3-4 days ✅
 
 ---
 
-### 7. Managed Tool Output Files
+### 7. Managed Tool Output Files ✅ COMPLETE
 **What:** When tool output exceeds configured limits, save the full output to a managed file and give the agent a truncated preview with a path hint. Automatic cleanup of old output files.
 
 **Current CodeAssist state:** `truncate_tool_result()` in `tokens.py` truncates inline. No managed file storage.
 
 **Implementation:**
-- [ ] Create `tool_output_store.py` module
-- [ ] Managed output directory: `.codeassist/tool-output/`
-- [ ] When tool output exceeds limits:
+- [x] Create `tool_output_store.py` module
+- [x] Managed output directory: `.codeassist/tool-output/`
+- [x] When tool output exceeds limits:
   1. Write full output to timestamped file
   2. Return head/tail preview with path hint
   3. Hint text: "Full output saved to: {path}. Use Grep or Read with offset/limit."
-- [ ] Configurable limits: `tool_output.max_lines`, `tool_output.max_bytes`
-- [ ] Periodic cleanup: remove files older than retention period (default 7 days)
-- [ ] If task tool is available, hint suggests delegating to explore subagent
+- [x] Configurable limits: `tool_output.max_lines`, `tool_output.max_bytes`
+- [x] Periodic cleanup: remove files older than retention period (default 7 days)
+- [x] If task tool is available, hint suggests delegating to explore subagent
 
-**Effort:** 1 day
+**Effort:** 1 day ✅
 
 ---
 
-### 8. Permission System Enhancement
+### 8. Permission System Enhancement ✅ COMPLETE
 **What:** Granular, pattern-based permissions per agent. Supports "allow", "deny", "ask" actions with file path patterns. Saved permission preferences.
 
 **Current CodeAssist state:** Basic trust flags (`_trust_workspace_writes`, `_trust_shell`) and `CONFIRM_TOOLS` set. No pattern-based permissions.
 
 **Implementation:**
-- [ ] Redesign agent permissions in `agents.py`:
+- [x] Redesign agent permissions in `agents.py`:
   - Each agent has a permission ruleset: `{ tool_name: { pattern: action } }`
   - Actions: "allow", "deny", "ask"
   - Patterns: glob patterns for file paths (e.g., `"*.env": "ask"`)
-- [ ] Permission merging: default rules + user-configured overrides
-- [ ] Saved permissions: persist "always allow" choices per pattern
-- [ ] Update `needs_confirmation()` in `agent.py` to use new permission model
-- [ ] Config section for user permission overrides
+- [x] Permission merging: default rules + user-configured overrides
+- [x] Saved permissions: persist "always allow" choices per pattern
+- [x] Update `needs_confirmation()` in `agent.py` to use new permission model
+- [x] Config section for user permission overrides
 
-**Effort:** 2-3 days
+**Effort:** 2-3 days ✅
 
 ---
 
@@ -300,10 +300,10 @@ Phase B (Week 2): Core Features ✅ COMPLETE
   4. Subagent System          (3-4 days) ✅ COMPLETE
   5. Snapshot and Revert      (3-4 days) ✅ COMPLETE
 
-Phase C (Week 3): Polish
-  6. Advanced Compaction      (3-4 days)
-  7. Managed Tool Output      (1 day)
-  8. Permission Enhancement   (2-3 days)
+Phase C (Week 3): Polish ✅ COMPLETE
+  6. Advanced Compaction      (3-4 days) ✅ COMPLETE
+  7. Managed Tool Output      (1 day) ✅ COMPLETE
+  8. Permission Enhancement   (2-3 days) ✅ COMPLETE
 
 Phase D (Week 4): Extras
   9. Instruction Discovery    (1-2 days)
@@ -317,6 +317,7 @@ Phase D (Week 4): Extras
 **Total estimated effort: ~4 weeks of focused development**
 **Phase A completed: 2026-08-05**
 **Phase B completed: 2026-08-05**
+**Phase C completed: 2026-08-05**
 
 ---
 
@@ -362,16 +363,16 @@ subagent_depth = 1                    # Max nested subagent depth ✅ APPLIED
 default_agent = "build"               # Default agent type ✅ APPLIED
 
 [compaction]
-enabled = true
-mode = "llm"                          # "llm" or "text"
-tail_turns = 2                        # Recent turns to preserve intact
-preserve_recent_tokens = 4000         # Token budget for recent context
-model = ""                            # Optional: cheaper model for compaction
+enabled = true                        # ✅ APPLIED
+mode = "llm"                          # "llm" or "text" ✅ APPLIED
+tail_turns = 2                        # Recent turns to preserve intact ✅ APPLIED
+preserve_recent_tokens = 4000         # Token budget for recent context ✅ APPLIED
+model = ""                            # Optional: cheaper model for compaction ✅ APPLIED
 
 [tool_output]
-max_lines = 2000
-max_bytes = 51200                     # 50KB
-retention_days = 7
+max_lines = 2000                      # ✅ APPLIED
+max_bytes = 51200                     # 50KB ✅ APPLIED
+retention_days = 7                    # ✅ APPLIED
 
 [snapshot]
 enabled = true                        # Enable git-based snapshots ✅ APPLIED
