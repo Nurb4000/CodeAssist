@@ -120,7 +120,7 @@ COMPACTION_USER_PROMPT = """Summarize the following conversation history. Previo
 Produce an updated summary that merges the previous context with the new turns."""
 
 
-def build_system_prompt(workspace: Path, model_id: str, features: dict = None) -> str:
+def build_system_prompt(workspace: Path, model_id: str, features: dict = None, instructions: str = None) -> str:
     if features is None:
         features = {}
 
@@ -134,6 +134,8 @@ def build_system_prompt(workspace: Path, model_id: str, features: dict = None) -
 </env>"""
 
     parts = [BASE_PROMPT, env_block, TOOL_INSTRUCTIONS]
+    if instructions:
+        parts.append(instructions)
     return "\n\n".join(parts)
 
 
