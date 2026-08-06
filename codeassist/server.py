@@ -335,6 +335,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         if agent_header and agent_header != base_prompt:
             system_prompt = agent_header + "\n\n" + system_prompt
 
+    # Inject skill guidance into system prompt (if skills are enabled)
+    if skill_registry and cfg.skills.enabled:
+        skill_guidance = skill_registry.get_instructions()
+        if skill_guidance:
+            system_prompt += "\n\n" + skill_guidance
+
     # Use the global tools registry (supports dynamic reloading)
     if tools is None:
         await websocket.close(code=1011, reason="Server not initialized")

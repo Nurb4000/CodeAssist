@@ -157,3 +157,11 @@ max_bytes = 51200
 
 # Remove managed output files older than N days (default: 7)
 retention_days = 7
+
+[instructions]
+# Additional instruction file paths or URLs to load
+# Supports local paths and HTTP(S) URLs
+paths = []
+
+# Disable automatic discovery of AGENTS.md / CLAUDE.md in workspace
+disable_project_config = false
