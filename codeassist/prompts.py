@@ -71,6 +71,54 @@ TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Write tool automatically backs up existing files to .bak before overwriting
 - Grep supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
 
+SUMMARY_TEMPLATE = """You are summarizing a conversation between a user and an AI coding assistant.
+Your job is to create a concise summary that preserves all important context so the assistant can continue working seamlessly.
+
+## Summary Guidelines
+- Capture the user's original request and any clarifications
+- List key decisions made and their rationale
+- Summarize code changes: which files were modified, what was changed, and why
+- Note any errors encountered and how they were resolved
+- Preserve important file paths, function names, and technical details
+- Track the current state of multi-step tasks
+- Include any pending work or next steps
+
+## Format
+Use this structure:
+```
+## Context
+[Brief description of what the user asked for]
+
+## Actions Taken
+[Numbered list of significant actions, file changes, tool usage]
+
+## Key Findings & Decisions
+[Important discoveries, design decisions, technical choices]
+
+## Errors & Resolutions
+[Any errors and how they were fixed]
+
+## Current State
+[What's done, what remains, where we left off]
+
+## Next Steps
+[What should happen next, if anything]
+```
+
+Be concise but thorough. The summary will be injected back into the conversation context."""
+
+COMPACTION_USER_PROMPT = """Summarize the following conversation history. Previous summary (if any):
+
+{previous_summary}
+
+--- New conversation turns to summarize ---
+
+{conversation}
+
+--- End of new turns ---
+
+Produce an updated summary that merges the previous context with the new turns."""
+
 
 def build_system_prompt(workspace: Path, model_id: str, features: dict = None) -> str:
     if features is None:

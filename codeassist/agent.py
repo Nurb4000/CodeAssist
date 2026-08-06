@@ -15,7 +15,7 @@ from .llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
 from .prompts import build_system_prompt, build_openai_messages
 from .session import Session
 from tools import ToolRegistry
-from .tokens import compact_messages, check_context_limit, truncate_tool_result
+from .tokens import compact_messages, check_context_limit, truncate_tool_result, llm_compact_messages, strip_media_from_messages
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,9 @@ class Agent:
         # Incremental message cache — avoids DB fetch on every iteration
         self._messages: list[dict] | None = None
         self._messages_dirty: bool = True
+        # Compaction state tracking
+        self._compaction_summary: str = ""
+        self._compaction_count: int = 0
 
     def cancel(self):
         """Cancel the current agent run."""
@@ -149,6 +152,9 @@ class Agent:
 
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
+        # Reset compaction state for new user turn
+        self._compaction_summary = ""
+        self._compaction_count = 0
 
         # Create snapshot before turn starts
         snap_before = await self._create_turn_snapshot("before")
@@ -245,30 +251,84 @@ class Agent:
                 })
 
                 if ctx["needs_compaction"] and compaction_cfg.enabled:
-                    log.info("Context at %s%%, compacting messages (level %d)", ctx["usage_pct"], compaction_escalation)
-                    messages = compact_messages(
-                        messages,
-                        keep_recent=compaction_cfg.keep_recent,
-                        model=self.config.llm.model,
-                        escalation_level=compaction_escalation,
-                    )
-                    # Check if first pass was enough, escalate if not
-                    recheck = check_context_limit(
-                        messages, self.config.llm.model, self.config.llm.context_window,
-                        tool_schemas=tool_schemas,
-                    )
-                    if recheck["needs_compaction"] and compaction_escalation == 0:
-                        compaction_escalation = 1
+                    log.info("Context at %s%%, compacting messages (mode=%s)", ctx["usage_pct"], compaction_cfg.mode)
+
+                    if compaction_cfg.mode == "llm":
+                        # LLM-based compaction (default)
+                        comp_model = compaction_cfg.model or self.config.llm.model
+                        messages, self._compaction_summary = await llm_compact_messages(
+                            messages,
+                            tail_turns=compaction_cfg.tail_turns,
+                            preserve_recent_tokens=compaction_cfg.preserve_recent_tokens,
+                            previous_summary=self._compaction_summary,
+                            compaction_model=comp_model,
+                            main_llm_config=self.config.llm,
+                        )
+                        self._compaction_count += 1
+
+                        # Re-check context after LLM compaction
+                        recheck = check_context_limit(
+                            messages, self.config.llm.model, self.config.llm.context_window,
+                            tool_schemas=tool_schemas,
+                        )
+
+                        # If still over limit, try text compaction as fallback
+                        if recheck["needs_compaction"]:
+                            log.info("LLM compaction insufficient (%s%%), escalating to text mode", recheck["usage_pct"])
+                            messages = compact_messages(
+                                messages,
+                                keep_recent=compaction_cfg.keep_recent,
+                                model=self.config.llm.model,
+                                escalation_level=compaction_escalation,
+                            )
+                            compaction_escalation = 1
+
+                            # Final overflow: strip media and retry
+                            final_check = check_context_limit(
+                                messages, self.config.llm.model, self.config.llm.context_window,
+                                tool_schemas=tool_schemas,
+                            )
+                            if final_check["needs_compaction"]:
+                                log.warning("Context still full after all compaction. Stripping media.")
+                                messages = strip_media_from_messages(messages)
+
+                    else:
+                        # Text-based compaction (existing behavior)
                         messages = compact_messages(
                             messages,
                             keep_recent=compaction_cfg.keep_recent,
                             model=self.config.llm.model,
                             escalation_level=compaction_escalation,
                         )
-                        log.info("Escalated compaction to level 1 (dropping old tool messages)")
-                    elif not recheck["needs_compaction"]:
-                        compaction_escalation = 0
-                    yield AgentEvent("compacted", {"message": "Context window compressed to make room"})
+                        recheck = check_context_limit(
+                            messages, self.config.llm.model, self.config.llm.context_window,
+                            tool_schemas=tool_schemas,
+                        )
+                        if recheck["needs_compaction"] and compaction_escalation == 0:
+                            compaction_escalation = 1
+                            messages = compact_messages(
+                                messages,
+                                keep_recent=compaction_cfg.keep_recent,
+                                model=self.config.llm.model,
+                                escalation_level=compaction_escalation,
+                            )
+                            log.info("Escalated compaction to level 1 (dropping old tool messages)")
+                        elif not recheck["needs_compaction"]:
+                            compaction_escalation = 0
+
+                    yield AgentEvent("compacted", {
+                        "message": "Context window compressed to make room",
+                        "mode": compaction_cfg.mode,
+                        "count": self._compaction_count,
+                    })
+
+                    # Auto-continue: if the tail ends with tool results (agent was mid-work),
+                    # inject a continuation prompt so the LLM knows to keep going.
+                    if messages and messages[-1].get("role") == "tool":
+                        messages.append({
+                            "role": "user",
+                            "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
+                        })
 
                 _cached_messages = messages
                 _cached_history_len = len(history)

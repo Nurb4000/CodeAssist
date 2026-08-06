@@ -118,11 +118,32 @@ auto_detect = true
 # Enable context window compaction
 enabled = true
 
+# Compaction mode: "llm" (default, uses LLM to summarize old messages) or "text" (fast truncation)
+# LLM mode preserves more semantic meaning but costs tokens. Text mode is faster and cheaper.
+mode = "llm"
+
 # Trigger compaction when context usage exceeds this percentage
 threshold_pct = 75
 
-# Number of recent messages to keep intact during compaction
+# Number of recent messages to keep intact during text-mode compaction
 keep_recent = 20
+
+# Number of recent user+assistant turn pairs to preserve intact during LLM compaction
+tail_turns = 2
+
+# Token budget for the preserved recent context (messages beyond this get summarized)
+preserve_recent_tokens = 4000
+
+# Optional: use a cheaper/faster model for compaction summaries (empty = use main model)
+# Example: model = "gpt-4o-mini"
+model = ""
 
 # Maximum tokens for truncated tool results
 tool_result_max_tokens = 4000
+
+[snapshot]
+# Enable git-based workspace snapshots at turn boundaries
+enabled = true
+
+# Prune old snapshots after N days
+retention_days = 7
