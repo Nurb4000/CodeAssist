@@ -300,6 +300,19 @@ class AgentManager:
                 },
             )
 
+        # Add compaction agent (hidden, for LLM-based context summarization)
+        if "compaction" not in self._agents:
+            self._agents["compaction"] = AgentConfig(
+                name="Compaction",
+                description="Hidden agent for summarizing conversation history during context window compaction.",
+                instructions=(
+                    "You are a compaction agent. Your ONLY job is to summarize conversation history. "
+                    "You do NOT have access to tools. You receive a conversation transcript and must produce "
+                    "a concise summary preserving key decisions, code changes, errors, and their resolutions."
+                ),
+                permissions={},
+            )
+
     def get_agent(self, name: str) -> AgentConfig | None:
         """Get an agent by name."""
         return self._agents.get(name)

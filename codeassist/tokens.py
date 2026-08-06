@@ -1,7 +1,16 @@
 """Token counting and context window management."""
 
 import json
+import logging
+from typing import Any
+
 import tiktoken
+
+from .config import LLMConfig
+from .llm import LLMClient
+from .prompts import SUMMARY_TEMPLATE, COMPACTION_USER_PROMPT
+
+log = logging.getLogger(__name__)
 
 # Cache for tiktoken encodings to avoid repeated lookups
 _encoding_cache: dict[str, tiktoken.Encoding] = {}
@@ -200,3 +209,189 @@ def check_context_limit(
         "severity": severity,
         "usage_pct": round(usage_pct * 100, 1),
     }
+
+
+def _extract_conversation_text(messages: list[dict]) -> str:
+    """Convert a list of OpenAI-format messages to plain text for summarization."""
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "unknown")
+        if role == "system":
+            continue  # Skip system prompt in summary input
+        content = msg.get("content", "") or ""
+        if role == "tool":
+            tool_call_id = msg.get("tool_call_id", "")
+            # Truncate very long tool outputs for the summarizer
+            if len(content) > 3000:
+                content = content[:3000] + "\n... [truncated]"
+            parts.append(f"[Tool Result ({tool_call_id})]: {content}")
+        elif role == "assistant":
+            tool_calls = msg.get("tool_calls", [])
+            if tool_calls:
+                call_summary = []
+                for tc in tool_calls:
+                    func = tc.get("function", {})
+                    name = func.get("name", "?")
+                    args = func.get("arguments", "{}")
+                    try:
+                        args_obj = json.loads(args) if isinstance(args, str) else args
+                        args_str = json.dumps(args_obj, separators=(",", ":"))[:500]
+                    except (json.JSONDecodeError, TypeError):
+                        args_str = str(args)[:500]
+                    call_summary.append(f"{name}({args_str})")
+                prefix = f"[Called: {', '.join(call_summary)}]" if not content else f"{content}\n[Called: {', '.join(call_summary)}]"
+                parts.append(f"Assistant: {prefix}")
+            else:
+                parts.append(f"Assistant: {content}")
+        elif role == "user":
+            parts.append(f"User: {content}")
+    return "\n\n".join(parts)
+
+
+async def llm_compact_messages(
+    messages: list[dict],
+    tail_turns: int = 2,
+    preserve_recent_tokens: int = 4000,
+    previous_summary: str = "",
+    compaction_model: str = "",
+    main_llm_config: LLMConfig | None = None,
+) -> tuple[list[dict], str]:
+    """Use LLM to summarize old messages, preserving recent turns intact.
+
+    Args:
+        messages: Full OpenAI-format message list (including system at index 0).
+        tail_turns: Number of recent user+assistant turn pairs to keep intact.
+        preserve_recent_tokens: Token budget for the preserved tail section.
+        previous_summary: Previous compaction summary to merge with new content.
+        compaction_model: Model to use for compaction (empty = use main model).
+        main_llm_config: Fallback LLM config if compaction_model is empty.
+
+    Returns:
+        Tuple of (compacted messages list, new summary text).
+    """
+    if len(messages) <= tail_turns + 2:
+        return messages, previous_summary
+
+    system_msg = messages[0]
+
+    # Split into head (to summarize) and tail (to preserve)
+    # Count turns from the end: each turn is user + assistant (+ tool results)
+    tail_start = 0
+    turns_found = 0
+    i = len(messages) - 1
+    while i > 0 and turns_found < tail_turns:
+        if messages[i].get("role") == "user":
+            turns_found += 1
+        i -= 1
+    tail_start = i + 1
+
+    # Check if tail exceeds token budget; if so, shrink it
+    tail_messages = messages[tail_start:]
+    tail_tokens = count_tokens(tail_messages)
+    while tail_tokens > preserve_recent_tokens and tail_start < len(messages) - 1:
+        tail_start += 1
+        tail_messages = messages[tail_start:]
+        tail_tokens = count_tokens(tail_messages)
+
+    head_messages = messages[1:tail_start]
+
+    if not head_messages:
+        return messages, previous_summary
+
+    # Convert head to text for summarization
+    head_text = _extract_conversation_text(head_messages)
+    if not head_text.strip():
+        return messages, previous_summary
+
+    # Build compaction prompt
+    user_prompt = COMPACTION_USER_PROMPT.format(
+        previous_summary=previous_summary or "(No previous summary)",
+        conversation=head_text,
+    )
+
+    # Create LLM client for compaction
+    if compaction_model:
+        compaction_llm_cfg = LLMConfig(
+            provider=main_llm_config.provider if main_llm_config else "openai",
+            model=compaction_model,
+            api_key=main_llm_config.api_key if main_llm_config else "",
+            base_url=main_llm_config.base_url if main_llm_config else "",
+            temperature=0.0,
+            max_tokens=4096,
+        )
+    elif main_llm_config:
+        compaction_llm_cfg = LLMConfig(
+            provider=main_llm_config.provider,
+            model=main_llm_config.model,
+            api_key=main_llm_config.api_key,
+            base_url=main_llm_config.base_url,
+            temperature=0.0,
+            max_tokens=4096,
+        )
+    else:
+        log.warning("No LLM config available for compaction, falling back to text mode")
+        return messages, previous_summary
+
+    compaction_client = LLMClient(compaction_llm_cfg)
+    compaction_msgs = [
+        {"role": "system", "content": SUMMARY_TEMPLATE},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        summary_text = ""
+        async for event in compaction_client.stream(compaction_msgs):
+            from .llm import TextDelta as TD, Finish as F
+            if isinstance(event, TD):
+                summary_text += event.content
+            elif isinstance(event, F):
+                break
+
+        if not summary_text.strip():
+            log.warning("LLM compaction returned empty summary")
+            return messages, previous_summary
+
+        # Build compacted message list
+        compacted = [
+            system_msg,
+            {
+                "role": "user",
+                "content": f"[Previous conversation summary]\n{summary_text}",
+            },
+        ]
+        compacted.extend(tail_messages)
+
+        log.info("LLM compaction: %d head messages summarized to %d chars. Total compacted: %d messages",
+                 len(head_messages), len(summary_text), len(compacted))
+        return compacted, summary_text
+
+    except Exception as e:
+        log.error("LLM compaction failed: %s. Falling back to text compaction.", e)
+        return messages, previous_summary
+
+
+def strip_media_from_messages(messages: list[dict]) -> list[dict]:
+    """Remove media attachments from messages to free up tokens (overflow handling).
+
+    Strips image URLs and base64 content from user messages, replacing them with text descriptions.
+    """
+    stripped = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Multi-part content (text + images)
+            text_parts = []
+            media_count = 0
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        text_parts.append(part["text"])
+                    elif part.get("type") == "image_url":
+                        media_count += 1
+                        text_parts.append("[Image removed to save context space]")
+            if media_count > 0:
+                log.info("Stripped %d media attachments from message", media_count)
+            stripped.append({**msg, "content": "\n".join(text_parts)})
+        else:
+            stripped.append(msg)
+    return stripped

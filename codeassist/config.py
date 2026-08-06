@@ -89,8 +89,12 @@ class SnapshotConfig:
 @dataclass
 class CompactionConfig:
     enabled: bool = True
+    mode: str = "llm"  # "llm" or "text"
     threshold_pct: int = 75
     keep_recent: int = 20
+    tail_turns: int = 2  # Recent turns to preserve intact
+    preserve_recent_tokens: int = 4000  # Token budget for recent context
+    model: str = ""  # Optional: cheaper model for compaction (empty = use main model)
     tool_result_max_tokens: int = 4000
 
 
@@ -182,8 +186,12 @@ class Config:
             ),
             compaction=CompactionConfig(
                 enabled=raw.get("compaction", {}).get("enabled", True),
+                mode=raw.get("compaction", {}).get("mode", "llm"),
                 threshold_pct=raw.get("compaction", {}).get("threshold_pct", 75),
                 keep_recent=raw.get("compaction", {}).get("keep_recent", 20),
+                tail_turns=raw.get("compaction", {}).get("tail_turns", 2),
+                preserve_recent_tokens=raw.get("compaction", {}).get("preserve_recent_tokens", 4000),
+                model=raw.get("compaction", {}).get("model", ""),
                 tool_result_max_tokens=raw.get("compaction", {}).get("tool_result_max_tokens", 4000),
             ),
         )
