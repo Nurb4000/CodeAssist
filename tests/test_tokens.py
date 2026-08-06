@@ -1,10 +1,13 @@
 """Tests for token counting, context compaction, and truncation."""
+import json
 import pytest
 from codeassist.tokens import (
     count_tokens,
     truncate_tool_result,
     compact_messages,
     check_context_limit,
+    _extract_conversation_text,
+    strip_media_from_messages,
 )
 
 
@@ -190,3 +193,92 @@ class TestCheckContextLimit:
         without = check_context_limit(msgs)
         with_s = check_context_limit(msgs, tool_schemas=schemas)
         assert with_s["total_tokens"] >= without["total_tokens"]
+
+
+class TestExtractConversationText:
+    def test_skips_system_messages(self):
+        msgs = [
+            {"role": "system", "content": "You are an assistant."},
+            {"role": "user", "content": "Hello"},
+        ]
+        text = _extract_conversation_text(msgs)
+        assert "system" not in text.lower() or "You are" not in text
+        assert "User: Hello" in text
+
+    def test_includes_user_and_assistant(self):
+        msgs = [
+            {"role": "user", "content": "Read this file"},
+            {"role": "assistant", "content": "Sure, let me read it."},
+        ]
+        text = _extract_conversation_text(msgs)
+        assert "User: Read this file" in text
+        assert "Assistant: Sure, let me read it." in text
+
+    def test_summarizes_tool_calls(self):
+        msgs = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": '{"file_path": "test.py"}'}}
+            ]},
+        ]
+        text = _extract_conversation_text(msgs)
+        assert "Called:" in text
+        assert "read" in text
+
+    def test_includes_tool_results(self):
+        msgs = [
+            {"role": "tool", "content": "File contents here", "tool_call_id": "call_1"},
+        ]
+        text = _extract_conversation_text(msgs)
+        assert "Tool Result" in text
+        assert "File contents here" in text
+
+    def test_truncates_long_tool_output(self):
+        msgs = [
+            {"role": "tool", "content": "x" * 5000, "tool_call_id": "call_1"},
+        ]
+        text = _extract_conversation_text(msgs)
+        assert "[truncated]" in text
+
+
+class TestStripMedia:
+    def test_no_media_unchanged(self):
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+        result = strip_media_from_messages(msgs)
+        assert len(result) == 2
+        assert result[0]["content"] == "Hello"
+
+    def test_strips_image_url(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Look at this screenshot:"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
+                ],
+            },
+        ]
+        result = strip_media_from_messages(msgs)
+        content = result[0]["content"]
+        assert isinstance(content, str)
+        assert "screenshot" in content
+        assert "Image removed" in content
+        assert "base64" not in content
+
+    def test_preserves_text_parts(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Part 1"},
+                    {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}},
+                    {"type": "text", "text": "Part 2"},
+                ],
+            },
+        ]
+        result = strip_media_from_messages(msgs)
+        content = result[0]["content"]
+        assert "Part 1" in content
+        assert "Part 2" in content
