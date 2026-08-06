@@ -147,3 +147,13 @@ enabled = true
 
 # Prune old snapshots after N days
 retention_days = 7
+
+[tool_output]
+# Maximum lines before saving to managed file (default: 2000)
+max_lines = 2000
+
+# Maximum bytes before saving to managed file (default: 51200 = ~50KB)
+max_bytes = 51200
+
+# Remove managed output files older than N days (default: 7)
+retention_days = 7

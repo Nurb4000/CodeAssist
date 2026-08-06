@@ -16,6 +16,7 @@ from .prompts import build_system_prompt, build_openai_messages
 from .session import Session
 from tools import ToolRegistry
 from .tokens import compact_messages, check_context_limit, truncate_tool_result, llm_compact_messages, strip_media_from_messages
+from .tool_output_store import get_tool_output_store
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,13 @@ class Agent:
         # Compaction state tracking
         self._compaction_summary: str = ""
         self._compaction_count: int = 0
+        # Tool output store for managed file outputs
+        self._tool_output_store = get_tool_output_store(
+            self.config.workspace,
+            max_lines=self.config.tool_output.max_lines,
+            max_bytes=self.config.tool_output.max_bytes,
+            retention_days=self.config.tool_output.retention_days,
+        )
 
     def cancel(self):
         """Cancel the current agent run."""
@@ -200,6 +208,14 @@ class Agent:
         snap_after = await self._create_turn_snapshot("after")
         if snap_after:
             yield AgentEvent("snapshot", snap_after)
+
+        # Periodic cleanup of old tool output files
+        try:
+            removed = await self._tool_output_store.cleanup()
+            if removed:
+                log.info("Cleaned up %d old tool output files", removed)
+        except Exception as e:
+            log.debug("Tool output cleanup failed: %s", e)
 
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
         recent_texts: list[str] = []
@@ -454,7 +470,19 @@ class Agent:
                     start = time.monotonic()
                     result = await self.tools.execute(tc.name, tc.arguments)
                     duration_ms = int((time.monotonic() - start) * 1000)
+
+                    # First truncate to token limit
                     truncated = truncate_tool_result(result.output, max_tokens=self.config.tools.tool_output_max_tokens)
+
+                    # If output is still large, save to managed file and return preview
+                    filepath = await self._tool_output_store.save_if_needed(
+                        result.output, tc.name, self.session.id
+                    )
+                    if filepath:
+                        truncated = self._tool_output_store.build_preview(
+                            result.output, filepath, tc.name
+                        )
+
                     return tc, result, truncated, duration_ms
 
                 if confirmed_tool_calls:

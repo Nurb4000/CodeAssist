@@ -87,6 +87,13 @@ class SnapshotConfig:
 
 
 @dataclass
+class ToolOutputConfig:
+    max_lines: int = 2000
+    max_bytes: int = 51200
+    retention_days: int = 7
+
+
+@dataclass
 class CompactionConfig:
     enabled: bool = True
     mode: str = "llm"  # "llm" or "text"
@@ -110,6 +117,7 @@ class Config:
     lsp: LSPConfig = field(default_factory=LSPConfig)
     git: GitConfig = field(default_factory=GitConfig)
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
+    tool_output: ToolOutputConfig = field(default_factory=ToolOutputConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
@@ -183,6 +191,11 @@ class Config:
             snapshot=SnapshotConfig(
                 enabled=raw.get("snapshot", {}).get("enabled", True),
                 retention_days=raw.get("snapshot", {}).get("retention_days", 7),
+            ),
+            tool_output=ToolOutputConfig(
+                max_lines=raw.get("tool_output", {}).get("max_lines", 2000),
+                max_bytes=raw.get("tool_output", {}).get("max_bytes", 51200),
+                retention_days=raw.get("tool_output", {}).get("retention_days", 7),
             ),
             compaction=CompactionConfig(
                 enabled=raw.get("compaction", {}).get("enabled", True),
