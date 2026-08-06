@@ -169,12 +169,16 @@ class SkillRegistry:
         if not self._skills:
             return ""
 
-        instructions = "\n\n## Available Skills\n\n"
+        instructions = "<available_skills>\n"
         for skill in self._skills.values():
-            slash = f" (slash: /{skill.slash_command})" if skill.slash_command else ""
-            instructions += f"- **{skill.name}**: {skill.description}{slash}\n"
+            instructions += f"  <skill>\n"
+            instructions += f"    <name>{skill.name}</name>\n"
+            instructions += f"    <description>{skill.description}</description>\n"
+            if skill.slash_command:
+                instructions += f"    <slash_command>/{skill.slash_command}</slash_command>\n"
+            instructions += f"  </skill>\n"
+        instructions += "</available_skills>"
 
-        instructions += "\nTo use a skill, mention it by name or use its slash command.\n"
         return instructions
 
     def execute(self, skill_name: str, context: dict[str, Any]) -> str:

@@ -196,95 +196,96 @@ After thorough review of both codebases, opencode has added several significant 
 
 ---
 
-### 9. Instruction Discovery (AGENTS.md)
+### 9. Instruction Discovery (AGENTS.md) ✅ COMPLETE
 **What:** Automatic discovery of project instruction files by walking up the directory tree. Supports AGENTS.md, CLAUDE.md, and remote URLs. Instructions are injected into system context.
 
 **Current CodeAssist state:** No instruction discovery. System prompt is static.
 
 **Implementation:**
-- [ ] Create `instruction_discovery.py` module
-- [ ] On session start, walk up from workspace to find AGENTS.md / CLAUDE.md
-- [ ] Also check global config directory for AGENTS.md
-- [ ] Support remote instructions via HTTP URLs in config
-- [ ] Inject discovered instructions into system prompt
-- [ ] When reading a file, discover nested project instructions near that file
-- [ ] Track which instructions have been loaded (avoid duplicates)
-- [ ] Config: `instructions` list of paths/URLs, `disable_project_config` flag
+- [x] Create `instruction_discovery.py` module
+- [x] On session start, walk up from workspace to find AGENTS.md / CLAUDE.md
+- [x] Also check global config directory for AGENTS.md
+- [x] Support remote instructions via HTTP URLs in config
+- [x] Inject discovered instructions into system prompt
+- [x] When reading a file, discover nested project instructions near that file
+- [x] Track which instructions have been loaded (avoid duplicates)
+- [x] Config: `instructions` list of paths/URLs, `disable_project_config` flag
 
-**Effort:** 1-2 days
+**Effort:** 1-2 days ✅
 
 ---
 
 ## Priority 3: Nice to Have
 
-### 10. Session Sharing
+### 10. Session Sharing ✅ COMPLETE
 **What:** Generate a shareable URL for a session conversation.
 
 **Implementation:**
-- [ ] Export session as self-contained JSON bundle
-- [ ] Optional: integrate with a sharing backend (or just local file export)
-- [ ] Config: `share` option ("disabled", "manual", "auto")
+- [x] Export session as self-contained JSON bundle (to `.codeassist/exports/`)
+- [x] Optional: integrate with a sharing backend (or just local file export)
+- [x] Config: `share` option ("disabled", "manual", "auto")
 
-**Effort:** 1 day
+**Effort:** 1 day ✅
 
 ---
 
-### 11. Apply Patch Tool Review
+### 11. Apply Patch Tool Review ✅ COMPLETE
 **What:** Unified diff application tool, used by GPT models instead of edit/write.
 
 **Current CodeAssist state:** Already has `apply_patch.py` tool. May need enhancement for model-specific behavior.
 
 **Implementation:**
-- [ ] Review existing `apply_patch.py` against opencode's implementation
-- [ ] Ensure proper unified diff parsing and application
-- [ ] Model-specific tool selection: GPT models get apply_patch, others get edit/write
+- [x] Review existing `apply_patch.py` against opencode's implementation
+- [x] Ensure proper unified diff parsing and application
+- [x] Model-specific tool selection: GPT models get apply_patch, others get edit/write
+- [x] LSP diagnostics feedback after patch application
 
-**Effort:** 0.5 day (mostly review)
+**Effort:** 0.5 day (mostly review) ✅
 
 ---
 
-### 12. Skill System Review
+### 12. Skill System Review ✅ COMPLETE
 **What:** Markdown-based skill files with frontmatter, slash commands, and dynamic discovery.
 
 **Current CodeAssist state:** Already has a skill system in `codeassist/skills.py`. May need enhancement.
 
 **Implementation:**
-- [ ] Review existing skill system against opencode's approach
-- [ ] Ensure skill guidance is injected into agent system prompt (available skills list)
-- [ ] Skill tool: `list` and `get` actions (already implemented)
-- [ ] Hot-reload skills when files change
+- [x] Review existing skill system against opencode's approach
+- [x] Ensure skill guidance is injected into agent system prompt (available skills list)
+- [x] Skill tool: `list` and `get` actions (already implemented)
+- [x] Hot-reload skills when files change
 
-**Effort:** 0.5 day (mostly review)
+**Effort:** 0.5 day (mostly review) ✅
 
 ---
 
-### 13. Plugin System Enhancement
+### 13. Plugin System Enhancement ✅ COMPLETE
 **What:** Extensible plugin hooks for agents, commands, tools, skills, and model catalog.
 
 **Current CodeAssist state:** Has basic plugin support in `codeassist/plugins.py`.
 
 **Implementation:**
-- [ ] Enhance plugin system with lifecycle hooks:
+- [x] Enhance plugin system with lifecycle hooks:
   - `agent.transform` - modify agent configurations
   - `tool.definition` - modify tool definitions
   - `session.compacting` - inject context during compaction
   - `chat.system.transform` - modify system prompt
-- [ ] Plugin discovery and hot-reload
+- [x] Plugin discovery and hot-reload
 
-**Effort:** 2-3 days
+**Effort:** 2-3 days ✅
 
 ---
 
-### 14. Context Source System
+### 14. Context Source System ✅ COMPLETE
 **What:** Composable system context from multiple sources (date, environment, instructions, skills). Changes produce mid-conversation system messages.
 
 **Implementation:**
-- [ ] Create `system_context.py` module with composable context sources
-- [ ] Built-in sources: date, environment, instructions, skills
-- [ ] Context epoch tracking: when baseline changes, emit mid-conversation update
-- [ ] Registry pattern for adding custom context sources via plugins
+- [x] Create `system_context.py` module with composable context sources
+- [x] Built-in sources: date, environment, instructions, skills
+- [x] Context epoch tracking: when baseline changes, emit mid-conversation update
+- [x] Registry pattern for adding custom context sources via plugins
 
-**Effort:** 2-3 days
+**Effort:** 2-3 days ✅
 
 ---
 
@@ -305,19 +306,20 @@ Phase C (Week 3): Polish ✅ COMPLETE
   7. Managed Tool Output      (1 day) ✅ COMPLETE
   8. Permission Enhancement   (2-3 days) ✅ COMPLETE
 
-Phase D (Week 4): Extras
-  9. Instruction Discovery    (1-2 days)
-  10. Session Sharing         (1 day)
-  11. Apply Patch Review      (0.5 day)
-  12. Skill System Review     (0.5 day)
-  13. Plugin Enhancement      (2-3 days)
-  14. Context Source System   (2-3 days)
+Phase D (Week 4): Extras ✅ COMPLETE
+  9. Instruction Discovery    (1-2 days) ✅ COMPLETE
+  10. Session Sharing         (1 day) ✅ COMPLETE
+  11. Apply Patch Review      (0.5 day) ✅ COMPLETE
+  12. Skill System Review     (0.5 day) ✅ COMPLETE
+  13. Plugin Enhancement      (2-3 days) ✅ COMPLETE
+  14. Context Source System   (2-3 days) ✅ COMPLETE
 ```
 
 **Total estimated effort: ~4 weeks of focused development**
 **Phase A completed: 2026-08-05**
 **Phase B completed: 2026-08-05**
 **Phase C completed: 2026-08-05**
+**Phase D completed: 2026-08-06**
 
 ---
 
@@ -379,8 +381,13 @@ enabled = true                        # Enable git-based snapshots ✅ APPLIED
 retention_days = 7                    # Prune old snapshots after N days ✅ APPLIED
 
 [instructions]
-paths = []                            # Additional instruction file paths/URLs
-disable_project_config = false        # Disable AGENTS.md discovery
+paths = []                            # Additional instruction file paths/URLs ✅ APPLIED
+disable_project_config = false        # Disable AGENTS.md discovery ✅ APPLIED
+
+[permissions]
+# Pattern-based permission rules (optional)
+# Format: tool_name.pattern = action
+# e.g.: write."*.env" = "deny"
 ```
 
 ---

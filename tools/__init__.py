@@ -161,8 +161,8 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     fossil_tool.workspace = workspace
     registry.register(fossil_tool)
 
-    # Register Apply Patch tool
-    apply_patch_tool = ApplyPatchTool()
+    # Register Apply Patch tool (with LSP client for diagnostics feedback)
+    apply_patch_tool = ApplyPatchTool(lsp_client=lsp_client)
     apply_patch_tool.workspace = workspace
     registry.register(apply_patch_tool)
 

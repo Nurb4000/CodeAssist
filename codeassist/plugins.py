@@ -140,6 +140,42 @@ class PluginRegistry:
                 hooks.extend(plugin._hooks[hook_name])
         return hooks
 
+    async def fire_hook(self, hook_name: str, *args, **kwargs) -> list[Any]:
+        """Fire a lifecycle hook and collect results from all plugins.
+
+        Supported hooks:
+        - agent.transform: modify agent configurations
+        - tool.definition: modify tool definitions
+        - session.compacting: inject context during compaction
+        - chat.system.transform: modify system prompt
+        """
+        results = []
+        for hook_fn in self.get_all_hooks(hook_name):
+            try:
+                if asyncio.iscoroutinefunction(hook_fn):
+                    result = await hook_fn(*args, **kwargs)
+                else:
+                    result = hook_fn(*args, **kwargs)
+                if result is not None:
+                    results.append(result)
+            except Exception as e:
+                log.error("Hook %s failed: %s", hook_name, e)
+        return results
+
+    def reload(self):
+        """Hot-reload all plugins."""
+        for plugin_name in list(self._plugins.keys()):
+            plugin_path = None
+            for dir_name in (self.config.directories if self.config else []):
+                candidate = self.workspace / dir_name / plugin_name
+                if candidate.exists():
+                    plugin_path = candidate
+                    break
+            if plugin_path:
+                del self._plugins[plugin_name]
+                self._load_plugin(plugin_path)
+        log.info("Reloaded %d plugins", len(self._plugins))
+
 
 class PluginTool:
     """Base class for plugin-provided tools."""
