@@ -18,6 +18,7 @@ from .skills import SkillRegistry
 from .plugins import PluginRegistry
 from .trust_registry import TrustRegistry
 from .snapshot import get_snapshot_manager
+from .instruction_discovery import get_instruction_discoverer
 from tools import ToolRegistry, create_registry
 from .agents import agent_manager
 
@@ -303,7 +304,36 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # Get current agent
     current_agent_name = cfg.agent.default_agent
     agent_config_obj = agent_manager.get_agent(current_agent_name)
-    system_prompt = agent_config_obj.get_system_prompt() if agent_config_obj else "You are a helpful coding assistant."
+
+    # Discover and load project instructions (AGENTS.md, CLAUDE.md, etc.)
+    discoverer = get_instruction_discoverer()
+    instruction_sources = await discoverer.discover(
+        workspace=cfg.workspace,
+        config_paths=cfg.instructions.paths,
+        disable_project_config=cfg.instructions.disable_project_config,
+    )
+    instructions_text = discoverer.get_combined_content(instruction_sources)
+
+    # Build system prompt with instructions injected
+    from codeassist.prompts import build_system_prompt
+    base_prompt = agent_config_obj.get_system_prompt() if agent_config_obj else "You are a helpful coding assistant."
+    system_prompt = build_system_prompt(
+        workspace=cfg.workspace,
+        model_id=cfg.llm.model,
+        features={
+            "mcp_enabled": cfg.mcp.enabled,
+            "skills_enabled": cfg.skills.enabled,
+            "plugins_enabled": cfg.plugins.enabled,
+            "lsp_enabled": cfg.lsp.enabled,
+            "git_enabled": cfg.git.enabled,
+        },
+        instructions=instructions_text if instructions_text else None,
+    )
+    # Prepend agent-specific description/instructions
+    if agent_config_obj:
+        agent_header = agent_config_obj.get_system_prompt()
+        if agent_header and agent_header != base_prompt:
+            system_prompt = agent_header + "\n\n" + system_prompt
 
     # Use the global tools registry (supports dynamic reloading)
     if tools is None:

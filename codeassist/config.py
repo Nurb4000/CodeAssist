@@ -94,6 +94,12 @@ class ToolOutputConfig:
 
 
 @dataclass
+class InstructionsConfig:
+    paths: list[str] = field(default_factory=list)
+    disable_project_config: bool = False
+
+
+@dataclass
 class CompactionConfig:
     enabled: bool = True
     mode: str = "llm"  # "llm" or "text"
@@ -118,6 +124,7 @@ class Config:
     git: GitConfig = field(default_factory=GitConfig)
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
     tool_output: ToolOutputConfig = field(default_factory=ToolOutputConfig)
+    instructions: InstructionsConfig = field(default_factory=InstructionsConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
@@ -196,6 +203,10 @@ class Config:
                 max_lines=raw.get("tool_output", {}).get("max_lines", 2000),
                 max_bytes=raw.get("tool_output", {}).get("max_bytes", 51200),
                 retention_days=raw.get("tool_output", {}).get("retention_days", 7),
+            ),
+            instructions=InstructionsConfig(
+                paths=raw.get("instructions", {}).get("paths", []),
+                disable_project_config=raw.get("instructions", {}).get("disable_project_config", False),
             ),
             compaction=CompactionConfig(
                 enabled=raw.get("compaction", {}).get("enabled", True),
