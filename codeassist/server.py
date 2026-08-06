@@ -383,8 +383,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 approved = data.get("approved", False)
                 trust_workspace = data.get("trust_workspace", False)
                 trust_shell = data.get("trust_shell", False)
+                remember = data.get("remember", False)
                 if confirm_id:
-                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell)
+                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, remember)
+                    # Save permission if user chose to remember
+                    if remember and approved:
+                        tool_name = data.get("tool", "")
+                        file_path = data.get("file_path", "")
+                        if tool_name:
+                            await agent.save_permission(tool_name, file_path, "allow")
 
             elif data.get("type") == "question_response":
                 question_id = data.get("id")
