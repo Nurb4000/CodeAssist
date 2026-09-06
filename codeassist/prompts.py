@@ -146,7 +146,17 @@ def build_openai_messages(system_prompt: str, history: list[dict]) -> list[dict]
         role = msg["role"]
 
         if role == "user":
-            messages.append({"role": "user", "content": msg["content"]})
+            attachments = msg.get("attachments") or []
+            if attachments:
+                content: list[dict] = [{"type": "text", "text": msg.get("content") or ""}]
+                for att in attachments:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": att.get("data", "")},
+                    })
+                messages.append({"role": "user", "content": content})
+            else:
+                messages.append({"role": "user", "content": msg.get("content")})
 
         elif role == "assistant":
             entry: dict = {"role": "assistant", "content": msg.get("content") or ""}

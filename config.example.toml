@@ -19,6 +19,11 @@ api_key = ""
 #   vLLM:      "http://localhost:8000/v1"
 base_url = ""
 
+# Vision capability flag. Set to true when the model supports image input
+# (e.g. gpt-4o, or a multimodal llama.cpp/LLaMA model). Enables the image
+# attach button in the chat UI and image attachments for user messages.
+vision = false
+
 [llm.parameters]
 temperature = 0.0
 max_tokens = 8192

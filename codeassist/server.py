@@ -263,6 +263,47 @@ async def index():
 
 MAX_SESSION_NAME_LEN = 200
 MAX_MESSAGE_LEN = 100_000
+MAX_IMAGES_PER_MESSAGE = 4
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+ALLOWED_IMAGE_MIME = ("image/png", "image/jpeg", "image/webp", "image/gif")
+
+
+def _parse_image_attachments(images: list) -> tuple[list[dict], str | None]:
+    """Validate incoming base64 image data URLs.
+
+    Returns (attachments, error_message). On success error_message is None and
+    each attachment is {attachment_type, mime_type, file_name, data} where data
+    is the original data URL.
+    """
+    if not images:
+        return [], None
+    if len(images) > MAX_IMAGES_PER_MESSAGE:
+        return [], f"Too many images. Maximum is {MAX_IMAGES_PER_MESSAGE} per message."
+
+    attachments = []
+    for img in images:
+        if not isinstance(img, str) or not img.startswith("data:image/"):
+            return [], "Invalid image attachment."
+        try:
+            header, _, b64 = img.partition(",")
+            mime = header[len("data:"):].split(";")[0].lower()
+            if mime not in ALLOWED_IMAGE_MIME:
+                return [], f"Unsupported image type '{mime}'. Supported: {', '.join(ALLOWED_IMAGE_MIME)}"
+            raw = base64.b64decode(b64, validate=True)
+        except Exception:
+            return [], "Invalid image data URL."
+        if not raw:
+            return [], "Invalid image data URL."
+        if len(raw) > MAX_IMAGE_BYTES:
+            size_mb = len(raw) / (1024 * 1024)
+            return [], f"Image too large ({size_mb:.1f}MB). Maximum is {MAX_IMAGE_BYTES // (1024 * 1024)}MB."
+        attachments.append({
+            "attachment_type": "image",
+            "mime_type": mime,
+            "file_name": f"image-{len(attachments) + 1}.img",
+            "data": img,
+        })
+    return attachments, None
 
 
 @app.websocket("/ws/{session_id}")
@@ -360,10 +401,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     agent.reset_trust()
     agent_task: asyncio.Task | None = None
 
-    async def run_agent_task(message: str):
+    async def run_agent_task(message: str, images: list | None = None):
         nonlocal agent_task
         try:
-            async for event in agent.run(message):
+            async for event in agent.run(message, images or None):
                 await websocket.send_json({
                     "type": event.type,
                     **event.data,
@@ -392,7 +433,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
                     continue
 
-                agent_task = asyncio.create_task(run_agent_task(content))
+                images, img_error = _parse_image_attachments(data.get("images") or [])
+                if img_error:
+                    await websocket.send_json({"type": "error", "message": img_error})
+                    continue
+
+                agent_task = asyncio.create_task(run_agent_task(content, images))
 
             elif data.get("type") == "cancel":
                 if agent_task and not agent_task.done():

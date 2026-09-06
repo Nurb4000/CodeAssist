@@ -121,6 +121,7 @@ provider = "openai"                    # "openai" or "custom"
 model = "gpt-4o"                       # Model identifier
 api_key = "env:OPENAI_API_KEY"         # Value or "env:VAR_NAME"
 base_url = ""                          # Empty = OpenAI default, or llama.cpp URL
+vision = false                         # Enable image attachments in chat (multimodal models only)
 
 [llm.parameters]
 temperature = 0.0
@@ -385,6 +386,18 @@ CREATE TABLE messages (
     tool_calls TEXT,            -- JSON array of tool calls (for assistant messages)
     created_at TIMESTAMP
 );
+
+-- v6+: image attachments. `content` stays TEXT; attachments live here and are
+-- joined back onto messages when loaded.
+CREATE TABLE message_attachments (
+    id TEXT PRIMARY KEY,
+    message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+    attachment_type TEXT NOT NULL DEFAULT 'image',
+    mime_type TEXT NOT NULL,
+    file_name TEXT,
+    data TEXT NOT NULL,        -- full "data:<mime>;base64,..." URL
+    created_at TIMESTAMP
+);
 ```
 
 ### 7. WebSocket Protocol
@@ -407,11 +420,18 @@ Server → Client events:
   {"type": "done"}
 
 Client → Server events:
-  {"type": "user_message",    "content": "Fix the bug in main.py"}
+  {"type": "user_message",    "content": "What is this?", "images": ["data:image/png;base64,..."]}
   {"type": "cancel"}          # Abort current run
   {"type": "confirm_response", "id": "...", "approved": true}
   {"type": "switch_agent",    "agent": "plan"}
 ```
+
+`images` is an optional array of base64 `data:` URLs. When present, the user
+message content is converted to OpenAI multipart format
+(`[{"type":"text",...}, {"type":"image_url",...}]`) before being sent to the LLM.
+Limits: 4 images/message, 8 MB each, MIME PNG/JPEG/WebP/GIF. Token counting
+charges a flat ~1000 tokens per image and media parts are stripped during
+context compaction (text summary keeps a `[N image attachment(s)]` marker).
 
 ### 8. Frontend (`static/`)
 

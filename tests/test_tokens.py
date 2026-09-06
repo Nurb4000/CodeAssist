@@ -55,6 +55,19 @@ class TestCountTokens:
         msgs = [{"role": "tool", "content": "result", "tool_call_id": "call_abc123"}]
         assert count_tokens(msgs) > 0
 
+    def test_multipart_text_and_image(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Look at this screenshot:"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
+                ],
+            },
+        ]
+        total = count_tokens(msgs)
+        assert total > count_tokens([{"role": "user", "content": "Look at this screenshot:"}])
+
 
 class TestTruncateToolResult:
     def test_short_content(self):
@@ -282,3 +295,26 @@ class TestStripMedia:
         content = result[0]["content"]
         assert "Part 1" in content
         assert "Part 2" in content
+
+
+class TestExtractMultipart:
+    def test_flattens_image_attachments_to_marker(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What does this diagram show?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,xyz"}},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            },
+        ]
+        text = _extract_conversation_text(msgs)
+        assert "User: What does this diagram show?" in text
+        assert "2 image attachment(s)" in text
+        assert "base64" not in text
+
+    def test_text_only_multipart(self):
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "Only text here"}]}]
+        text = _extract_conversation_text(msgs)
+        assert "Only text here" in text

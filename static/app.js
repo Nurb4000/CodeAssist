@@ -6,6 +6,16 @@ const sessionListEl = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const modelInfoEl = document.getElementById('model-info');
 const planDisplayEl = document.getElementById('plan-display');
+const attachBtn = document.getElementById('attach-btn');
+const fileInputEl = document.getElementById('file-input');
+const attachPreviewEl = document.getElementById('attach-preview');
+const inputAreaEl = document.getElementById('input-area');
+
+let configData = {};
+let pendingImages = [];
+
+const MAX_IMAGES_PER_MESSAGE = 4;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 let currentSessionId = null;
 let ws = null;
@@ -49,8 +59,77 @@ async function api(method, path, body) {
 }
 
 async function loadConfig() {
-    const cfg = await api('GET', '/api/config');
-    modelInfoEl.textContent = `${cfg.model} | ${cfg.workspace}`;
+    configData = await api('GET', '/api/config');
+    modelInfoEl.textContent = `${configData.model} | ${configData.workspace}`;
+    setAttachmentUiEnabled(!!configData.vision);
+}
+
+function setAttachmentUiEnabled(enabled) {
+    if (!attachBtn) return;
+    attachBtn.style.display = enabled ? 'flex' : 'none';
+}
+
+function setAttachmentUiBusy(busy) {
+    if (!attachBtn) return;
+    attachBtn.disabled = busy;
+    attachBtn.style.opacity = busy ? '0.5' : '1';
+}
+
+function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+    });
+}
+
+async function addPendingImage(file) {
+    if (!file.type.startsWith('image/') || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
+        showError(`Unsupported image type '${file.type || 'unknown'}'. Supported: PNG, JPEG, WebP, GIF`);
+        return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+        showError(`Image too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum is ${MAX_IMAGE_BYTES / (1024 * 1024)}MB`);
+        return;
+    }
+    if (pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+        showError(`Too many images. Maximum is ${MAX_IMAGES_PER_MESSAGE} per message`);
+        return;
+    }
+    const dataUrl = await readFileAsDataURL(file);
+    pendingImages.push(dataUrl);
+    renderPendingImages();
+}
+
+function removePendingImage(index) {
+    pendingImages.splice(index, 1);
+    renderPendingImages();
+}
+
+function renderPendingImages() {
+    attachPreviewEl.innerHTML = '';
+    pendingImages.forEach((dataUrl, i) => {
+        const thumb = document.createElement('div');
+        thumb.className = 'attach-thumb';
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        img.alt = 'Pending attachment';
+        const remove = document.createElement('button');
+        remove.className = 'attach-remove';
+        remove.innerHTML = '&times;';
+        remove.title = 'Remove image';
+        remove.onclick = () => removePendingImage(i);
+        thumb.appendChild(img);
+        thumb.appendChild(remove);
+        attachPreviewEl.appendChild(thumb);
+    });
+}
+
+function clearPendingImages() {
+    pendingImages = [];
+    renderPendingImages();
+    fileInputEl.value = '';
 }
 
 async function loadSessions() {
@@ -168,7 +247,7 @@ async function loadMessages() {
     for (const m of msgs) {
         if (m.role === 'user') {
             finalizeToolPanel();
-            appendUserMessage(m.content);
+            appendUserMessage(m.content, m.attachments);
         } else if (m.role === 'assistant') {
             const hasContent = !!m.content;
             const hasTools = !!m.tool_calls;
@@ -205,11 +284,28 @@ function showWelcome() {
         </div>`;
 }
 
-function appendUserMessage(text) {
+function appendUserMessage(text, images = []) {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
-    div.innerHTML = `<div class="message-role user">You</div><div class="message-content user-content">${escapeHtml(text)}</div>`;
+    div.innerHTML = `<div class="message-role user">You</div><div class="message-content user-content"></div>`;
+    const content = div.querySelector('.message-content');
+    if (images && images.length > 0) {
+        const flex = document.createElement('div');
+        flex.className = 'msg-image-row';
+        for (const att of images) {
+            const dataUrl = typeof att === 'string' ? att : att.data;
+            if (dataUrl) {
+                const img = document.createElement('img');
+                img.className = 'msg-image';
+                img.src = dataUrl;
+                img.alt = att.file_name || 'Image attachment';
+                flex.appendChild(img);
+            }
+        }
+        if (flex.childElementCount > 0) content.appendChild(flex);
+    }
+    content.appendChild(document.createTextNode(text));
     messagesEl.appendChild(div);
 }
 
@@ -585,6 +681,7 @@ function connectWS() {
             sendBtn.style.display = 'flex';
             stopBtn.style.display = 'none';
             inputEl.disabled = false;
+            setAttachmentUiBusy(false);
             inputEl.focus();
         } else if (data.type === 'done') {
             hideProgress();
@@ -606,6 +703,7 @@ function connectWS() {
             sendBtn.style.display = 'flex';
             stopBtn.style.display = 'none';
             inputEl.disabled = false;
+            setAttachmentUiBusy(false);
             inputEl.focus();
         } else if (data.type === 'cancelled') {
             hideProgress();
@@ -665,7 +763,8 @@ function updateConnectionStatus(status) {
 
 function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || isStreaming) return;
+    const hasImages = pendingImages.length > 0;
+    if ((!text && !hasImages) || isStreaming) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         showError('Not connected to server. Reconnecting...');
@@ -688,13 +787,16 @@ function sendMessage() {
     sendBtn.style.display = 'none';
     stopBtn.style.display = 'flex';
     inputEl.disabled = true;
+    setAttachmentUiBusy(true);
     inputEl.value = '';
     inputEl.style.height = 'auto';
 
-    appendUserMessage(text);
+    const images = pendingImages.slice();
+    appendUserMessage(text, images);
+    clearPendingImages();
     hideContinueButton();
     showProgress('Thinking...');
-    ws.send(JSON.stringify({ type: 'user_message', content: text }));
+    ws.send(JSON.stringify({ type: 'user_message', content: text, images }));
 }
 
 function showError(msg) {
@@ -844,6 +946,40 @@ inputEl.addEventListener('input', () => {
 });
 
 sendBtn.addEventListener('click', sendMessage);
+
+attachBtn.addEventListener('click', () => fileInputEl.click());
+fileInputEl.addEventListener('change', async () => {
+    for (const file of Array.from(fileInputEl.files)) {
+        await addPendingImage(file);
+    }
+    fileInputEl.value = '';
+});
+inputEl.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const item of items) {
+        if (item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) addPendingImage(file);
+        }
+    }
+});
+inputAreaEl.addEventListener('dragover', (e) => {
+    if (isStreaming) return;
+    e.preventDefault();
+    inputAreaEl.classList.add('drag-over');
+});
+inputAreaEl.addEventListener('dragleave', () => {
+    inputAreaEl.classList.remove('drag-over');
+});
+inputAreaEl.addEventListener('drop', (e) => {
+    if (isStreaming) return;
+    e.preventDefault();
+    inputAreaEl.classList.remove('drag-over');
+    for (const file of Array.from(e.dataTransfer.files || [])) {
+        addPendingImage(file);
+    }
+});
+
 stopBtn.addEventListener('click', () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'cancel' }));

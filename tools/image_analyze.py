@@ -1,9 +1,7 @@
 """Image Analyze Tool - Analyze screenshots and UI mockups using vision-capable LLMs."""
 
-import asyncio
 import base64
 import logging
-from pathlib import Path
 
 from tools import Tool, ToolResult
 
@@ -37,9 +35,12 @@ class ImageAnalyzeTool(Tool):
 
     async def execute(self, file_path: str, question: str | None = None) -> ToolResult:
         try:
+            from codeassist.config import load_config
+
+            config = load_config()
+
             from tools.security import validate_path
-            path = Path(file_path).resolve()
-            validate_path(path)
+            path = validate_path(file_path, config.workspace)
 
             if not path.exists():
                 return ToolResult(output=f"Error: File '{file_path}' does not exist", error=True)
@@ -61,11 +62,19 @@ class ImageAnalyzeTool(Tool):
             image_data = base64.b64encode(path.read_bytes()).decode("utf-8")
             prompt = question or "Describe this image in detail."
 
+            mime_type = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+                ".tiff": "image/tiff",
+            }.get(path.suffix.lower(), "image/png")
+
             try:
                 import openai
-                from codeassist.config import load_config
 
-                config = load_config()
                 client = openai.AsyncOpenAI(
                     api_key=config.llm.api_key,
                     base_url=config.llm.base_url or None,
@@ -80,7 +89,7 @@ class ImageAnalyzeTool(Tool):
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": f"data:image/{path.suffix.lstrip('.')};base64,{image_data}",
+                                    "url": f"data:{mime_type};base64,{image_data}",
                                 },
                             },
                         ],

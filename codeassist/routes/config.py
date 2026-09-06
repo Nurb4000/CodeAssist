@@ -14,6 +14,7 @@ async def api_config():
         "provider": cfg.llm.provider,
         "workspace": str(cfg.workspace),
         "agent_name": cfg.agent.name,
+        "vision": cfg.llm.vision,
         "features": {
             "mcp_enabled": cfg.mcp.enabled,
             "skills_enabled": cfg.skills.enabled,

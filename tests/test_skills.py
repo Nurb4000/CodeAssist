@@ -73,7 +73,7 @@ It should be discoverable.
         instructions = skill_registry.get_instructions()
         
         assert "test-skill" in instructions
-        assert "slash: /test" in instructions
+        assert "<slash_command>/test</slash_command>" in instructions
 
     def test_no_skills_enabled(self, tmp_path):
         """Test behavior when skills are disabled."""

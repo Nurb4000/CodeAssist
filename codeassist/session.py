@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 DB_PATH = Path(__file__).parent / "data" / "codeassist.db"
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class _DBPool:
@@ -28,6 +28,7 @@ class _DBPool:
             if self._count < self._max_connections:
                 self._count += 1
                 conn = await aiosqlite.connect(self._db_path)
+                _ALL_CONNS.add(conn)
                 conn.row_factory = aiosqlite.Row
                 # Enable WAL mode and set busy timeout for concurrent access
                 await conn.execute("PRAGMA journal_mode=WAL")
@@ -41,10 +42,17 @@ class _DBPool:
             self._pool.put_nowait(conn)
         except asyncio.QueueFull:
             await conn.close()
+            _ALL_CONNS.discard(conn)
             self._count -= 1
 
 
 _db_pool: _DBPool | None = None
+
+# Every aiosqlite connection the pool has ever opened. aiosqlite runs one
+# non-daemon worker thread per connection; those threads only exit when the
+# connection receives aiosqlite's STOP sentinel (via conn.close()/stop()). Keep
+# them tracked so pool resets and interpreter shutdown can always stop them.
+_ALL_CONNS: set[aiosqlite.Connection] = set()
 
 
 def _get_pool() -> _DBPool:
@@ -54,15 +62,25 @@ def _get_pool() -> _DBPool:
     return _db_pool
 
 
+def _stop_all_conns():
+    """Stop every known aiosqlite worker thread (sync, loop-independent)."""
+    for conn in list(_ALL_CONNS):
+        try:
+            conn.stop()
+        except Exception:
+            pass
+    _ALL_CONNS.clear()
+
+
 def reset_pool():
     """Drop all pooled connections. Call before deleting the DB file in tests."""
     global _db_pool
+    _stop_all_conns()
     if _db_pool is not None:
         while not _db_pool._pool.empty():
             try:
-                conn = _db_pool._pool.get_nowait()
-                conn._conn.close()
-            except (asyncio.QueueEmpty, Exception):
+                _db_pool._pool.get_nowait()
+            except asyncio.QueueEmpty:
                 break
         _db_pool._count = 0
         _db_pool = None
@@ -71,12 +89,17 @@ def reset_pool():
 async def async_reset_pool():
     """Properly close all pooled connections asynchronously."""
     global _db_pool
+    for conn in list(_ALL_CONNS):
+        try:
+            await conn.close()
+        except Exception:
+            pass
+    _ALL_CONNS.clear()
     if _db_pool is not None:
         while not _db_pool._pool.empty():
             try:
-                conn = _db_pool._pool.get_nowait()
-                await conn.close()
-            except (asyncio.QueueEmpty, Exception):
+                _db_pool._pool.get_nowait()
+            except asyncio.QueueEmpty:
                 break
         _db_pool._count = 0
         _db_pool = None
@@ -130,6 +153,10 @@ async def init_db():
 
         if current_version < SCHEMA_VERSION:
             await _add_v5_tables(db)
+            current_version = 5
+
+        if current_version < SCHEMA_VERSION:
+            await _add_v6_tables(db)
             current_version = SCHEMA_VERSION
 
         await db.execute(
@@ -477,6 +504,27 @@ async def _add_v5_tables(db):
     await db.commit()
 
 
+async def _add_v6_tables(db):
+    """Add message attachments for multimodal (image) chat attachments."""
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS message_attachments (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            attachment_type TEXT NOT NULL DEFAULT 'image',
+            mime_type TEXT NOT NULL,
+            file_name TEXT,
+            data TEXT NOT NULL,
+            created_at TEXT
+        )
+    """)
+
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON message_attachments(message_id)"
+    )
+    await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -601,6 +649,7 @@ class Session:
         tool_calls: list[dict] | None = None,
         tool_call_id: str | None = None,
         name: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> str:
         mid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -619,6 +668,20 @@ class Session:
                     now,
                 ),
             )
+            for att in attachments or []:
+                await db.execute(
+                    "INSERT INTO message_attachments (id, message_id, attachment_type, mime_type, file_name, data, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        mid,
+                        att.get("attachment_type", "image"),
+                        att.get("mime_type", "application/octet-stream"),
+                        att.get("file_name"),
+                        att.get("data", ""),
+                        now,
+                    ),
+                )
             await db.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
                 (now, self.id),
@@ -633,7 +696,31 @@ class Session:
                 (self.id,),
             )
             rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+            messages = [dict(r) for r in rows]
+
+            attachment_rows = []
+            if messages:
+                cursor = await db.execute(
+                    "SELECT ma.* FROM message_attachments ma "
+                    "JOIN messages m ON ma.message_id = m.id "
+                    "WHERE m.session_id = ? ORDER BY ma.created_at",
+                    (self.id,),
+                )
+                attachment_rows = await cursor.fetchall()
+
+            by_message: dict[str, list[dict]] = {}
+            for att in attachment_rows:
+                entry = {
+                    "attachment_type": att["attachment_type"],
+                    "mime_type": att["mime_type"],
+                    "file_name": att["file_name"],
+                    "data": att["data"],
+                }
+                by_message.setdefault(att["message_id"], []).append(entry)
+
+            for msg in messages:
+                msg["attachments"] = by_message.get(msg["id"], [])
+            return messages
 
     async def update_message(self, message_id: str, content: str | None = None, tool_calls: list[dict] | None = None):
         """Update an existing message's content and/or tool_calls."""
@@ -668,6 +755,11 @@ class Session:
 
     async def delete(self):
         async with get_db() as db:
+            await db.execute(
+                "DELETE FROM message_attachments WHERE message_id IN "
+                "(SELECT id FROM messages WHERE session_id = ?)",
+                (self.id,),
+            )
             await db.execute("DELETE FROM messages WHERE session_id = ?", (self.id,))
             await db.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
             await db.commit()
@@ -684,6 +776,11 @@ class Session:
             if not row:
                 return 0
             ref_ts = row["created_at"]
+            await db.execute(
+                "DELETE FROM message_attachments WHERE message_id IN "
+                "(SELECT id FROM messages WHERE session_id = ? AND created_at > ?)",
+                (self.id, ref_ts),
+            )
             cursor = await db.execute(
                 "DELETE FROM messages WHERE session_id = ? AND created_at > ?",
                 (self.id, ref_ts),
@@ -723,6 +820,7 @@ class Session:
                 tool_calls=json.loads(msg["tool_calls"]) if msg["tool_calls"] else None,
                 tool_call_id=msg["tool_call_id"],
                 name=msg["name"],
+                attachments=msg.get("attachments"),
             )
         return new_session
 
