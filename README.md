@@ -110,6 +110,11 @@ model = "gpt-4o"
 api_key = "sk-your-key-here"
 base_url = ""
 
+# Enable image attachments in chat (attach / paste / drop):
+# Only set to true if your model supports image input
+# (e.g. gpt-4o, gpt-4o-mini, or a multimodal llama.cpp model).
+vision = true
+
 # For llama.cpp:
 # model = "your-model-name"
 # api_key = "none"
@@ -117,6 +122,16 @@ base_url = ""
 ```
 
 See `config.example.toml` for all options (agent settings, tool limits, MCP, skills, LSP, and more).
+
+### Image attachments
+
+When `vision = true` and the model supports images, the chat UI shows an attach button. You can:
+
+- Click the paperclip to pick images (PNG, JPEG, WebP, GIF)
+- Paste an image directly into the input box (`Ctrl`/`Cmd`+`V`)
+- Drag & drop image files onto the input area
+
+Limits: up to **4 images per message**, **8 MB each**. Attached images are sent to the model as OpenAI-style `image_url` parts and are persisted in the session history (including across forks/session exports). If the model is not multimodal, leave `vision = false` to hide the attach button.
 
 ### Securing the server
 

@@ -197,3 +197,83 @@ class TestSession:
         new_updated = [s for s in sessions if s["id"] == session.id][0]["updated_at"]
         
         assert new_updated != initial_updated
+
+    @pytest.mark.asyncio
+    async def test_add_message_with_attachments(self):
+        """Test adding a message with image attachments."""
+        await init_db()
+        session = await Session.create()
+
+        attachments = [
+            {
+                "attachment_type": "image",
+                "mime_type": "image/png",
+                "file_name": "diagram.png",
+                "data": "data:image/png;base64,iVBORw0KGgo=",
+            }
+        ]
+
+        msg_id = await session.add_message("user", "Look at this", attachments=attachments)
+        assert msg_id is not None
+
+        messages = await session.get_messages()
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Look at this"
+        assert messages[0]["attachments"] == attachments
+
+    @pytest.mark.asyncio
+    async def test_fork_session_preserves_attachments(self):
+        """Test that forking a session copies attachments."""
+        await init_db()
+        original = await Session.create(name="Original")
+
+        attachments = [
+            {
+                "attachment_type": "image",
+                "mime_type": "image/jpeg",
+                "file_name": "shot.jpg",
+                "data": "data:image/jpeg;base64,/9j/4AAQ",
+            }
+        ]
+        await original.add_message("user", "Check this", attachments=attachments)
+
+        forked = await original.fork(name="Forked")
+
+        original_messages = await original.get_messages()
+        forked_messages = await forked.get_messages()
+
+        assert len(forked_messages) == len(original_messages)
+        assert forked_messages[0]["attachments"] == original_messages[0]["attachments"]
+
+    @pytest.mark.asyncio
+    async def test_delete_session_removes_attachments(self):
+        """Test that deleting a session cleans up attachments."""
+        await init_db()
+        session = await Session.create()
+
+        await session.add_message(
+            "user",
+            "With image",
+            attachments=[{
+                "attachment_type": "image",
+                "mime_type": "image/png",
+                "file_name": "pic.png",
+                "data": "data:image/png;base64,abc123",
+            }],
+        )
+
+        await session.delete()
+
+        sessions = await Session.list_all()
+        assert len(sessions) == 0
+
+        import sqlite3
+        from codeassist.session import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM message_attachments"
+            ).fetchone()[0]
+            assert count == 0
+        finally:
+            conn.close()

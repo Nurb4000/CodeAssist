@@ -17,6 +17,7 @@ class LLMConfig:
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
     embedding_model: str = ""
+    vision: bool = False
 
 
 @dataclass
@@ -154,6 +155,7 @@ class Config:
                 context_window=params.get("context_window", 128000),
                 frequency_penalty=params.get("frequency_penalty", 0.0),
                 presence_penalty=params.get("presence_penalty", 0.0),
+                vision=llm_raw.get("vision", False),
             ),
             server=ServerConfig(
                 host=raw.get("server", {}).get("host", "127.0.0.1"),

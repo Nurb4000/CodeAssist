@@ -26,6 +26,12 @@ def _get_encoding(model: str = "gpt-4") -> tiktoken.Encoding:
     return _encoding_cache[model]
 
 
+# Estimated tokens per image_url part when counting multipart content.
+# Exact cost varies by resolution/format; this is a conservative flat budget
+# that still pushes the context manager toward compaction on overflow.
+IMAGE_TOKEN_ESTIMATE = 1000
+
+
 def count_tokens(messages: list[dict], model: str = "gpt-4", tool_schemas: list[dict] | None = None) -> int:
     """Estimate token count for a list of messages, optionally including tool schema overhead."""
     encoding = _get_encoding(model)
@@ -34,7 +40,15 @@ def count_tokens(messages: list[dict], model: str = "gpt-4", tool_schemas: list[
     for msg in messages:
         total += 4  # every message format: <|start|>{role}\n{content}\n<|end|>
         for key, value in msg.items():
-            if isinstance(value, str):
+            if isinstance(value, list):
+                # Multipart content (text + image_url parts)
+                for part in value:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            total += len(encoding.encode(part.get("text") or ""))
+                        elif part.get("type") == "image_url":
+                            total += IMAGE_TOKEN_ESTIMATE
+            elif isinstance(value, str):
                 total += len(encoding.encode(value))
             elif key == "tool_calls":
                 # Use JSON serialization for more accurate OpenAI wire format
@@ -244,8 +258,25 @@ def _extract_conversation_text(messages: list[dict]) -> str:
             else:
                 parts.append(f"Assistant: {content}")
         elif role == "user":
-            parts.append(f"User: {content}")
+            parts.append(f"User: {_content_to_text(content)}")
     return "\n\n".join(parts)
+
+
+def _content_to_text(content: Any) -> str:
+    """Flatten OpenAI-format content (string or list of parts) into plain text."""
+    if isinstance(content, list):
+        text_parts = []
+        media_count = 0
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    text_parts.append(part.get("text") or "")
+                elif part.get("type") == "image_url":
+                    media_count += 1
+        if media_count:
+            text_parts.append(f"[{media_count} image attachment(s)]")
+        return "\n".join(p for p in text_parts if p)
+    return content or ""
 
 
 async def llm_compact_messages(

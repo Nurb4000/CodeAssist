@@ -1,10 +1,63 @@
 """Tests for tool management API routes."""
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import base64
 import pytest
 from fastapi.testclient import TestClient
 
 from codeassist.routes.tools import router
+
+
+def make_png_data_url():
+    return "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\nfakepixels").decode()
+
+
+class TestParseImageAttachments:
+    def test_empty(self):
+        from codeassist.server import _parse_image_attachments
+        attachments, error = _parse_image_attachments([])
+        assert attachments == []
+        assert error is None
+
+    def test_valid_image(self):
+        from codeassist.server import _parse_image_attachments
+        data_url = make_png_data_url()
+        attachments, error = _parse_image_attachments([data_url])
+        assert error is None
+        assert len(attachments) == 1
+        assert attachments[0]["mime_type"] == "image/png"
+        assert attachments[0]["data"] == data_url
+
+    def test_too_many_images(self):
+        from codeassist.server import _parse_image_attachments
+        data_url = make_png_data_url()
+        attachments, error = _parse_image_attachments([data_url] * 5)
+        assert attachments == []
+        assert error is not None
+        assert "Maximum" in error
+
+    def test_invalid_data_url(self):
+        from codeassist.server import _parse_image_attachments
+        attachments, error = _parse_image_attachments(["not a data url"])
+        assert attachments == []
+        assert error is not None
+
+    def test_unsupported_mime(self):
+        from codeassist.server import _parse_image_attachments
+        attachments, error = _parse_image_attachments(
+            ["data:image/bmp;base64," + base64.b64encode(b"BMfake").decode()]
+        )
+        assert attachments == []
+        assert error is not None
+        assert "Unsupported image type" in error
+
+    def test_oversized_image(self):
+        from codeassist.server import _parse_image_attachments, MAX_IMAGE_BYTES
+        big = b"x" * (MAX_IMAGE_BYTES + 1)
+        attachments, error = _parse_image_attachments(["data:image/png;base64," + base64.b64encode(big).decode()])
+        assert attachments == []
+        assert error is not None
+        assert "too large" in error
 
 
 @pytest.fixture

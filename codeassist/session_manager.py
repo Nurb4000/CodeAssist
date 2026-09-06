@@ -71,6 +71,9 @@ class SessionManager:
             for pattern in pii_patterns:
                 content = re.sub(pattern, "***REDACTED***", content)
             msg["content"] = content
+            # Drop image attachments on redaction — screenshots/UI captures can
+            # themselves contain PII, and they bloat shared exports.
+            msg["attachments"] = []
             redacted_messages.append(msg)
 
         data["messages"] = redacted_messages
@@ -88,6 +91,7 @@ class SessionManager:
                 tool_calls=json.loads(msg["tool_calls"]) if msg.get("tool_calls") else None,
                 tool_call_id=msg.get("tool_call_id"),
                 name=msg.get("name"),
+                attachments=msg.get("attachments"),
             )
 
         return new_session

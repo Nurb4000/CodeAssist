@@ -40,7 +40,7 @@ class ToolManagerTool(Tool):
 
         if server_mod.tools is None:
             cfg = server_mod.get_config()
-            server_mod._init_subsystems(cfg)
+            await server_mod._init_subsystems(cfg)
 
         if server_mod.tools is None:
             return ToolResult(output="Tools not initialized. Server may still be starting up.")
