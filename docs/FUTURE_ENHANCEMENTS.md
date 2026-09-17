@@ -31,7 +31,27 @@ fine for power users but opaque for everyone else, and it's the source of a lot 
 - **Health/status panel**: embed `/health`, LLM connectivity, DB path + size, and a "Restart
   needed" indicator when settings change.
 
-## Robustness / correctness (found during the 2026-09-17 runtime review)
+## Feature gaps (from the 2026-09-17 code review) worth adding
+
+Gaps found during the review sweep that are missing *features*, not bugs:
+
+- **Auto-title sessions from the first message.** New sessions are named
+  `"%Y-%m-%d %H:%M"` (`Session.create`) and only a timestamp or manual rename is seen; nothing
+  derives a title from the first user message. Session summaries *do* capture `first_message`
+  (`session_manager.py:115`), so reuse that to auto-set a readable title on first message.
+- **Agent switcher in the chat UI.** `default`/`research`/`review` agent configs and
+  `/api/agents` CRUD exist (`agents.py`, `routes/agents.py`), but the chat UI has no way to pick
+  the active agent — `server.py` hardcodes `cfg.agent.default_agent` per connection. Add a
+  per-session agent dropdown (and ideally an agent-management pane) so the configs are actually
+  usable.
+- **Session pin/star/archive.** No favorite/pin/archive concept exists anywhere (session list is
+  just `ORDER BY updated_at DESC`). Nice-to-have for long-running projects so important threads
+  don't sink out of view.
+- **Expose session summaries in the chat UI.** Summaries are generated at session end and shown in
+  the KB GUI, but the main chat sidebar shows no summary preview — a tooltip/line under each
+  session would surface them where users already look.
+
+## Robustness / correctness (found during the runtime review)
 
 - **Tool permission "allow for rest of session"** — a previous version offered a permission choice
   that let the agent use an unapproved tool for the *whole session*; the current confirm dialog only
