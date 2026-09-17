@@ -403,7 +403,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         task_tool.configure(session_id, cfg, tools)
 
     agent = Agent(cfg, session, tools, system_prompt)
-    agent.reset_trust()
     agent_task: asyncio.Task | None = None
 
     async def run_agent_task(message: str, images: list | None = None):

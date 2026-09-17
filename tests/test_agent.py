@@ -6,10 +6,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from codeassist.agent import Agent, AgentEvent, CONFIRM_TOOLS
+from codeassist.agent import Agent, AgentEvent, CONFIRM_TOOLS, SESSION_TRUST
 from codeassist.config import Config
 from codeassist.session import Session
 from tools import ToolRegistry
+
+
+@pytest.fixture(autouse=True)
+def _isolate_session_trust():
+    """Session trust is keyed by session_id (process-lifetime); these tests reuse
+    the shared id "test-session", so clear the store to keep each test fresh."""
+    SESSION_TRUST.clear()
+    yield
+    SESSION_TRUST.clear()
 
 
 @pytest.fixture

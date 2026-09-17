@@ -24,6 +24,11 @@ log = logging.getLogger(__name__)
 # Legacy: tools that require user confirmation (replaced by permission_manager)
 CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 
+# Session-scoped trust flags, keyed by session id. "Trust for this session"
+# survives WS reconnects (each connection builds a fresh Agent) while staying
+# isolated per session and ephemeral across server restarts.
+SESSION_TRUST: dict[str, dict] = {}
+
 
 @dataclass
 class AgentEvent:
@@ -42,9 +47,11 @@ class Agent:
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
-        # Session trust flags
-        self._trust_workspace_writes = False
-        self._trust_shell = False
+        # Session trust flags (seeded from the session-scoped store so a
+        # reconnected WS for the same session keeps its trust).
+        stored_trust = SESSION_TRUST.get(self.session.id, {})
+        self._trust_workspace_writes = stored_trust.get("workspace", False)
+        self._trust_shell = stored_trust.get("shell", False)
         # Cost tracking
         self.cost_tracker = CostTracker()
         # Incremental message cache — avoids DB fetch on every iteration
@@ -73,15 +80,20 @@ class Agent:
         """Reset trust flags for new session."""
         self._trust_workspace_writes = False
         self._trust_shell = False
+        SESSION_TRUST.pop(self.session.id, None)
 
     def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False):
-        """Set trust flags from user confirmation."""
+        """Set trust flags from user confirmation (persisted per session id)."""
         if trust_workspace:
             self._trust_workspace_writes = True
             log.info("Workspace writes trusted. Flag=%s", self._trust_workspace_writes)
         if trust_shell:
             self._trust_shell = True
             log.info("Shell commands trusted. Flag=%s", self._trust_shell)
+        SESSION_TRUST[self.session.id] = {
+            "workspace": self._trust_workspace_writes,
+            "shell": self._trust_shell,
+        }
 
     def _is_in_workspace(self, file_path: str) -> bool:
         """Check if a file path is within the workspace."""
