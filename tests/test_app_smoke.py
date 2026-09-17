@@ -26,6 +26,8 @@ REST_ENDPOINTS_GET = [
     "/api/tools/manage/usage",
     "/api/tools/trust/pending",
     "/api/tools/trust/trusted",
+    "/api/tools/analytics/tools",
+    "/api/tools/analytics/llm",
     "/api/skills",
     "/api/skills/list",
     "/api/agents",
@@ -95,3 +97,19 @@ def test_tools_management_specific_routes_not_shadowed(live_client):
     assert live_client.get("/api/tools/manage/usage").status_code == 200
     assert live_client.post("/api/tools/manage/scan").status_code == 200
     assert live_client.post("/api/tools/reload").status_code == 200
+
+
+def test_analytics_parity_between_tools_and_kb_prefixes(live_client):
+    """/api/tools/analytics/* must be aliases of /api/kb/analytics/*
+    (single source of truth, per review item H1)."""
+    kb_tools = live_client.get("/api/kb/analytics/tools")
+    tools_tools = live_client.get("/api/tools/analytics/tools")
+    kb_llm = live_client.get("/api/kb/analytics/llm")
+    tools_llm = live_client.get("/api/tools/analytics/llm")
+    for r in (kb_tools, tools_tools, kb_llm, tools_llm):
+        assert r.status_code == 200
+    assert tools_tools.json() == kb_tools.json()
+    assert tools_llm.json() == kb_llm.json()
+
+    filtered = live_client.get("/api/kb/analytics/tools?tool_name=shell")
+    assert filtered.status_code == 200

@@ -243,35 +243,13 @@ async def scan_custom_tools():
 
 
 # ── Analytics ───────────────────────────────────────────────────
+# Aliases of the canonical /api/kb/analytics/* handlers so tool data has
+# a single source of truth (KnowledgeBase.get_tool_stats / get_llm_stats).
 
-@router.get("/analytics/tools")
-async def tool_stats(
-    session_id: str = None,
-    tool_name: str = None,
-    period_days: int = None,
-):
-    """Get tool usage analytics, optionally filtered by session, tool, or time period."""
-    from codeassist.knowledge import KnowledgeBase
-    return await KnowledgeBase.get_tool_stats(
-        session_id=session_id,
-        tool_name=tool_name,
-        period_days=period_days,
-    )
+from .kb_gui import kb_analytics_llm, kb_analytics_tools
 
-
-@router.get("/analytics/llm")
-async def llm_stats(
-    session_id: str = None,
-    model: str = None,
-    period_days: int = None,
-):
-    """Get LLM usage analytics (token counts, costs), optionally filtered."""
-    from codeassist.knowledge import KnowledgeBase
-    return await KnowledgeBase.get_llm_stats(
-        session_id=session_id,
-        model=model,
-        period_days=period_days,
-    )
+router.add_api_route("/analytics/tools", kb_analytics_tools, methods=["GET"])
+router.add_api_route("/analytics/llm", kb_analytics_llm, methods=["GET"])
 
 
 # ── Trust Management ────────────────────────────────────────────

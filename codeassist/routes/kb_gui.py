@@ -231,17 +231,33 @@ async def kb_get_session(session_id: str):
 
 
 @router.get("/analytics/tools")
-async def kb_analytics_tools(period_days: int = 30):
+async def kb_analytics_tools(
+    session_id: str = None,
+    tool_name: str = None,
+    period_days: int = 30,
+):
     """Get tool usage analytics for the specified period."""
     from codeassist.knowledge import KnowledgeBase
-    return await KnowledgeBase.get_tool_stats(period_days=period_days)
+    return await KnowledgeBase.get_tool_stats(
+        session_id=session_id,
+        tool_name=tool_name,
+        period_days=period_days,
+    )
 
 
 @router.get("/analytics/llm")
-async def kb_analytics_llm(period_days: int = 30):
+async def kb_analytics_llm(
+    session_id: str = None,
+    model: str = None,
+    period_days: int = 30,
+):
     """Get LLM usage analytics (token counts, costs) for the specified period."""
     from codeassist.knowledge import KnowledgeBase
-    return await KnowledgeBase.get_llm_stats(period_days=period_days)
+    return await KnowledgeBase.get_llm_stats(
+        session_id=session_id,
+        model=model,
+        period_days=period_days,
+    )
 
 
 # ── PII Manager ────────────────────────────────────────────────
