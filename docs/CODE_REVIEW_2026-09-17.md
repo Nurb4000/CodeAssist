@@ -65,9 +65,10 @@ needed.
 `Session.list_all()` returns `sessions` columns (`id`, `name`, `created_at`, `updated_at`, …) and
 `app.js` renders `s.name || 'Untitled'` (`app.js:144`). No field-name mismatch.
 
-### B4. `OPEN` — legacy `codeassist/test_*.py` cruft
+### B4. `DONE` — legacy `codeassist/test_*.py` cruft
 
-Stale top-level imports, not collected by pytest (uses `tests/`). Delete or port.
+Deleted (`test_api.py`, `test_knowledge_base.py`, `test_migration.py`, `test_self_creation.py`);
+nothing imported them and `pytest tests/` stays green (382 passed).
 
 ---
 
@@ -194,7 +195,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 
 | # | Effort | Item | Definition of done |
 |---|--------|------|--------------------|
-| 1 | S | **B4** — delete legacy `codeassist/test_*.py` | Files removed; `pytest tests/` still green; grep confirms nothing imports them. |
+| 1 | S | **B4** — delete legacy `codeassist/test_*.py` | ✅ Done (4 files removed, 382 tests pass). |
 | 2 | S | **E2** — finalize image DB hygiene | `docker build` produces an image with zero `*.db*` files; `docker run ... find /app -name '*.db*'` returns nothing. |
 | 3 | S | **H1** — de-duplicate `/analytics/*` | One canonical implementation (keep `/api/kb/analytics/*`); `/api/tools/analytics/*` either removed or aliased; add a parity test asserting both payloads match while both exist. |
 | 4 | S | **B2** — WS unknown session id | `/ws/{id}` does `get_or_create` (or 404+close 1008) for missing sessions; test proves no orphan `messages` rows. |
@@ -209,9 +210,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: B1, E1 (fixed earlier today)
+- `DONE`: B1, B4, E1 (fixed earlier today / this pass)
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1, A2, B2, B4, D2, E2, F1, H1, and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): A1, A2, B2, D2, E2, F1, H1, and the registry-UI gap (I)
 
 ## Revision history
 

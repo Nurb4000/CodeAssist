@@ -80,8 +80,7 @@ Gaps found during the review sweep that are missing *features*, not bugs:
   how to surface reasoning vs final answer consistently.
 - **Session list rendering**: verify `app.js` handles the `sessions` table fields
   (`name`/`created_at`/`updated_at` — the API returns those; the UI reads `title` in places).
-- **Legacy cruft**: `codeassist/test_*.py` still contain stale top-level imports; remove or port
-  them to `tests/`.
+- **Legacy cruft**: `codeassist/test_*.py` were removed (see `CODE_REVIEW_2026-09-17.md` B4). ✅
 
 ## Docker / ops
 
