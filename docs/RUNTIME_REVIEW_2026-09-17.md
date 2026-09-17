@@ -27,9 +27,11 @@ module "server".`
 `docker-compose.yml` publishes `8090:8090`; the entrypoint reads the port from the mounted
 `config.toml`, which still said `port = 8000`, so the app bound an unpublished port.
 
-**Fix:** `config.toml` `[server]` `port = 8000` → `8090` (matches compose and the
-`config.docker.toml` template). Verified: `docker ps` shows `0.0.0.0:8090->8090/tcp` and
-`Uvicorn running on http://0.0.0.0:8090`.
+**Fix:** the local (gitignored, untracked) `config.toml` `[server]` `port = 8000` → `8090` to match
+compose and the `config.docker.toml` template. `config.toml` is a per-user local file and is **not
+tracked in git** — as of this review it was removed from the index (see below). The port fix
+therefore lives in the user's local copy, created via `cp config.docker.toml config.toml`.
+Verified: `docker ps` shows `0.0.0.0:8090->8090/tcp` and `Uvicorn running on http://0.0.0.0:8090`.
 
 ### 3. FIXED — the whole REST API was missing
 
@@ -64,9 +66,11 @@ session lifecycle (create/messages/fork/patch/tags/undo/export), and that
 `/api/tools/manage/usage`, `/manage/scan`, `/tools/reload` are not shadowed. The fixture restores
 the module globals the app lifespan mutates so other tests stay isolated.
 
-### 7. FIXED — config drift: `config.toml` vs `config.docker.toml`
+### 7. FIXED — config drift & tracked secrets boundary
 
-`config.toml` (mounted by compose) was a stale dev config. **Fix:** port aligned to 8090 as above.
+`config.toml` (mounted by compose) was tracked in git despite `.gitignore`, and is the dev config.
+It may contain a real `api_key`, so it must stay local. **Fix:** removed from the git index
+(`git rm --cached config.toml`, kept on disk), stays gitignored. Port aligned to 8090 as above.
 Note: `config.docker.toml` was restored to its committed baseline — earlier local edits
 (`base_url = "http://10.0.1.27:8080"`, `context_window = 700000`) were **dropped** to avoid
 committing a private LAN IP; re-add locally if still wanted.
