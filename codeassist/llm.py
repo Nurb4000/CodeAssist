@@ -134,9 +134,17 @@ class LLMClient:
                     choice = chunk.choices[0] if chunk.choices else None
 
                     if choice and choice.delta:
-                        if choice.delta.content:
-                            accumulated_text += choice.delta.content
-                            yield TextDelta(choice.delta.content)
+                        # Reasoning models (e.g. llama.cpp Ornith) can emit the
+                        # reply in reasoning_content with empty content; fall
+                        # back to it so no text is lost (review item D2).
+                        delta_text = choice.delta.content or ""
+                        if not delta_text:
+                            reasoning = getattr(choice.delta, "reasoning_content", None)
+                            if isinstance(reasoning, str):
+                                delta_text = reasoning
+                        if delta_text:
+                            accumulated_text += delta_text
+                            yield TextDelta(delta_text)
 
                         if choice.delta.tool_calls:
                             for tc_delta in choice.delta.tool_calls:

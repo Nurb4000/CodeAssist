@@ -93,11 +93,15 @@ test `clean_database` fixture run `init_db()` for fidelity.
 Verified from the running container: `/v1/models` 200 and a full WS round-trip returns a reply.
 `config.toml` `base_url` is honored end-to-end (`config.py:152` → `llm.py:57`).
 
-### D2. `OPEN` — reasoning models may return empty `content` on non-stream calls
+### D2. `DONE` — reasoning models may return empty `content`
 
-The Ornith 1.5 model put its answer in `message.reasoning_content` with `content=""` for
-non-streamed requests. Streaming (`LLMClient.stream`) works, but any non-stream callers
-(session title/summary generation, compaction) may persist empty text. Audit non-stream call sites.
+Audit result: the app has **no non-stream chat call sites** — chat, `llm_compact_messages` and
+`_generate_llm_summary` all go through `LLMClient.stream()` (`stream: True`). The residual gap was
+stream-side: a reasoning model can emit its reply as `delta.reasoning_content` with empty
+`delta.content` (or exhaust `max_tokens` mid-thinking). Fixed in `llm.py stream()`: when
+`delta.content` is empty it falls back to `reasoning_content` (guarded by `isinstance(str)`, safe
+for non-reasoning providers). Tests: `test_stream_falls_back_to_reasoning_content`,
+`test_stream_reasoning_attr_absent_yields_no_text`.
 
 ---
 
@@ -205,7 +209,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | 3 | S | **H1** — de-duplicate `/analytics/*` | ✅ Done (kb handlers canonical + richer filters; tools routes alias them; parity test `test_analytics_parity_between_tools_and_kb_prefixes`). |
 | 4 | S | **B2** — WS unknown session id | ✅ Done (`Session.get_or_create` at WS connect; test asserts zero orphan `messages` rows). |
 | 5 | S-M | **A2** — trust scope | ✅ Done (session-keyed `SESSION_TRUST`; reconnect keeps trust; `reset_trust` on connect removed; `tests/test_trust_scope.py`). |
-| 6 | M | **D2** — reasoning-model content | Audit every non-stream `chat.completions` call site (title/summary/compaction); fall back to `reasoning_content` when `content` empty; test with a reasoning model. |
+| 6 | M | **D2** — reasoning-model content | ✅ Done (audit: no non-stream call sites; `stream()` falls back to `reasoning_content`; 2 new stream tests). |
 | 7 | M | **F1** — snapshot in Docker | Snapshot init no longer errors in the container (skip in-container, or run against an internal copy w/ correct git identity); confirm logs are clean and feature still works non-Docker. |
 | 8 | M | **A1** — per-tool "trust for this session" | Track tool+args per `confirm_id`; add a "Trust for this session" checkbox for all tools; honor it in `needs_confirmation`; (kept separate: "remember permanently" via `save_permission_choice`); tests for the WS confirm flow. |
 | 9 | L | **I** — headless registry UIs | Ship an agent switcher (dropdown per session) first; then a settings/admin page for skills/MCP/LSP backed by the existing APIs; cover with smoke tests. |
@@ -215,9 +219,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: A2, B1, B2, B4, E1, E2, H1
+- `DONE`: A2, B1, B2, B4, D2, E1, E2, H1
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1, D2, F1, and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): A1, F1, and the registry-UI gap (I)
 
 ## Revision history
 

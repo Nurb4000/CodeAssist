@@ -327,3 +327,61 @@ class TestLLMEvents:
         usage = Usage()
         assert usage.prompt_tokens == 0
         assert usage.completion_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_stream_falls_back_to_reasoning_content(self, llm_client):
+        """When content is empty, a reasoning model's delta.reasoning_content
+        must be surfaced as text instead of being dropped (review item D2)."""
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta = MagicMock()
+        chunk.choices[0].delta.content = None
+        chunk.choices[0].delta.reasoning_content = "Deep thought then answer"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.choices[0].finish_reason = "stop"
+        chunk.usage = MagicMock()
+        chunk.usage.prompt_tokens = 10
+        chunk.usage.completion_tokens = 20
+
+        async def mock_create(*args, **kwargs):
+            async def stream_response():
+                yield chunk
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        events = []
+        async for event in llm_client.stream([{"role": "user", "content": "think"}]):
+            events.append(event)
+
+        assert len(events) == 2
+        assert isinstance(events[0], TextDelta)
+        assert events[0].content == "Deep thought then answer"
+        assert isinstance(events[1], Finish)
+        assert events[1].usage.completion_tokens == 20
+
+    @pytest.mark.asyncio
+    async def test_stream_reasoning_attr_absent_yields_no_text(self, llm_client):
+        """A delta with neither content nor reasoning must not crash or emit text."""
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta = MagicMock()
+        chunk.choices[0].delta.content = None
+        del chunk.choices[0].delta.reasoning_content  # attribute absent
+        chunk.choices[0].delta.tool_calls = None
+        chunk.choices[0].finish_reason = "stop"
+        chunk.usage = None
+
+        async def mock_create(*args, **kwargs):
+            async def stream_response():
+                yield chunk
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        events = []
+        async for event in llm_client.stream([{"role": "user", "content": "hi"}]):
+            events.append(event)
+
+        # Nothing to emit (no content, no reasoning, no usage) — must not crash.
+        assert len(events) == 0
