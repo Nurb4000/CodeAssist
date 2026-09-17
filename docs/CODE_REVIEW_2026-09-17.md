@@ -31,12 +31,13 @@ Status legend: `OPEN` (documented, unfixed) · `CLEARED` (investigated, not a bu
   `needs_confirmation` to honor per-tool session trust. Already logged in
   `docs/FUTURE_ENHANCEMENTS.md`.
 
-### A2. `OPEN` — "this session" trust is actually "this connection"
+### A2. `DONE` — "this session" trust was actually "this connection"
 
-`Agent.reset_trust()` runs on every WS connect, so "trust for this session" lasts only as long as
-the WebSocket stays open; reconnecting (or page refresh) resets it. If the intent is per-session-ID
-(or per-workspace-day) persistence, the trust flags should key off the session id / a cookie, not
-the connection.
+Trust is now keyed by **session id**, in-process only (`agent.py` `SESSION_TRUST`): `Agent.set_trust`
+writes through to the store, a fresh Agent (i.e. a reconnected WS) is seeded from it, and the old
+`agent.reset_trust()` call on every WS connect was removed. Semantics decided: survives reconnect,
+isolated per session-id, ephemeral across server restarts, fresh ids start untrusted. Covered by
+`tests/test_trust_scope.py` (persists across agents same session, isolated per id, reset clears).
 
 ### A3. `CLEARED` — permissions DB
 
@@ -203,7 +204,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | 2 | S | **E2** — finalize image DB hygiene | ✅ Done (image verified: zero `*.db*` files; separate build used, running container untouched). |
 | 3 | S | **H1** — de-duplicate `/analytics/*` | ✅ Done (kb handlers canonical + richer filters; tools routes alias them; parity test `test_analytics_parity_between_tools_and_kb_prefixes`). |
 | 4 | S | **B2** — WS unknown session id | ✅ Done (`Session.get_or_create` at WS connect; test asserts zero orphan `messages` rows). |
-| 5 | S-M | **A2** — trust scope | Decide semantics (session-id scoped vs connection scoped); store trust flags keyed by session id so reconnect preserves "trust for this session"; test. |
+| 5 | S-M | **A2** — trust scope | ✅ Done (session-keyed `SESSION_TRUST`; reconnect keeps trust; `reset_trust` on connect removed; `tests/test_trust_scope.py`). |
 | 6 | M | **D2** — reasoning-model content | Audit every non-stream `chat.completions` call site (title/summary/compaction); fall back to `reasoning_content` when `content` empty; test with a reasoning model. |
 | 7 | M | **F1** — snapshot in Docker | Snapshot init no longer errors in the container (skip in-container, or run against an internal copy w/ correct git identity); confirm logs are clean and feature still works non-Docker. |
 | 8 | M | **A1** — per-tool "trust for this session" | Track tool+args per `confirm_id`; add a "Trust for this session" checkbox for all tools; honor it in `needs_confirmation`; (kept separate: "remember permanently" via `save_permission_choice`); tests for the WS confirm flow. |
@@ -214,9 +215,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: B1, B2, B4, E1, E2, H1
+- `DONE`: A2, B1, B2, B4, E1, E2, H1
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1, A2, D2, F1, and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): A1, D2, F1, and the registry-UI gap (I)
 
 ## Revision history
 
