@@ -41,6 +41,17 @@ fine for power users but opaque for everyone else, and it's the source of a lot 
   To implement: track tool+args per `confirm_id`, add a per-tool "Trust for this session" checkbox,
   and keep "remember permanently" via `save_permission_choice`.
 
+## Knowledge base
+
+- **Track Q→A pairs, not just prompts** — knowledge extraction currently stores the *user's
+  question alone* (`_extract_from_user_questions` in `session_hook.py`, "User request pattern:
+  <prompt>" with confidence 0.5). The assistant's answer is never captured or linked, so the KB
+  records "what was asked" but not "what the answer/outcome was", which is what makes it useful.
+  Plan: when a question gets an assistant reply, persist a Q→A knowledge entry (question, answer,
+  tools used, file references, confidence from the reply), and let KB search return both sides of
+  the exchange. Also consider indexing the *content* of answers (code snippets, fixes, decisions)
+  rather than only the prompt.
+
 - **WebSocket with unknown session id**: `/ws/{session_id}` will happily write message rows whose
   parent session row doesn't exist. The UI always creates the session first, but the server should
   `get_or_create` (or 404) instead of silently writing orphan rows.
