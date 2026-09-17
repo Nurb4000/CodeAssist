@@ -41,7 +41,7 @@ codeassist/          # Core application package
 tools/               # Tool implementations (read, write, edit, shell, etc.)
 tests/               # Test suite
 .codeassist/skills/  # Built-in skill definitions
-static/              # Web UI assets
+codeassist/static/   # Web UI assets
 ```
 
 ## Running the Server

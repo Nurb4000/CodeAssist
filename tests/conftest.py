@@ -12,8 +12,12 @@ def _cleanup_db_files(db_path: Path):
     """Remove the main DB file and all WAL/SHM sidecar files."""
     for suffix in ("", "-shm", "-wal", "-journal"):
         f = db_path if suffix == "" else Path(str(db_path) + suffix)
-        if f.exists():
-            f.unlink()
+        # A WAL/SHM sidecar may be checkpointed and removed between our
+        # exists() check and unlink(); treat that as success.
+        try:
+            f.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
 
 
 @pytest.fixture(autouse=True)

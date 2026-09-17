@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeAssist</title>
+    <link rel="stylesheet" href="/static/style.css?v=dev">
+    <link rel="stylesheet" href="/static/vendor/github-dark.min.css">
+    <script src="/static/vendor/marked.min.js"></script>
+    <script src="/static/vendor/highlight.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>CodeAssist</h1>
+                <div class="header-links">
+                    <a href="/static/tools.html" class="header-icon" title="Tool Manager">🔧</a>
+                    <a href="/static/kb.html" class="header-icon" title="Knowledge Base">📚</a>
+                </div>
+                <button id="new-session-btn" title="New Session">+</button>
+            </div>
+            <div id="session-list"></div>
+            <div class="sidebar-footer">
+                <div class="footer-links">
+                    <a href="/static/tools.html" class="kb-link">Tool Manager</a>
+                    <a href="/static/kb.html" class="kb-link">Knowledge Base</a>
+                </div>
+                <div id="model-info"></div>
+            </div>
+        </aside>
+        <main id="chat-area">
+            <div id="messages"></div>
+            <div id="plan-display"></div>
+            <div id="input-area">
+                <div id="attach-preview"></div>
+                <div id="attach-row">
+                    <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+                    <button id="attach-btn" title="Attach image (max 4, 8MB each)" style="display:none;">&#128206;</button>
+                    <textarea id="user-input" placeholder="Ask me anything..." rows="1"></textarea>
+                    <button id="send-btn" title="Send (Enter)">&#9654;</button>
+                    <button id="stop-btn" title="Stop" style="display:none;">&#9632;</button>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="/static/app.js?v=dev"></script>
+</body>
+</html>

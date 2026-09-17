@@ -34,8 +34,8 @@ async def list_all_tools():
     """List all tools (built-in + custom) with usage stats and trust status."""
     from ..server import get_config, get_trust_registry
     from tools import get_tools
-    from custom_tools_loader import get_custom_tool_registry
-    from knowledge import KnowledgeBase
+    from codeassist.custom_tools_loader import get_custom_tool_registry
+    from codeassist.knowledge import KnowledgeBase
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -79,12 +79,28 @@ async def list_all_tools():
     return {"tools": tools_list, "count": len(tools_list)}
 
 
+@router.get("/manage/usage")
+async def get_tool_usage_stats(period_days: int = 30):
+    """Get tool usage statistics for the specified period (default: 30 days)."""
+    from codeassist.knowledge import KnowledgeBase
+
+    stats = await KnowledgeBase.get_tool_stats(period_days=period_days)
+
+    sorted_stats = sorted(stats.items(), key=lambda x: x[1].get("total_calls", 0), reverse=True)
+
+    return {
+        "period_days": period_days,
+        "tools": {name: data for name, data in sorted_stats},
+        "total_calls": sum(data.get("total_calls", 0) for _, data in sorted_stats),
+    }
+
+
 @router.get("/manage/{tool_name}")
 async def get_tool_details(tool_name: str):
     """Get detailed information about a specific tool including its schema and source code."""
     from ..server import get_config, get_trust_registry
     from tools import get_tools
-    from custom_tools_loader import get_custom_tool_registry
+    from codeassist.custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -129,7 +145,7 @@ async def get_tool_details(tool_name: str):
 async def set_tool_trust(tool_name: str, body: dict):
     """Set the trust level for a custom tool. Body must contain 'trusted' (boolean)."""
     from ..server import get_config, get_trust_registry
-    from custom_tools_loader import get_custom_tool_registry
+    from codeassist.custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -152,7 +168,7 @@ async def set_tool_trust(tool_name: str, body: dict):
 async def delete_custom_tool(tool_name: str):
     """Delete a custom tool file and remove it from the registry."""
     from ..server import get_config, get_trust_registry
-    from custom_tools_loader import get_custom_tool_registry
+    from codeassist.custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -174,27 +190,11 @@ async def delete_custom_tool(tool_name: str):
     return {"message": f"Tool '{tool_name}' deleted", "tool_name": tool_name}
 
 
-@router.get("/manage/usage")
-async def get_tool_usage_stats(period_days: int = 30):
-    """Get tool usage statistics for the specified period (default: 30 days)."""
-    from knowledge import KnowledgeBase
-
-    stats = await KnowledgeBase.get_tool_stats(period_days=period_days)
-
-    sorted_stats = sorted(stats.items(), key=lambda x: x[1].get("total_calls", 0), reverse=True)
-
-    return {
-        "period_days": period_days,
-        "tools": {name: data for name, data in sorted_stats},
-        "total_calls": sum(data.get("total_calls", 0) for _, data in sorted_stats),
-    }
-
-
 @router.post("/manage/scan")
 async def scan_custom_tools():
     """Scan all custom tools for potentially dangerous patterns (network, file system, subprocess)."""
     from ..server import get_config, get_trust_registry
-    from custom_tools_loader import get_custom_tool_registry
+    from codeassist.custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -251,7 +251,7 @@ async def tool_stats(
     period_days: int = None,
 ):
     """Get tool usage analytics, optionally filtered by session, tool, or time period."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     return await KnowledgeBase.get_tool_stats(
         session_id=session_id,
         tool_name=tool_name,
@@ -266,7 +266,7 @@ async def llm_stats(
     period_days: int = None,
 ):
     """Get LLM usage analytics (token counts, costs), optionally filtered."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     return await KnowledgeBase.get_llm_stats(
         session_id=session_id,
         model=model,

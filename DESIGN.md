@@ -91,7 +91,7 @@ CodeAssist/
 │   ├── security.py           # SSRF protection, path validation
 │   ├── tool_manager.py       # Dynamic tool management
 │   ├── create_skill.py, create_tool.py
-├── static/                   # Web UI
+├── codeassist/static/             # Web UI
 │   ├── index.html, style.css, app.js
 ├── tests/                    # 198 tests
 │   ├── conftest.py, test_agent.py, test_config.py, test_llm.py
@@ -433,13 +433,13 @@ Limits: 4 images/message, 8 MB each, MIME PNG/JPEG/WebP/GIF. Token counting
 charges a flat ~1000 tokens per image and media parts are stripped during
 context compaction (text summary keeps a `[N image attachment(s)]` marker).
 
-### 8. Frontend (`static/`)
+### 8. Frontend (`codeassist/static/`)
 
 A single-page chat interface:
 
 - **Layout:** Sidebar (sessions) + main chat area + optional tool output panel
 - **Streaming:** WebSocket connection, append text deltas in real-time
-- **Markdown:** Render assistant messages with vendored `marked.js` + `highlight.js` (bundled in `static/vendor/`, no CDN dependency)
+- **Markdown:** Render assistant messages with vendored `marked.js` + `highlight.js` (bundled in `codeassist/static/vendor/`, no CDN dependency)
 - **Tool display:** Collapsible sections showing tool calls and their output
 - **Session management:** Create/switch/delete sessions
 - **Model selector:** Switch between configured models

@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/mcp/servers", tags=["mcp"])
 async def list_mcp_servers():
     """List all configured MCP servers."""
     from ..server import get_config
-    from session import MCPServer
+    from codeassist.session import MCPServer
     cfg = get_config()
     if not cfg.mcp.enabled:
         return {"servers": []}
@@ -19,7 +19,7 @@ async def list_mcp_servers():
 async def create_mcp_server(body: dict):
     """Create a new MCP server configuration. Body must contain 'name' and 'config'."""
     from ..server import get_config
-    from session import MCPServer
+    from codeassist.session import MCPServer
     cfg = get_config()
     if not cfg.mcp.enabled:
         raise HTTPException(status_code=400, detail="MCP is not enabled")
@@ -32,7 +32,7 @@ async def create_mcp_server(body: dict):
 @router.delete("/{server_id}")
 async def delete_mcp_server(server_id: str):
     """Delete an MCP server by ID."""
-    from session import MCPServer
+    from codeassist.session import MCPServer
     server = MCPServer(server_id)
     await server.delete()
     return {"ok": True}
