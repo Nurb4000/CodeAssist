@@ -187,6 +187,26 @@ disabled. The only boot log noise is the snapshot manager failure (see F1).
 
 ---
 
+## Action plan (effort-ordered — work top to bottom)
+
+Rough sizing: **S** ≈ under an hour, **M** ≈ half a day, **L** ≈ a day+. Each item has a concrete
+definition of done. Fix one at a time, test, commit — no overlapping changes.
+
+| # | Effort | Item | Definition of done |
+|---|--------|------|--------------------|
+| 1 | S | **B4** — delete legacy `codeassist/test_*.py` | Files removed; `pytest tests/` still green; grep confirms nothing imports them. |
+| 2 | S | **E2** — finalize image DB hygiene | `docker build` produces an image with zero `*.db*` files; `docker run ... find /app -name '*.db*'` returns nothing. |
+| 3 | S | **H1** — de-duplicate `/analytics/*` | One canonical implementation (keep `/api/kb/analytics/*`); `/api/tools/analytics/*` either removed or aliased; add a parity test asserting both payloads match while both exist. |
+| 4 | S | **B2** — WS unknown session id | `/ws/{id}` does `get_or_create` (or 404+close 1008) for missing sessions; test proves no orphan `messages` rows. |
+| 5 | S-M | **A2** — trust scope | Decide semantics (session-id scoped vs connection scoped); store trust flags keyed by session id so reconnect preserves "trust for this session"; test. |
+| 6 | M | **D2** — reasoning-model content | Audit every non-stream `chat.completions` call site (title/summary/compaction); fall back to `reasoning_content` when `content` empty; test with a reasoning model. |
+| 7 | M | **F1** — snapshot in Docker | Snapshot init no longer errors in the container (skip in-container, or run against an internal copy w/ correct git identity); confirm logs are clean and feature still works non-Docker. |
+| 8 | M | **A1** — per-tool "trust for this session" | Track tool+args per `confirm_id`; add a "Trust for this session" checkbox for all tools; honor it in `needs_confirmation`; (kept separate: "remember permanently" via `save_permission_choice`); tests for the WS confirm flow. |
+| 9 | L | **I** — headless registry UIs | Ship an agent switcher (dropdown per session) first; then a settings/admin page for skills/MCP/LSP backed by the existing APIs; cover with smoke tests. |
+
+After #9, revisit `FUTURE_ENHANCEMENTS.md` (in-app settings UI, KB Q→A, auto-titles, pin/archive)
+as the next backlog.
+
 ## Status summary
 
 - `DONE`: B1, E1 (fixed earlier today)
