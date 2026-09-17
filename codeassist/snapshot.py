@@ -50,6 +50,15 @@ class SnapshotManager:
         try:
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
 
+            # Declare this dir safe to git regardless of the owning uid. Without
+            # this, a snapshot repo owned by a different user (classic Docker
+            # mount of a host-owned workspace) makes every git call exit 128
+            # with a "dubious ownership" error.
+            subprocess.run(
+                ["git", "config", "--global", "--add", "safe.directory", str(self.snapshot_dir)],
+                capture_output=True,
+            )
+
             # Check if git repo exists
             git_dir = self.snapshot_dir / ".git"
             if not git_dir.exists():
@@ -78,15 +87,16 @@ class SnapshotManager:
             if not gitignore.exists():
                 gitignore.write_text("*.pyc\n__pycache__/\n.env\nnode_modules/\n")
 
-            # Initial commit if empty
-            result = subprocess.run(
-                ["git", "status", "--porcelain"],
+            # Initial commit if the repo has no history yet. Checking HEAD (not
+            # `status --porcelain`) avoids the bogus "not empty" result from the
+            # freshly-written .gitignore, which used to skip this branch and left
+            # the repo without a HEAD (breaking every later `git rev-parse HEAD`).
+            has_head = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
                 cwd=self.snapshot_dir,
                 capture_output=True,
-                text=True,
-            )
-            if not result.stdout.strip():
-                # Repo is empty, create initial file
+            ).returncode == 0
+            if not has_head:
                 (self.snapshot_dir / ".snapshot-init").write_text("initialized")
                 subprocess.run(
                     ["git", "add", "."],
