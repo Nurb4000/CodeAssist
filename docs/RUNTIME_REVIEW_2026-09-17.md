@@ -98,6 +98,26 @@ updated path references in README/DESIGN/CONTRIBUTING. Verified all 13 static pa
 - Legacy `codeassist/test_*.py` files still carry stale top-level imports but are not collected by
   pytest (which uses `tests/`); left as known cruft for a later cleanup.
 
+### 11. FIXED — SQLite DB lived in the wrong place → session history lost/revived
+
+The DB is opened at `codeassist/data/codeassist.db` (`Path(__file__).parent / "data"`), i.e.
+`/app/codeassist/data/` in the container. The compose persistence volume mounts at **`/app/data`**,
+so it was never used, and the DB lived in the container's writable layer. Additionally the image
+was *baking in* `codeassist/data/*.db-wal` / `*.db-shm` (the `.dockerignore` `*.db` rule doesn't
+match the WAL/SHM sidecars), so every fresh container resurrected the same stale session list;
+deletes only touched the ephemeral layer and thus "returned after restart".
+
+**Fix:**
+- `codeassist/session.py`: `DB_PATH` now honors `CODEASSIST_DATA_DIR` (default unchanged for local
+  runs).
+- `docker-compose.yml`: sets `CODEASSIST_DATA_DIR=/app/data`, pointing the DB at the
+  `codeassist-data` volume.
+- `Dockerfile`: `RUN rm -rf /app/codeassist/data` so images are always DB-free; `.dockerignore`
+  adds `codeassist/data/`, `*.db-wal`, `*.db-shm`, `*.db-journal`.
+
+Verified: fresh container starts with an empty session list; a chat persists across a full
+`docker compose down && up` (same DB file in the volume, same session id + messages).
+
 ---
 
 ## Final verified state
@@ -115,3 +135,13 @@ $ curl localhost:8090/static/tools.html       # 200 (was 404)
 $ curl localhost:8090/static/kb.html          # 200 (was 404)
 $ python -m pytest tests/ -q                  # 382 passed
 ```
+
+## Open items for a broader review (next pass)
+
+The `921381d` refactor scattered a lot of behavior; this pass fixed the boot-blocking and
+user-visible breaks. A follow-up structural review should sweep for silent regressions that don't
+panic but misbehave: WebSocket handler writes message rows without a parent-session row when handed
+an unknown session id (UI always creates the session first, so the normal flow is fine); session
+list/title rendering in `app.js` vs the `sessions` table fields (`name`/`updated_at`); reasoning
+-model replies emitted via `reasoning_content` in non-stream mode (streaming is fine); and legacy
+`codeassist/test_*.py` cruft.

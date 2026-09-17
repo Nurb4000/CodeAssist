@@ -1,13 +1,17 @@
 import aiosqlite
 import asyncio
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
 
-DB_PATH = Path(__file__).parent / "data" / "codeassist.db"
+# The database lives in a data directory that can be overridden via
+# CODEASSIST_DATA_DIR (used by Docker to point at the mounted persistence
+# volume). Defaults to <package>/data for plain local runs.
+DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
 SCHEMA_VERSION = 6
 

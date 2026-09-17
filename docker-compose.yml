@@ -13,6 +13,9 @@ services:
       - codeassist-data:/app/data
     environment:
       - CODEASSIST_WORKSPACE=/workspace
+      # Put the SQLite DB in the mounted volume so session history survives
+      # container recreation (not just in the container's writable layer)
+      - CODEASSIST_DATA_DIR=/app/data
       - TZ=UTC
 
 volumes:
