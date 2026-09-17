@@ -84,17 +84,20 @@ Gaps found during the review sweep that are missing *features*, not bugs:
 
 ## Chat file uploads
 
-- **Image upload exists but is hidden/undocumented**: the whole pipeline works
-  (`app.js` attach button → `_parse_image_attachments` → attachment on message →
-  `build_openai_messages` turns it into `image_url` content), but the button is invisible unless
-  `config.toml` sets `[llm] vision = true` (default false). Document the flag (README/config guide),
-  and ideally surface vision capability from the model instead of a manual flag.
-- **General (non-image) file upload is missing**: the file input only accepts
-  `image/png,image/jpeg,image/webp,image/gif` and `prompts.py` only emits `image_url` parts. Add
-  ordinary file attachments (e.g. read + inline for small text files; link elsewhere for large
-  binary) as a measured follow-up to image support.
-- If the model has no vision, hide the button but keep the file-upload path available for text
-  files.
+*Deferred: land with the "In-app settings / configuration UI" work above, where `vision` and the
+upload behavior become GUI-managed.*
+
+- **Attach button should always be visible** — not gated on `vision`. Behavior:
+  - Images (png/jpeg/webp/gif): attach only when the model/LLM is vision-capable; otherwise show a
+    clear "model doesn't support images" message instead of silently hiding the control.
+  - Any **text file**: always allowed to attach and inline into the prompt, vision or not
+    (useful for context/code review without cut/paste). Inline small files; link/large-file
+    handling is later work.
+  - Better: derive vision capability from the model (e.g. llama.cpp `/v1/models` `capabilities`)
+    rather than the manual `[llm] vision` flag, with the flag remaining as a manual override.
+- **Implementation notes for later**: `app.js` `setAttachmentUiEnabled(configData.vision)` gate;
+  `file-input` `accept` attribute currently image-only; `prompts.py:148-157`
+  `build_openai_messages` only emits `image_url` parts (add `text` parts for inlined files).
 
 ## Docker / ops
 
