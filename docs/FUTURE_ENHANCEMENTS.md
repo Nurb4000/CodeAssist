@@ -82,6 +82,20 @@ Gaps found during the review sweep that are missing *features*, not bugs:
   (`name`/`created_at`/`updated_at` — the API returns those; the UI reads `title` in places).
 - **Legacy cruft**: `codeassist/test_*.py` were removed (see `CODE_REVIEW_2026-09-17.md` B4). ✅
 
+## Chat file uploads
+
+- **Image upload exists but is hidden/undocumented**: the whole pipeline works
+  (`app.js` attach button → `_parse_image_attachments` → attachment on message →
+  `build_openai_messages` turns it into `image_url` content), but the button is invisible unless
+  `config.toml` sets `[llm] vision = true` (default false). Document the flag (README/config guide),
+  and ideally surface vision capability from the model instead of a manual flag.
+- **General (non-image) file upload is missing**: the file input only accepts
+  `image/png,image/jpeg,image/webp,image/gif` and `prompts.py` only emits `image_url` parts. Add
+  ordinary file attachments (e.g. read + inline for small text files; link elsewhere for large
+  binary) as a measured follow-up to image support.
+- If the model has no vision, hide the button but keep the file-upload path available for text
+  files.
+
 ## Docker / ops
 
 - Port `EXPOSE` already aligned to 8090; consider deriving `nginx`/reverse-proxy example.
