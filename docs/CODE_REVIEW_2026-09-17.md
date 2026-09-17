@@ -123,13 +123,77 @@ container-internal copy; confirm `git` identity/ownership inside the volume.
 
 ---
 
+## G. Security
+
+### G1. `CLEARED` — HTTP + WS auth are both present and consistent
+
+HTTP paths (except `/health`, `/favicon.ico`, `/static/*`) are gated by an HTTP-Basic middleware
+(`server.py:217-247`); WS uses a `sec-websocket-protocol` header handshake (`server.py:338-342`).
+Both compare with `hmac.compare_digest`. REST routes don't each re-check auth but are covered by
+the middleware. No CORS middleware — fine for the same-origin UI, but a separate frontend build
+would need it.
+
+### G2. `CLEARED` — `/api/config` does not leak secrets
+
+Response is a fixed dict (model, provider, workspace, agent_name, vision, features) — no
+`base_url`/`api_key`. (`routes/config.py`)
+
+---
+
+## H. API surface / duplication
+
+### H1. `OPEN` — `/analytics/tools` and `/analytics/llm` are implemented twice
+
+Both `routes/kb_gui.py` (prefix `/api/kb`) and `routes/tools.py` (prefix `/api/tools`) expose
+`GET /analytics/tools` and `GET /analytics/llm`. The KB GUI calls `/api/kb/analytics/*`; nothing
+calls `/api/tools/analytics/*`. Two sources of truth for the same stats data — pick one prefix and
+alias the other (or add a test asserting the payloads match).
+
+### H2. `CLEARED` — frontend API maps match routes 1:1
+
+`kb.js` (17 endpoints: stats, entries±CRUD, search, sessions, analytics, pii, settings, export,
+import, clear) all exist in `routes/kb_gui.py`; `tools.js` (`/api/tools/manage/*`) all exist in
+`routes/tools.py`. Smoke test also covers the main surface.
+
+---
+
+## I. Registry feature surface (configs with API but no UI)
+
+The server exposes registries for **skills** (`/api/skills`), **agents** (`/api/agents`),
+**MCP** (`/api/mcp/servers`), **LSP** (`/api/lsp/servers`), **plugins**, and **custom tools**
+(`/api/tools/manage/scan`), but the chat UI only links to Tool Manager (`tools.html`) and KB
+(`kb.html`). No UI exists for skills, agents (no agent switcher in `app.js`), MCP, or LSP servers.
+Consolidate these into the settings/admin page (see `FUTURE_ENHANCEMENTS.md`); until then the APIs
+are effectively headless.
+
+---
+
+## J. Cost / telemetry
+
+### J1. `CLEARED` — usage tracking exists but is only surfaced in the KB GUI
+
+`KnowledgeBase.log_llm_usage`/`log_tool_execution` + `/api/kb/analytics/*` exist. No per-session
+"cost this session" indicator in the chat UI (only the KB analytics tab shows aggregate stats).
+
+---
+
+## K. Boot ordering / registry initialization
+
+### K1. `CLEARED` — subsystem boot is deterministic
+
+`server.py:119-158` initializes trust registry, tools (with dynamic reload), skills, plugins, MCP,
+LSP, and the session hook is invoked at WS close (`server.py:543-544`). MCP/plugins default to
+disabled. The only boot log noise is the snapshot manager failure (see F1).
+
+---
+
 ## Status summary
 
 - `DONE`: B1, E1 (fixed earlier today)
-- `CLEARED`: A3, B3, C1, D1
-- `OPEN` (fix after review sign-off): A1, A2, B2, B4, D2, E2, F1
+- `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
+- `OPEN` (fix after review sign-off): A1, A2, B2, B4, D2, E2, F1, H1, and the registry-UI gap (I)
 
 ## Revision history
 
-- 2026-09-17: initial sweep (permissions, persistence, boot/schema, LLM, static, snapshot). No
-  fixes applied per policy.
+- 2026-09-17: full sweep — permissions, persistence, boot/schema, LLM, static, snapshot, security,
+  API surface, registry UIs, telemetry. No fixes applied per policy.
