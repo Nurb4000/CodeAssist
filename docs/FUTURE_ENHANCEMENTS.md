@@ -33,6 +33,14 @@ fine for power users but opaque for everyone else, and it's the source of a lot 
 
 ## Robustness / correctness (found during the 2026-09-17 runtime review)
 
+- **Tool permission "allow for rest of session"** — a previous version offered a permission choice
+  that let the agent use an unapproved tool for the *whole session*; the current confirm dialog only
+  offers session-scope trust for `write`/`edit` and `shell` (see `docs/CODE_REVIEW_2026-09-17.md`,
+  A1/A2). The server's `remember` path is half-wired (`server.py:468-481`) but dead: the client
+  never sends `tool`/`file_path`/`remember`, and `confirm_id` isn't bound to its tool server-side.
+  To implement: track tool+args per `confirm_id`, add a per-tool "Trust for this session" checkbox,
+  and keep "remember permanently" via `save_permission_choice`.
+
 - **WebSocket with unknown session id**: `/ws/{session_id}` will happily write message rows whose
   parent session row doesn't exist. The UI always creates the session first, but the server should
   `get_or_create` (or 404) instead of silently writing orphan rows.
