@@ -10,14 +10,14 @@ MAX_MESSAGE_LEN = 100_000
 @router.get("")
 async def list_sessions():
     """List all sessions ordered by most recently updated."""
-    from session import Session
+    from codeassist.session import Session
     return await Session.list_all()
 
 
 @router.post("")
 async def create_session():
     """Create a new empty session."""
-    from session import Session
+    from codeassist.session import Session
     session = await Session.create()
     return {"id": session.id}
 
@@ -25,7 +25,7 @@ async def create_session():
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
     """Delete a session and all its messages."""
-    from session import Session
+    from codeassist.session import Session
     session = Session(session_id)
     await session.delete()
     return {"ok": True}
@@ -37,7 +37,7 @@ async def rename_session(session_id: str, body: dict):
     name = body.get("name", "Untitled")
     if not isinstance(name, str) or len(name) > MAX_SESSION_NAME_LEN:
         raise HTTPException(status_code=400, detail=f"Session name must be <= {MAX_SESSION_NAME_LEN} characters")
-    from session import Session
+    from codeassist.session import Session
     session = Session(session_id)
     await session.rename(name)
     return {"ok": True}
@@ -46,7 +46,7 @@ async def rename_session(session_id: str, body: dict):
 @router.get("/{session_id}/messages")
 async def get_messages(session_id: str):
     """Get all messages for a session in chronological order."""
-    from session import Session
+    from codeassist.session import Session
     session = Session(session_id)
     return await session.get_messages()
 
@@ -54,16 +54,16 @@ async def get_messages(session_id: str):
 @router.post("/{session_id}/fork")
 async def fork_session(session_id: str, body: dict):
     """Create a fork of an existing session. Body may contain an optional 'name'."""
-    from session import Session
+    from codeassist.session import Session
     name = body.get("name")
-    new_session = await Session.fork_session(session_id, name)
+    new_session = await Session(session_id).fork(name)
     return {"id": new_session.id}
 
 
 @router.post("/{session_id}/rollback/{message_id}")
 async def rollback_session(session_id: str, message_id: str):
     """Delete all messages after the given message ID (rollback to that point)."""
-    from session import Session
+    from codeassist.session import Session
     session = Session(session_id)
     deleted = await session.delete_messages_after(message_id)
     return {"deleted": deleted}
@@ -72,7 +72,7 @@ async def rollback_session(session_id: str, message_id: str):
 @router.post("/{session_id}/undo")
 async def undo_session(session_id: str):
     """Undo the last agent turn (removes assistant message and its tool results)."""
-    from session import Session
+    from codeassist.session import Session
     session = Session(session_id)
     deleted = await session.undo_last_turn()
     return {"deleted": deleted}
@@ -81,7 +81,7 @@ async def undo_session(session_id: str):
 @router.delete("/{session_id}/messages/{message_id}")
 async def delete_message(session_id: str, message_id: str):
     """Delete a specific message and all messages after it."""
-    from session import Session
+    from codeassist.session import Session
     session = Session(session_id)
     deleted = await session.delete_messages_after(message_id)
     return {"deleted": deleted}
@@ -90,7 +90,7 @@ async def delete_message(session_id: str, message_id: str):
 @router.get("/{session_id}/summary")
 async def session_summary(session_id: str):
     """Get the AI-generated summary for a session."""
-    from session_manager import SessionManager
+    from codeassist.session_manager import SessionManager
     summary = await SessionManager.get_session_summary(session_id)
     return summary
 
@@ -98,7 +98,7 @@ async def session_summary(session_id: str):
 @router.post("/export")
 async def export_session(body: dict):
     """Export a session's data. Body must contain 'session_id' and optional 'redact' (boolean)."""
-    from session_manager import SessionManager
+    from codeassist.session_manager import SessionManager
     session_id = body.get("session_id")
     redact = body.get("redact", False)
     if not session_id:
@@ -110,7 +110,7 @@ async def export_session(body: dict):
 @router.post("/import")
 async def import_session(body: dict):
     """Import a session from exported data. Body must contain 'data' (JSON string or object)."""
-    from session_manager import SessionManager
+    from codeassist.session_manager import SessionManager
     data = body.get("data")
     name = body.get("name")
     if not data:
@@ -129,7 +129,7 @@ async def import_session(body: dict):
 @router.get("/search/tags")
 async def search_sessions_by_tags(tags: str, match_all: bool = False, limit: int = 50):
     """Search sessions by tags. 'tags' is a comma-separated string."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if not tag_list:
         raise HTTPException(status_code=400, detail="tags parameter is required")
@@ -139,14 +139,14 @@ async def search_sessions_by_tags(tags: str, match_all: bool = False, limit: int
 @router.get("/{session_id}/tags")
 async def get_session_tags(session_id: str):
     """Get all tags for a session."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     return await KnowledgeBase.get_session_tags(session_id)
 
 
 @router.post("/{session_id}/tags")
 async def add_session_tag(session_id: str, body: dict):
     """Add a tag to a session. Body must contain 'tag' and optional 'source'."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     tag = body.get("tag")
     if not tag:
         raise HTTPException(status_code=400, detail="tag is required")

@@ -15,4 +15,4 @@ PORT=${PORT:-$DEFAULT_PORT}
 
 echo "Starting CodeAssist on port $PORT"
 
-exec python -m uvicorn server:app --host 0.0.0.0 --port "$PORT"
+exec python -m uvicorn codeassist.server:app --host 0.0.0.0 --port "$PORT"

@@ -208,6 +208,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="CodeAssist", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
+# Register REST API routes (sessions, config, knowledge base, tools, agents, etc.)
+from .routes import register_routes  # noqa: E402
+
+register_routes(app)
+
 
 @app.middleware("http")
 async def auth_middleware(request, call_next):

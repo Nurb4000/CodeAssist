@@ -14,8 +14,8 @@ router = APIRouter(prefix="/api/kb", tags=["kb_gui"])
 @router.get("/stats")
 async def kb_stats():
     """Get knowledge base statistics (entry counts, session counts, quality scores)."""
-    from knowledge import KnowledgeBase
-    from session import get_db
+    from codeassist.knowledge import KnowledgeBase
+    from codeassist.session import get_db
 
     entry_types = ["pattern", "convention", "decision", "bug_fix", "optimization",
                    "skill_created", "tool_created", "effectiveness"]
@@ -62,7 +62,7 @@ async def kb_list_entries(
     offset: int = 0,
 ):
     """List knowledge entries with optional filtering by type, scope, tag, or full-text search."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     if search:
         entries = await KnowledgeBase.fulltext_search_knowledge(search, entry_type=entry_type, limit=limit)
@@ -83,7 +83,7 @@ async def kb_list_entries(
 @router.get("/entries/{entry_id}")
 async def kb_get_entry(entry_id: str):
     """Get a single knowledge entry by ID."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     entry = await KnowledgeBase.get_knowledge_entry(entry_id)
     if not entry:
         return JSONResponse(status_code=404, content={"error": "Entry not found"})
@@ -93,7 +93,7 @@ async def kb_get_entry(entry_id: str):
 @router.put("/entries/{entry_id}")
 async def kb_update_entry(entry_id: str, body: dict):
     """Update a knowledge entry. Supported fields: content, confidence, tags, metadata."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     updates = {}
     for field in ["content", "confidence", "tags", "metadata"]:
@@ -113,7 +113,7 @@ async def kb_update_entry(entry_id: str, body: dict):
 @router.delete("/entries/{entry_id}")
 async def kb_delete_entry(entry_id: str):
     """Delete a single knowledge entry by ID."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     success = await KnowledgeBase.delete_knowledge_entry(entry_id)
     if not success:
         return JSONResponse(status_code=404, content={"error": "Entry not found"})
@@ -123,7 +123,7 @@ async def kb_delete_entry(entry_id: str):
 @router.post("/entries/bulk-delete")
 async def kb_bulk_delete(body: dict):
     """Delete multiple knowledge entries by ID list."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     entry_ids = body.get("entry_ids", [])
     if not entry_ids:
@@ -140,7 +140,7 @@ async def kb_bulk_delete(body: dict):
 @router.post("/entries")
 async def kb_create_entry(body: dict):
     """Create a new knowledge entry. Required fields: entry_type, scope, content."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     required = ["entry_type", "scope", "content"]
     for field in required:
@@ -168,11 +168,11 @@ async def kb_search(
     limit: int = 20,
 ):
     """Search knowledge entries via full-text search or semantic (embedding) search."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     if semantic:
         try:
-            from embeddings import get_embedding_manager
+            from codeassist.embeddings import get_embedding_manager
             manager = get_embedding_manager()
             results = await manager.search_by_embedding(q, limit=limit)
             return {"results": results, "type": "semantic"}
@@ -186,7 +186,7 @@ async def kb_search(
 @router.get("/sessions")
 async def kb_list_sessions(limit: int = 50, offset: int = 0):
     """List sessions with their summaries, ordered by most recently updated."""
-    from session import get_db
+    from codeassist.session import get_db
 
     async with get_db() as db:
         cursor = await db.execute(
@@ -205,8 +205,8 @@ async def kb_list_sessions(limit: int = 50, offset: int = 0):
 @router.get("/sessions/{session_id}")
 async def kb_get_session(session_id: str):
     """Get full session details including messages, summary, tags, and tool executions."""
-    from session import get_db, Session
-    from knowledge import KnowledgeBase
+    from codeassist.session import get_db, Session
+    from codeassist.knowledge import KnowledgeBase
 
     session = Session(session_id)
     messages = await session.get_messages()
@@ -233,14 +233,14 @@ async def kb_get_session(session_id: str):
 @router.get("/analytics/tools")
 async def kb_analytics_tools(period_days: int = 30):
     """Get tool usage analytics for the specified period."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     return await KnowledgeBase.get_tool_stats(period_days=period_days)
 
 
 @router.get("/analytics/llm")
 async def kb_analytics_llm(period_days: int = 30):
     """Get LLM usage analytics (token counts, costs) for the specified period."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
     return await KnowledgeBase.get_llm_stats(period_days=period_days)
 
 
@@ -249,7 +249,7 @@ async def kb_analytics_llm(period_days: int = 30):
 @router.get("/pii/scan")
 async def kb_pii_scan():
     """Scan all knowledge entries for personally identifiable information (PII)."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     pii_patterns = {
         "email": r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
@@ -284,7 +284,7 @@ async def kb_pii_scan():
 @router.post("/pii/redact")
 async def kb_pii_redact(body: dict):
     """Redact PII from a knowledge entry. Optionally specify a pii_type to redact only that type."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     entry_id = body.get("entry_id")
     pii_type = body.get("pii_type")
@@ -360,7 +360,7 @@ async def kb_update_settings(body: dict):
 @router.post("/export")
 async def kb_export(body: dict | None = None):
     """Export knowledge base entries as JSON or CSV."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     format_type = body.get("format", "json") if body else "json"
 
@@ -391,7 +391,7 @@ async def kb_export(body: dict | None = None):
 @router.post("/import")
 async def kb_import(body: dict):
     """Import knowledge base entries from a list of entry objects."""
-    from knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase
 
     data = body.get("data", [])
     if not data:
@@ -420,7 +420,7 @@ async def kb_import(body: dict):
 @router.delete("/clear")
 async def kb_clear(body: dict):
     """Clear all knowledge base entries. Body must contain confirm=true."""
-    from session import get_db
+    from codeassist.session import get_db
 
     confirm = body.get("confirm", False)
     if not confirm:

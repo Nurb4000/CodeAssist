@@ -985,7 +985,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
             # Generate embedding in background (non-blocking, throttled)
             if entry_id:
                 try:
-                    from embeddings import get_embedding_manager
+                    from codeassist.embeddings import get_embedding_manager
                     manager = get_embedding_manager()
                     # Don't await - let it run in background
                     asyncio.create_task(self._throttled_embedding(manager, entry_id, content))

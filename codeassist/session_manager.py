@@ -36,9 +36,9 @@ class SessionManager:
         export_data = {
             "version": 2,
             "session_id": session_id,
-            "name": summary.get("first_message", "Untitled")[:80],
+            "name": ((summary or {}).get("first_message") or "Untitled")[:80],
             "exported_at": datetime.now(timezone.utc).isoformat(),
-            "summary": summary,
+            "summary": summary or {},
             "messages": messages,
         }
 
@@ -48,7 +48,7 @@ class SessionManager:
         if as_bundle:
             export_dir = Path(".codeassist") / "exports"
             export_dir.mkdir(parents=True, exist_ok=True)
-            safe_name = re.sub(r'[^\w\-]', '_', summary.get("first_message", "session")[:40])
+            safe_name = re.sub(r'[^\w\-]', '_', ((summary or {}).get("first_message") or "session")[:40])
             filename = f"{safe_name}_{session_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
             filepath = export_dir / filename
             filepath.write_text(json.dumps(export_data, indent=2, ensure_ascii=False), encoding="utf-8")
