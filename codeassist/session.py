@@ -646,6 +646,23 @@ class Session:
                 return cls(row[0])
         return await cls.create()
 
+    @classmethod
+    async def get_or_create(cls, session_id: str) -> "Session":
+        """Return the session with the given id, creating it if absent.
+
+        Atomic via INSERT OR IGNORE so concurrent connections with the same id
+        can't race; prevents orphaned message rows referencing an unknown session."""
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO sessions (id, name, parent_id, fork_point, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, now.strftime("%Y-%m-%d %H:%M"), None, None, now_str, now_str),
+            )
+            await db.commit()
+        return cls(session_id)
+
     async def add_message(
         self,
         role: str,

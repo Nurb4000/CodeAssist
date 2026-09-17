@@ -345,7 +345,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await websocket.close(code=4001, reason="Authentication required")
             return
 
-    session = Session(session_id)
+    session = await Session.get_or_create(session_id)
 
     # Get current agent
     current_agent_name = cfg.agent.default_agent

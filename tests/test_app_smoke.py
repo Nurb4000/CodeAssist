@@ -113,3 +113,53 @@ def test_analytics_parity_between_tools_and_kb_prefixes(live_client):
 
     filtered = live_client.get("/api/kb/analytics/tools?tool_name=shell")
     assert filtered.status_code == 200
+
+
+def _orphan_message_count(db_path):
+    """Count messages rows whose session_id has no matching sessions row."""
+    import aiosqlite
+
+    async def _count():
+        async with aiosqlite.connect(db_path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM messages m "
+                "LEFT JOIN sessions s ON m.session_id = s.id WHERE s.id IS NULL"
+            )
+            row = await cur.fetchone()
+            return row[0]
+
+    import asyncio
+    return asyncio.new_event_loop().run_until_complete(_count())
+
+
+def test_ws_unknown_session_id_creates_session_not_orphan(live_client, monkeypatch):
+    """Connecting a WS to an unknown session id must create the sessions row
+    (get_or_create), so its messages are never orphaned (review item B2)."""
+    import uuid
+    import codeassist.llm as llm_mod
+
+    async def _stub_stream(self, *args, **kwargs):
+        raise ConnectionError("stubbed LLM for test")
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    sid = f"stray-{uuid.uuid4()}"
+    known = {s["id"] for s in live_client.get("/api/sessions").json()}
+    assert sid not in known
+
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "hello from stray client"})
+        for _ in range(50):
+            if ws.receive_json().get("type") == "error":
+                break
+
+    # Session row must now exist -> the stored message references a real session.
+    sessions = {s["id"] for s in live_client.get("/api/sessions").json()}
+    assert sid in sessions, "WS should have created the session row via get_or_create"
+
+    msgs = live_client.get(f"/api/sessions/{sid}/messages").json()
+    assert any(m["role"] == "user" and m["content"] == "hello from stray client" for m in msgs)
+
+    # Direct proof across the whole table: zero orphan message rows.
+    import codeassist.session as sess_mod
+    assert _orphan_message_count(sess_mod.DB_PATH) == 0
