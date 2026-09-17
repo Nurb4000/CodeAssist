@@ -123,14 +123,20 @@ Built a clean image (`codeassist-e2-check`) from a working tree that *contains* 
 
 ## F. Runtime noise (non-fatal)
 
-### F1. `OPEN` — snapshot manager fails inside Docker
+### F1. `DONE` — snapshot manager fails inside Docker
 
-Container logs show `Failed to initialize snapshot manager: Command '['git', 'add', '.']' returned
-non-zero exit status 128`. The snapshot repo lives under the *mounted workspace*
-(`/workspace/.codeassist/snapshot`), so container-side git operations run against the user's real
-repo. Non-fatal (boot completes) but it spams logs and the snapshot feature won't work in Docker.
-**Action:** check whether snapshot init should run in the container at all, or run against a
-container-internal copy; confirm `git` identity/ownership inside the volume.
+Root cause was environmental + one real bug:
+1. **Docker "dubious ownership"** — when `WORKSPACE` mounted the repo itself, container-root git hit
+   the host-user-owned `.codeassist/snapshot` and every `git` call exited 128. Fixed by registering
+   the snapshot dir with `git config --global --add safe.directory` in `initialize()`.
+2. **Latent initial-commit bug** — a fresh repo skipped its initial commit because the
+   freshly-written `.gitignore` made `git status --porcelain` non-empty, leaving the repo without
+   `HEAD` (so `git rev-parse HEAD` later exited 128). `initialize()` now checks `git rev-parse
+   --verify HEAD` instead, seeding the commit when HEAD is absent.
+
+Verified in a rebuilt container: log shows `Snapshot manager initialized` with no error, and the
+snapshot repo has an `Initial snapshot` HEAD commit. Tests: `tests/test_snapshot.py`. (Feature kept
+enabled in Docker — it now works.)
 
 ---
 
@@ -210,7 +216,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | 4 | S | **B2** — WS unknown session id | ✅ Done (`Session.get_or_create` at WS connect; test asserts zero orphan `messages` rows). |
 | 5 | S-M | **A2** — trust scope | ✅ Done (session-keyed `SESSION_TRUST`; reconnect keeps trust; `reset_trust` on connect removed; `tests/test_trust_scope.py`). |
 | 6 | M | **D2** — reasoning-model content | ✅ Done (audit: no non-stream call sites; `stream()` falls back to `reasoning_content`; 2 new stream tests). |
-| 7 | M | **F1** — snapshot in Docker | Snapshot init no longer errors in the container (skip in-container, or run against an internal copy w/ correct git identity); confirm logs are clean and feature still works non-Docker. |
+| 7 | M | **F1** — snapshot in Docker | ✅ Done (safe.directory + HEAD-based initial commit; verified in rebuilt container: clean log, HEAD commit exists; `tests/test_snapshot.py`). |
 | 8 | M | **A1** — per-tool "trust for this session" | Track tool+args per `confirm_id`; add a "Trust for this session" checkbox for all tools; honor it in `needs_confirmation`; (kept separate: "remember permanently" via `save_permission_choice`); tests for the WS confirm flow. |
 | 9 | L | **I** — headless registry UIs | Ship an agent switcher (dropdown per session) first; then a settings/admin page for skills/MCP/LSP backed by the existing APIs; cover with smoke tests. |
 
@@ -219,9 +225,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: A2, B1, B2, B4, D2, E1, E2, H1
+- `DONE`: A2, B1, B2, B4, D2, E1, E2, F1, H1
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1, F1, and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): A1 and the registry-UI gap (I)
 
 ## Revision history
 
