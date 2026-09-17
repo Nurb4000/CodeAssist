@@ -104,10 +104,13 @@ non-streamed requests. Streaming (`LLMClient.stream`) works, but any non-stream 
 
 Fixed earlier today (relocated into `codeassist/static/`; see runtime review #9).
 
-### E2. `OPEN` — `.dockerignore` / image hygiene
+### E2. `DONE` — `.dockerignore` / image hygiene
 
-`*.db` doesn't match `*.db-wal`/`*.db-shm`; explicit patterns now added and Dockerfile strips
-`codeassist/data`. Keep an eye out for other sidecar files sneaking into images (e.g. `*.db-shm`).
+Built a clean image (`codeassist-e2-check`) from a working tree that *contains* live
+`codeassist/data/codeassist.db{,-wal,-shm}` on the host. Verification image file search:
+`find /app -name '*.db*'` → empty, and a whole-image `find / -name '*.db*'` (excluding system)
+→ empty. `.dockerignore` (`codeassist/data/`, `*.db-wal/-shm/-journal`) + Dockerfile
+`RUN rm -rf /app/codeassist/data` correctly keep DB/sidecar files out of the image.
 
 ---
 
@@ -196,7 +199,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | # | Effort | Item | Definition of done |
 |---|--------|------|--------------------|
 | 1 | S | **B4** — delete legacy `codeassist/test_*.py` | ✅ Done (4 files removed, 382 tests pass). |
-| 2 | S | **E2** — finalize image DB hygiene | `docker build` produces an image with zero `*.db*` files; `docker run ... find /app -name '*.db*'` returns nothing. |
+| 2 | S | **E2** — finalize image DB hygiene | ✅ Done (image verified: zero `*.db*` files; separate build used, running container untouched). |
 | 3 | S | **H1** — de-duplicate `/analytics/*` | One canonical implementation (keep `/api/kb/analytics/*`); `/api/tools/analytics/*` either removed or aliased; add a parity test asserting both payloads match while both exist. |
 | 4 | S | **B2** — WS unknown session id | `/ws/{id}` does `get_or_create` (or 404+close 1008) for missing sessions; test proves no orphan `messages` rows. |
 | 5 | S-M | **A2** — trust scope | Decide semantics (session-id scoped vs connection scoped); store trust flags keyed by session id so reconnect preserves "trust for this session"; test. |
@@ -210,9 +213,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: B1, B4, E1 (fixed earlier today / this pass)
+- `DONE`: B1, B4, E1, E2
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1, A2, B2, D2, E2, F1, H1, and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): A1, A2, B2, D2, F1, H1, and the registry-UI gap (I)
 
 ## Revision history
 
