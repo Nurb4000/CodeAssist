@@ -52,11 +52,13 @@ wrapped in try/except and degrade to sensible defaults; not a boot blocker.
 Fixed earlier today (see `docs/RUNTIME_REVIEW_2026-09-17.md`, finding #11): DB now honors
 `CODEASSIST_DATA_DIR`, compose points it at the `/app/data` volume, images are DB-free.
 
-### B2. `OPEN` — WS handler writes orphan message rows for unknown session ids
+### B2. `DONE` — WS handler wrote orphan message rows for unknown session ids
 
-`/ws/{session_id}` accepts any id; `agent.run()` inserts messages even when no `sessions` row
-exists. UI always creates the session first, but a stray client (or a session deleted while a WS
-was open) leaves orphaned `messages` rows referencing a dead session. **Action:** `get_or_create`
+`/ws/{session_id}` previously accepted any id and `agent.run()` inserted messages even when no
+`sessions` row existed. Now the endpoint calls `Session.get_or_create()` (`session.py` — atomic
+`INSERT OR IGNORE`, race-safe), so a stray client (or a reconnecting tab) materializes the session
+row and messages are never orphaned. Test `test_ws_unknown_session_id_creates_session_not_orphan`
+proves the row is created and the whole `messages` table has zero orphan rows after the flow.
 (or 404 + close code) at WS connect; garbage it in the process of a later cleanup sweep if ever
 needed.
 
@@ -200,7 +202,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | 1 | S | **B4** — delete legacy `codeassist/test_*.py` | ✅ Done (4 files removed, 382 tests pass). |
 | 2 | S | **E2** — finalize image DB hygiene | ✅ Done (image verified: zero `*.db*` files; separate build used, running container untouched). |
 | 3 | S | **H1** — de-duplicate `/analytics/*` | ✅ Done (kb handlers canonical + richer filters; tools routes alias them; parity test `test_analytics_parity_between_tools_and_kb_prefixes`). |
-| 4 | S | **B2** — WS unknown session id | `/ws/{id}` does `get_or_create` (or 404+close 1008) for missing sessions; test proves no orphan `messages` rows. |
+| 4 | S | **B2** — WS unknown session id | ✅ Done (`Session.get_or_create` at WS connect; test asserts zero orphan `messages` rows). |
 | 5 | S-M | **A2** — trust scope | Decide semantics (session-id scoped vs connection scoped); store trust flags keyed by session id so reconnect preserves "trust for this session"; test. |
 | 6 | M | **D2** — reasoning-model content | Audit every non-stream `chat.completions` call site (title/summary/compaction); fall back to `reasoning_content` when `content` empty; test with a reasoning model. |
 | 7 | M | **F1** — snapshot in Docker | Snapshot init no longer errors in the container (skip in-container, or run against an internal copy w/ correct git identity); confirm logs are clean and feature still works non-Docker. |
@@ -212,9 +214,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: B1, B4, E1, E2, H1
+- `DONE`: B1, B2, B4, E1, E2, H1
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1, A2, B2, D2, F1, and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): A1, A2, D2, F1, and the registry-UI gap (I)
 
 ## Revision history
 
