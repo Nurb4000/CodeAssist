@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import openai
 import pytest
 
-from codeassist.llm import LLMClient, TextDelta, ToolCall, Finish, Usage, ToolResult
+from codeassist.llm import LLMClient, TextDelta, ReasoningDelta, ToolCall, Finish, Usage, ToolResult
 from codeassist.config import LLMConfig
 
 
@@ -329,9 +329,10 @@ class TestLLMEvents:
         assert usage.completion_tokens == 0
 
     @pytest.mark.asyncio
-    async def test_stream_falls_back_to_reasoning_content(self, llm_client):
+    async def test_stream_reasoning_content_emitted_separately(self, llm_client):
         """When content is empty, a reasoning model's delta.reasoning_content
-        must be surfaced as text instead of being dropped (review item D2)."""
+        is surfaced as a ReasoningDelta (not folded into the answer text) so the
+        client can render it in a collapsible block (review item D2)."""
         chunk = MagicMock()
         chunk.choices = [MagicMock()]
         chunk.choices[0].delta = MagicMock()
@@ -355,7 +356,7 @@ class TestLLMEvents:
             events.append(event)
 
         assert len(events) == 2
-        assert isinstance(events[0], TextDelta)
+        assert isinstance(events[0], ReasoningDelta)
         assert events[0].content == "Deep thought then answer"
         assert isinstance(events[1], Finish)
         assert events[1].usage.completion_tokens == 20
@@ -385,3 +386,31 @@ class TestLLMEvents:
 
         # Nothing to emit (no content, no reasoning, no usage) — must not crash.
         assert len(events) == 0
+
+    @pytest.mark.asyncio
+    async def test_stream_content_takes_precedence_over_reasoning(self, llm_client):
+        """When a delta has real content, it is a TextDelta even if reasoning is
+        also present — reasoning is only routed separately when content is empty."""
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta = MagicMock()
+        chunk.choices[0].delta.content = "The answer"
+        chunk.choices[0].delta.reasoning_content = "hidden chain of thought"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.choices[0].finish_reason = "stop"
+        chunk.usage = None
+
+        async def mock_create(*args, **kwargs):
+            async def stream_response():
+                yield chunk
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        events = []
+        async for event in llm_client.stream([{"role": "user", "content": "go"}]):
+            events.append(event)
+
+        assert len(events) == 1
+        assert isinstance(events[0], TextDelta)
+        assert events[0].content == "The answer"

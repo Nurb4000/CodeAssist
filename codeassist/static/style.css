@@ -450,6 +450,54 @@ body {
     border-radius: 4px;
 }
 
+.thinking-block {
+    margin-bottom: 12px;
+}
+
+.thinking-block details {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
+.thinking-block summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+    list-style: none;
+    user-select: none;
+}
+
+.thinking-block summary::-webkit-details-marker { display: none; }
+
+.thinking-block .thinking-content {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-muted);
+    font-style: italic;
+    line-height: 1.5;
+}
+
+.thinking-block .thinking-content p { margin-bottom: 8px; }
+.thinking-block .thinking-content p:last-child { margin-bottom: 0; }
+
+.footer-toggle {
+    margin-top: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.footer-toggle:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+
 .message-content ul, .message-content ol {
     margin: 8px 0;
     padding-left: 24px;

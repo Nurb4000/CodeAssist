@@ -11,7 +11,7 @@ import openai
 from .config import Config
 from .cost_tracker import CostTracker, BudgetConfig
 from .knowledge import KnowledgeBase
-from .llm import LLMClient, TextDelta, ToolCall, Finish, LLMEvent
+from .llm import LLMClient, TextDelta, ReasoningDelta, ToolCall, Finish, LLMEvent
 from .prompts import build_system_prompt, build_openai_messages
 from .session import Session
 from tools import ToolRegistry
@@ -409,6 +409,7 @@ class Agent:
                 messages = _cached_messages
 
             accumulated_text = ""
+            accumulated_reasoning = ""
             tool_calls: list[ToolCall] = []
             stream_timed_out = False
 
@@ -429,6 +430,10 @@ class Agent:
                 if isinstance(event, TextDelta):
                     accumulated_text += event.content
                     yield AgentEvent("text_delta", {"content": event.content})
+
+                elif isinstance(event, ReasoningDelta):
+                    accumulated_reasoning += event.content
+                    yield AgentEvent("reasoning", {"content": event.content})
 
                 elif isinstance(event, ToolCall):
                     tool_calls.append(event)
@@ -462,6 +467,7 @@ class Agent:
                     stream_msg_id,
                     content=accumulated_text or None,
                     tool_calls=tc_dicts,
+                    reasoning_content=accumulated_reasoning or None,
                 )
                 self._messages_dirty = True
 
@@ -600,8 +606,12 @@ class Agent:
 
                 continue
 
-            if accumulated_text:
-                await self.session.update_message(stream_msg_id, content=accumulated_text)
+            if accumulated_text or accumulated_reasoning:
+                await self.session.update_message(
+                    stream_msg_id,
+                    content=accumulated_text or None,
+                    reasoning_content=accumulated_reasoning or None,
+                )
                 self._messages_dirty = True
 
                 # Repetition detection: break if the LLM keeps producing the same output

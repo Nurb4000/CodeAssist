@@ -14,7 +14,7 @@ from dataclasses import dataclass
 # volume). Defaults to <package>/data for plain local runs.
 DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class _DBPool:
@@ -175,6 +175,10 @@ async def init_db():
         if current_version < 9:
             await _add_v9_tables(db)
             current_version = 9
+
+        if current_version < 10:
+            await _add_v10_tables(db)
+            current_version = 10
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -573,6 +577,20 @@ async def _add_v9_tables(db):
     """)
 
 
+async def _add_v10_tables(db):
+    """Persist model reasoning/thinking separately from the answer.
+
+    Adds a nullable ``reasoning_content`` column to messages so reasoning
+    models (e.g. llama.cpp Ornith) can store their thinking in a collapsible
+    block instead of folding it into the assistant content.
+    """
+    cursor = await db.execute("PRAGMA table_info(messages)")
+    rows = await cursor.fetchall()
+    if not any(r["name"] == "reasoning_content" for r in rows):
+        await db.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT")
+        await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -875,24 +893,40 @@ class Session:
                 msg["attachments"] = by_message.get(msg["id"], [])
             return messages
 
-    async def update_message(self, message_id: str, content: str | None = None, tool_calls: list[dict] | None = None):
-        """Update an existing message's content and/or tool_calls."""
+    async def update_message(
+        self,
+        message_id: str,
+        content: str | None = None,
+        tool_calls: list[dict] | None = None,
+        reasoning_content: str | None = None,
+    ):
+        """Update an existing message's content, tool_calls, and/or reasoning.
+
+        Only the columns explicitly passed (non-None) are updated; passing all
+        None is a no-op for the messages table (the session's updated_at still
+        advances). ``reasoning_content`` stores model thinking separately so it
+        can be rendered in a collapsible block on the client.
+        """
         now = datetime.now(timezone.utc).isoformat()
         async with get_db() as db:
-            if content is not None and tool_calls is not None:
+            sets: list[str] = []
+            params: list = []
+            if content is not None:
+                sets.append("content = ?")
+                params.append(content)
+            if tool_calls is not None:
+                sets.append("tool_calls = ?")
+                params.append(json.dumps(tool_calls))
+            if reasoning_content is not None:
+                sets.append("reasoning_content = ?")
+                params.append(reasoning_content)
+            if sets:
+                sets.append("created_at = ?")
+                params.append(now)
+                params.extend([message_id, self.id])
                 await db.execute(
-                    "UPDATE messages SET content = ?, tool_calls = ?, created_at = ? WHERE id = ? AND session_id = ?",
-                    (content, json.dumps(tool_calls), now, message_id, self.id),
-                )
-            elif content is not None:
-                await db.execute(
-                    "UPDATE messages SET content = ?, created_at = ? WHERE id = ? AND session_id = ?",
-                    (content, now, message_id, self.id),
-                )
-            elif tool_calls is not None:
-                await db.execute(
-                    "UPDATE messages SET tool_calls = ?, created_at = ? WHERE id = ? AND session_id = ?",
-                    (json.dumps(tool_calls), now, message_id, self.id),
+                    f"UPDATE messages SET {', '.join(sets)} WHERE id = ? AND session_id = ?",
+                    params,
                 )
             await db.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
