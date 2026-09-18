@@ -16,6 +16,7 @@ def register_routes(app: FastAPI):
     from .knowledge import router as knowledge_router
     from .custom_tools import router as custom_tools_router
     from .kb_gui import router as kb_router
+    from .settings import router as settings_router
 
     app.include_router(sessions_router)
     app.include_router(config_router)
@@ -29,3 +30,4 @@ def register_routes(app: FastAPI):
     app.include_router(knowledge_router)
     app.include_router(custom_tools_router)
     app.include_router(kb_router)
+    app.include_router(settings_router)

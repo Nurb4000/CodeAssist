@@ -159,11 +159,127 @@ async function loadAgents() {
 
 async function loadAll() {
     try {
-        await Promise.all([loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents()]);
+        await Promise.all([loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings()]);
         setStatus('Updated');
     } catch (e) {
         setStatus(e.message, true);
     }
+}
+
+// --- Settings tab ---
+
+let settingsList = [];
+
+function settingsInput(spec) {
+    const id = `set-${spec.key}`;
+    if (spec.type === 'bool') {
+        return `<input type="checkbox" id="${id}" data-key="${spec.key}" ${spec.value ? 'checked' : ''}>`;
+    }
+    if (spec.options) {
+        const opts = (spec.options || [])
+            .map((o) => `<option value="${escapeHtml(o)}"${o === spec.value ? ' selected' : ''}>${escapeHtml(o)}</option>`)
+            .join('');
+        return `<select id="${id}" data-key="${spec.key}">${opts}</select>`;
+    }
+    const isNumber = spec.type === 'int' || spec.type === 'float';
+    const placeholder = spec.has_value ? '•••••• (saved override)' : '';
+    const value = spec.has_value ? '' : String(spec.value ?? '');
+    return `<input type="${isNumber ? 'number' : 'text'}" id="${id}" data-key="${spec.key}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}">`;
+}
+
+async function loadSettings() {
+    const data = await api('GET', '/api/settings');
+    settingsList = data.settings;
+    const groups = {};
+    for (const s of settingsList) {
+        (groups[s.group] = groups[s.group] || []).push(s);
+    }
+    const container = document.getElementById('settings-body');
+    container.innerHTML = '';
+    for (const [group, items] of Object.entries(groups)) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'settings-group';
+        wrapper.innerHTML = `<h3>${escapeHtml(group)}</h3>`;
+        const table = document.createElement('table');
+        table.className = 'admin-table';
+        table.innerHTML = '<thead><tr><th>Setting</th><th>Value</th></tr></thead>';
+        const tbody = document.createElement('tbody');
+        for (const spec of items) {
+            const sourceClass = spec.source === 'ui' ? 'src-ui' : 'src-file';
+            const sourceLabel = spec.source === 'ui' ? 'overridden' : 'from config.toml';
+            const restartNote = spec.restart_required ? ' · restart required' : '';
+            const resetBtn = spec.source === 'ui'
+                ? `<button class="admin-btn admin-btn-danger settings-reset" data-key="${spec.key}">Reset</button>`
+                : '';
+            tbody.appendChild(row(
+                `<td>
+                    <span class="cell-em">${escapeHtml(spec.label)}</span>
+                    <div class="admin-muted small">${escapeHtml(spec.description || '')}</div>
+                    <span class="settings-source ${sourceClass}">${sourceLabel}${restartNote}</span>
+                </td>
+                <td>${settingsInput(spec)} ${resetBtn}</td>`));
+        }
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
+    }
+    container.querySelectorAll('.settings-reset').forEach((b) => {
+        b.onclick = async () => {
+            try {
+                await api('DELETE', `/api/settings/${encodeURIComponent(b.dataset.key)}`);
+                setStatus('Reset to file/default');
+                await loadSettings();
+            } catch (e) {
+                setStatus(e.message, true);
+            }
+        };
+    });
+}
+
+function bindSettingsActions() {
+    document.getElementById('settings-save').onclick = async () => {
+        const payload = {};
+        document.querySelectorAll('[data-key]').forEach((inp) => {
+            const spec = settingsList.find((s) => s.key === inp.dataset.key);
+            if (!spec) return;
+            if (spec.type === 'bool') {
+                payload[spec.key] = inp.checked;
+                return;
+            }
+            const val = inp.value;
+            if (spec.has_value && !val.trim()) return; // secret placeholder = keep unchanged
+            payload[spec.key] = val;
+        });
+        try {
+            const res = await api('PUT', '/api/settings', payload);
+            const note = res.restart_required && res.restart_required.length
+                ? ` Restart required: ${res.restart_required.join(', ')}`
+                : '';
+            setStatus(`Saved ${res.applied.length} setting(s).${note}`);
+            await loadSettings();
+        } catch (e) {
+            setStatus(e.message, true);
+        }
+    };
+
+    document.getElementById('settings-test').onclick = async () => {
+        const baseInput = document.getElementById('set-llm.base_url');
+        const keyInput = document.getElementById('set-llm.api_key');
+        setStatus('Testing LLM connection…');
+        try {
+            const res = await api('POST', '/api/config/test-connection', {
+                base_url: (baseInput && baseInput.value.trim()) || undefined,
+                api_key: (keyInput && keyInput.value.trim()) || undefined,
+            });
+            if (res.ok) {
+                setStatus(`Connected: ${(res.models || []).length} model(s) — ${res.endpoint}`);
+            } else {
+                setStatus(`Connection failed: ${res.error || 'unknown error'}`, true);
+            }
+        } catch (e) {
+            setStatus(e.message, true);
+        }
+    };
 }
 
 async function bindCreate(idPrefix, buildBody) {
@@ -207,6 +323,8 @@ document.getElementById('custom-reload').onclick = async () => {
         await loadCustomTools();
     } catch (e) { setStatus(e.message, true); }
 };
+
+bindSettingsActions();
 
 bindCreate('skill', () => ({
     name: document.getElementById('skill-name').value.trim(),

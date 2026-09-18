@@ -186,8 +186,12 @@ async def reload_all_tools():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_config()
-    await _init_subsystems(cfg)
     await init_db()
+    # Apply UI-managed settings overrides (settings table) on top of config.toml
+    # BEFORE subsystems boot so feature toggles and runtime knobs take effect.
+    from .settings import apply_settings_overrides
+    await apply_settings_overrides(cfg)
+    await _init_subsystems(cfg)
     await init_agents()
     await init_mcp()
     await init_skills()

@@ -32,6 +32,18 @@ def clean_database(monkeypatch):
     _cleanup_db_files(_TEST_DB_PATH)
 
 
+@pytest.fixture(autouse=True)
+def _reset_settings_store():
+    """SettingsStore caches state across tests; reset before each run."""
+    from codeassist import settings as settings_mod
+
+    settings_mod.settings_store._cache = {}
+    settings_mod.settings_store._loaded = False
+    yield
+    settings_mod.settings_store._cache = {}
+    settings_mod.settings_store._loaded = False
+
+
 @pytest.fixture
 async def initialized_db():
     """Initialize the database for testing."""
