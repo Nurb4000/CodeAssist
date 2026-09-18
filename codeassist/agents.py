@@ -6,6 +6,9 @@ from .session import Agent as AgentRecord
 
 log = logging.getLogger(__name__)
 
+# Agents reseeded by initialize(); they're always present and cannot be deleted.
+BUILTIN_AGENT_KEYS = {"default", "research", "review", "build", "general", "explore", "compaction"}
+
 
 class Permission:
     """Represents a permission for an agent."""
@@ -339,6 +342,7 @@ class AgentManager:
                 "name": config.name,
                 "description": config.description,
                 "model": config.model,
+                "builtin": key in BUILTIN_AGENT_KEYS,
             }
             for key, config in self._agents.items()
         ]
@@ -368,7 +372,9 @@ class AgentManager:
         return config
 
     async def delete_agent(self, name: str):
-        """Delete an agent."""
+        """Delete an agent. Built-in agents are reseeded at startup and cannot be removed."""
+        if name in BUILTIN_AGENT_KEYS:
+            raise ValueError(f"Cannot delete built-in agent '{name}'")
         if name in self._agents:
             del self._agents[name]
 

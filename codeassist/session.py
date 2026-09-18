@@ -2,6 +2,7 @@ import aiosqlite
 import asyncio
 import json
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 # volume). Defaults to <package>/data for plain local runs.
 DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class _DBPool:
@@ -166,6 +167,10 @@ async def init_db():
         if current_version < 7:
             await _add_v7_tables(db)
             current_version = 7
+
+        if current_version < 8:
+            await _add_v8_tables(db)
+            current_version = 8
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -544,6 +549,15 @@ async def _add_v7_tables(db):
         await db.commit()
 
 
+async def _add_v8_tables(db):
+    """Add per-session pin flag (pinned sessions sort to the top)."""
+    cursor = await db.execute("PRAGMA table_info(sessions)")
+    rows = await cursor.fetchall()
+    if not any(r["name"] == "is_pinned" for r in rows):
+        await db.execute("ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+        await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -627,6 +641,34 @@ async def _ensure_fts5_tables():
         logging.getLogger(__name__).warning("Could not create FTS5 tables: %s", e)
 
 
+DEFAULT_TITLE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+AUTO_TITLE_MAX = 60
+
+
+def is_default_title(name: str | None) -> bool:
+    """True when name is exactly a Session.create() default timestamp. These
+    get replaced by an auto-title derived from the first user message."""
+    return bool(name and DEFAULT_TITLE_RE.match(name))
+
+
+def derive_title(content: str | None) -> str | None:
+    """Derive a readable session title from the first user message."""
+    if not content:
+        return None
+    collapsed = " ".join(content.split())
+    collapsed = "".join(ch for ch in collapsed if ch.isprintable()).strip()
+    if not collapsed:
+        return None
+    if len(collapsed) <= AUTO_TITLE_MAX:
+        return collapsed
+    cut = collapsed[: AUTO_TITLE_MAX + 1]
+    if " " in cut:
+        cut = cut[: cut.rindex(" ")].rstrip()
+    else:
+        cut = cut[:AUTO_TITLE_MAX]
+    return f"{cut}…"
+
+
 class Session:
     def __init__(self, session_id: str):
         self.id = session_id
@@ -648,9 +690,24 @@ class Session:
     @classmethod
     async def list_all(cls) -> list[dict]:
         async with get_db() as db:
-            cursor = await db.execute("SELECT * FROM sessions ORDER BY updated_at DESC")
+            cursor = await db.execute(
+                "SELECT s.*, ss.summary AS summary, ss.key_topics AS key_topics "
+                "FROM sessions s "
+                "LEFT JOIN session_summaries ss ON ss.session_id = s.id "
+                "ORDER BY s.is_pinned DESC, s.updated_at DESC"
+            )
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+    @classmethod
+    async def set_pinned(cls, session_id: str, pinned: bool):
+        """Mark a session as pinned/unpinned (pinned sessions sort first)."""
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE sessions SET is_pinned = ? WHERE id = ?",
+                (1 if pinned else 0, session_id),
+            )
+            await db.commit()
 
     @classmethod
     async def get_or_create_latest(cls) -> "Session":
@@ -743,8 +800,32 @@ class Session:
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
                 (now, self.id),
             )
+            if role == "user":
+                await self._maybe_auto_title(db, content)
             await db.commit()
         return mid
+
+    async def _maybe_auto_title(self, db, content: str | None):
+        """Replace an untouched timestamp title with one derived from the first
+        user message, so new sessions get readable names automatically."""
+        cursor = await db.execute("SELECT name FROM sessions WHERE id = ?", (self.id,))
+        row = await cursor.fetchone()
+        if not row or not is_default_title(row[0]):
+            return
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'",
+            (self.id,),
+        )
+        count = (await cursor.fetchone())[0]
+        if count != 1:
+            return
+        title = derive_title(content)
+        if not title:
+            return
+        await db.execute(
+            "UPDATE sessions SET name = ? WHERE id = ?",
+            (title, self.id),
+        )
 
     async def get_messages(self) -> list[dict]:
         async with get_db() as db:

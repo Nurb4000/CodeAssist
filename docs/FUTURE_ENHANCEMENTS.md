@@ -38,20 +38,23 @@ fine for power users but opaque for everyone else, and it's the source of a lot 
 
 Gaps found during the review sweep that are missing *features*, not bugs:
 
-- **Auto-title sessions from the first message.** New sessions are named
-  `"%Y-%m-%d %H:%M"` (`Session.create`) and only a timestamp or manual rename is seen; nothing
-  derives a title from the first user message. Session summaries *do* capture `first_message`
-  (`session_manager.py:115`), so reuse that to auto-set a readable title on first message.
+- ~~**Auto-title sessions from the first message.**~~ ✅ Done (schema: no migration
+  needed — `Session.add_message` replaces the untouched `%Y-%m-%d %H:%M` default name with a
+  title derived from the first user message; helpers `is_default_title`/`derive_title` in
+  `session.py`, 60-char word-boundary truncation).
 - ~~**Agent switcher in the chat UI.**~~ ✅ Done (review item I): sidebar dropdown keyed by
   registry id, streaming guard, per-session persistence (`sessions.agent_name`, schema v7),
-  `active_agent` on connect. Remaining: an agent-management pane (create/edit/delete) — the
-  `POST/DELETE /api/agents` endpoints work, and the admin page lists agents read-only.
-- **Session pin/star/archive.** No favorite/pin/archive concept exists anywhere (session list is
-  just `ORDER BY updated_at DESC`). Nice-to-have for long-running projects so important threads
-  don't sink out of view.
-- **Expose session summaries in the chat UI.** Summaries are generated at session end and shown in
-  the KB GUI, but the main chat sidebar shows no summary preview — a tooltip/line under each
-  session would surface them where users already look.
+  `active_agent` on connect. Agent-management pane also done: `POST/DELETE /api/agents`, admin
+  agents tab now creates agents and deletes custom ones (built-ins report `builtin: true` and
+  are protected server-side via `BUILTIN_AGENT_KEYS`).
+- ~~**Session pin/star/archive.**~~ ✅ Done (schema v8): `sessions.is_pinned` column,
+  `PATCH /api/sessions/{id}` `{"pinned": bool}`, `Session.set_pinned`, list ordered
+  `is_pinned DESC, updated_at DESC`; sidebar star toggle.
+- ~~**Expose session summaries in the chat UI.**~~ ✅ Done: `Session.list_all` LEFT JOINs
+  `session_summaries`, sidebar shows a truncated summary line under each session name
+  (tooltip with full text).
+- **Pin/archive depth beyond the boolean** (starred folders, archive vs pin semantics) remains
+  an idea if wanted later.
 
 ## Robustness / correctness (found during the runtime review)
 

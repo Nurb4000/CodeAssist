@@ -97,9 +97,19 @@
 
             <h2 id="agents">Agents</h2>
             <table class="admin-table">
-                <thead><tr><th>Key</th><th>Name</th><th>Description</th><th>Model</th></tr></thead>
+                <thead><tr><th>Key</th><th>Name</th><th>Description</th><th>Model</th><th></th></tr></thead>
                 <tbody id="agents-body"></tbody>
             </table>
+            <details class="admin-create">
+                <summary>Create agent</summary>
+                <div class="admin-form">
+                    <input id="agent-name" placeholder="key (required), e.g. my-agent">
+                    <input id="agent-desc" placeholder="description">
+                    <input id="agent-model" placeholder="model (optional)">
+                    <textarea id="agent-instr" placeholder="instructions (optional)"></textarea>
+                    <button class="admin-btn" id="agent-create">Create</button>
+                </div>
+            </details>
         </main>
     </div>
     <script src="/static/admin.js?v=dev"></script>

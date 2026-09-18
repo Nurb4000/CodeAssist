@@ -151,6 +151,11 @@ body {
     color: var(--red);
 }
 
+.admin-muted {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
 .admin-create {
     margin: 6px 0 18px;
     border: 1px solid var(--border);
@@ -247,16 +252,52 @@ body {
     margin-bottom: 2px;
     font-size: 13px;
     color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.session-item-main {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.session-item .session-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .session-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 .session-item.active { background: var(--bg-tertiary); color: var(--text-primary); }
+
+.session-item .pin-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+
+.session-item .pin-btn:hover { color: var(--accent); }
+.session-item .pin-btn.pinned { color: #e3b341; }
+
+.session-summary {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+    padding-left: 2px;
+    min-width: 0;
+}
 
 .session-item .delete-btn {
     display: none;
@@ -266,6 +307,7 @@ body {
     cursor: pointer;
     font-size: 12px;
     padding: 0 4px;
+    flex-shrink: 0;
 }
 
 .session-item .rename-btn {
@@ -276,6 +318,7 @@ body {
     cursor: pointer;
     font-size: 11px;
     padding: 0 4px;
+    flex-shrink: 0;
 }
 
 .session-item:hover .delete-btn,

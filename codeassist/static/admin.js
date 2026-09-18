@@ -137,11 +137,23 @@ async function loadAgents() {
     tbody.innerHTML = '';
     for (const a of agents) {
         if (a.id === 'compaction' || a.name === 'compaction') continue;
-        tbody.appendChild(row(
+        const tr = row(
             `<td>${escapeHtml(a.id || '')}</td>` +
             `<td class="cell-em">${escapeHtml(a.name || '')}</td>` +
             `<td>${escapeHtml(a.description || '')}</td>` +
-            `<td>${escapeHtml(a.model || '')}</td>`));
+            `<td>${escapeHtml(a.model || '')}</td>` +
+            `<td></td>`);
+        if (a.builtin) {
+            const label = document.createElement('span');
+            label.className = 'admin-muted';
+            label.textContent = 'built-in';
+            tr.lastElementChild.appendChild(label);
+        } else {
+            tr.lastElementChild.appendChild(
+                delButton(a.id, 'Delete', (id) => api('DELETE', `/api/agents/${encodeURIComponent(id)}`))
+            );
+        }
+        tbody.appendChild(tr);
     }
 }
 
@@ -216,5 +228,24 @@ bindCreate('lsp', () => ({
     args: parseJsonField(document.getElementById('lsp-args'), 'args'),
     languages: parseJsonField(document.getElementById('lsp-langs'), 'languages'),
 }));
+
+document.getElementById('agent-create').onclick = async () => {
+    const name = document.getElementById('agent-name').value.trim();
+    if (!name) { setStatus('Agent key is required', true); return; }
+    try {
+        await api('POST', '/api/agents', {
+            name,
+            description: document.getElementById('agent-desc').value.trim() || null,
+            model: document.getElementById('agent-model').value.trim() || null,
+            instructions: document.getElementById('agent-instr').value.trim() || null,
+        });
+        setStatus('Agent created');
+        document.getElementById('agent-name').value = '';
+        document.getElementById('agent-desc').value = '';
+        document.getElementById('agent-model').value = '';
+        document.getElementById('agent-instr').value = '';
+        await loadAgents();
+    } catch (e) { setStatus(e.message, true); }
+};
 
 loadAll();
