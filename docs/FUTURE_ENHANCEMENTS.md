@@ -99,6 +99,44 @@ Gaps found during the review sweep that are missing *features*, not bugs:
   (`Agent._confirm_requests` / `get_confirm_context`) and persists the allow from that
   server-side context, never from client-echoed values (`server.py` `confirm_response`).
 
+## Chat UX / telemetry
+
+- **Collapsible "thinking" block.** Reasoning content currently streams inline as plain text
+  (`llm.py` falls back to `reasoning_content` when `content` is empty; the `.thinking` CSS class
+  exists but nothing renders it). Plan: per assistant message, render reasoning in a collapsed
+  "Thinking" disclosure (italic, muted, expandable), default collapsed to keep output clean; a
+  global preference to always hide it. Also close the "Reasoning models" loop below by storing
+  reasoning separately from the final answer so it can be collapsed/skipped.
+
+- **Export / import a chat.** Server-side export already exists
+  (`SessionManager.export_session`, `POST /api/sessions/export`, redact + self-contained bundle),
+  but there is **no chat UI** for it and **no import path at all**. Plan:
+  - per-session Export/Import actions (sidebar per-session menu or message toolbar) producing the
+    existing JSON bundle; Import creates a new session from a bundle (messages + attachments);
+  - surface the redact/PII option in the dialog;
+  - consider a fork-of-export ("import as new session") rather than overwriting.
+
+- **Running token count + token rate.** ✅ Done (this batch). The sidebar footer now shows a
+  `#token-info` line: cumulative session tokens + live `tok/s` rate. Tokens are accumulated on the
+  WS `finish` event (`data.usage.prompt_tokens`/`completion_tokens`) — no new endpoint needed;
+  rate is computed between consecutive finishes. (Per-model totals on the KB/tool dashboard still
+  open.)
+
+- **Model name in the sidebar footer.** ✅ Done. `#model-info` now renders the **effective**
+  model (`configData.effective_model`, which is the auto-detected local model or the configured
+  one for external providers) plus its context window, with a `• auto` badge when detected from a
+  local backend.
+
+- **Auto-detect local model + context window.** ✅ Done (this batch). `capabilities.get_backend_info()`
+  now probes `/v1/models` (cached 60s, fail-closed) for the model id and context window in addition
+  to vision. `/api/config` returns `detected_model`, `effective_model`, `effective_context_window`,
+  `detected_context_window`, `backend_source`, `backend_external`. For **local** backends the
+  effective model/context come from the probe; for **external** providers the admin-configured
+  values are kept and `backend_source` is null (no "auto" badge). llama.cpp's `/v1/models` returns
+  only the model id (no context metadata), so the context window falls back to the configured
+  value — verified live against the Ornith backend. Remaining: auto-detect context window when a
+  backend actually exposes it (e.g. via a props/metadata endpoint).
+
 ## Knowledge base
 
 - **Review the KB process end-to-end and harden it** — the pipeline currently writes *everything*

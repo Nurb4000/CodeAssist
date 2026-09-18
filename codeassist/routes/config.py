@@ -8,15 +8,34 @@ router = APIRouter(tags=["config"])
 async def api_config():
     """Get current server configuration (model, workspace, enabled features)."""
     from ..server import get_config
-    from ..capabilities import model_vision_capable
+    from ..capabilities import get_backend_info, model_vision_capable
     cfg = get_config()
+    vision = await model_vision_capable(cfg)
+    backend = await get_backend_info(cfg)
+    # Local vs external provider rule: auto-detect the in-use model for local /
+    # self-hosted backends; external providers (api.openai.com, blank base_url)
+    # keep showing the admin-configured model as before.
+    base = (cfg.llm.base_url or "").strip().lower()
+    external = (not base) or "api.openai.com" in base
+    detected = backend.get("model")
+    effective = detected if (not external and detected and backend.get("source") == "backend") else cfg.llm.model
+    window = backend.get("context_window") if (not external and backend.get("context_window")) else cfg.llm.context_window
     return {
         "model": cfg.llm.model,
+        "detected_model": detected,
+        "effective_model": effective,
         "provider": cfg.llm.provider,
         "workspace": str(cfg.workspace),
         "agent_name": cfg.agent.name,
         "vision": cfg.llm.vision,
-        "vision_capable": await model_vision_capable(cfg),
+        "vision_capable": vision,
+        "context_window": cfg.llm.context_window,
+        "effective_context_window": window,
+        "detected_context_window": backend.get("context_window"),
+        # Only claim auto-detection for local backends; external providers keep
+        # showing the configured model with no "auto" badge.
+        "backend_source": ("backend" if (backend.get("source") and not external) else None),
+        "backend_external": external,
         "features": {
             "mcp_enabled": cfg.mcp.enabled,
             "skills_enabled": cfg.skills.enabled,
