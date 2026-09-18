@@ -530,7 +530,7 @@ CodeAssist/
 
 A couple of screenshots of it in action.
 
-<img width="1535" height="929" alt="image" src="https://github.com/user-attachments/assets/6ec990df-c68b-4383-91aa-6fec0778c0eb" />
+<img width="1488" height="822" alt="image" src="https://github.com/user-attachments/assets/5ccccd2b-9d1e-44f0-a00b-20bef0020e8b" />
 <img width="844" height="624" alt="image" src="https://github.com/user-attachments/assets/699085b7-b580-4fbc-b34a-c157a8134ab7" />
 <img width="831" height="411" alt="image" src="https://github.com/user-attachments/assets/cb468233-6407-4c73-b775-46a32fc54d02" />
 <img width="786" height="394" alt="image" src="https://github.com/user-attachments/assets/c778bf52-9c31-4982-8cb5-84ebbb844c2a" />
