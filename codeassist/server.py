@@ -210,7 +210,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CodeAssist", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static"),
+    name="static",
+)
+
+
+@app.middleware("http")
+async def static_cache_headers(request, call_next):
+    """Force browsers to revalidate static assets on every deploy.
+
+    Without explicit cache headers, browsers fall back to heuristic caching and
+    can serve a stale app.js/style.css after a container rebuild — which makes
+    fresh UI changes (icons, layout) appear half-applied. Setting no-store on
+    static assets guarantees the browser re-fetches them every load.
+    """
+    if request.url.path.startswith("/static/"):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+    return await call_next(request)
 
 # Register REST API routes (sessions, config, knowledge base, tools, agents, etc.)
 from .routes import register_routes  # noqa: E402
