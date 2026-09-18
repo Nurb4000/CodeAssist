@@ -25,7 +25,6 @@
                         <a href="/static/kb.html" class="header-icon" title="Knowledge Base">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                         </a>
-                        <select id="agent-select" title="Active agent" style="display:none;"></select>
                     </div>
                     <button id="import-btn" class="header-action-btn" title="Import session from JSON"></button>
                     <button id="new-session-btn" class="header-action-btn new-session" title="New Session">+</button>
@@ -46,6 +45,14 @@
             <div id="messages"></div>
             <div id="plan-display"></div>
             <div id="input-area">
+                <div id="mode-selector" class="mode-selector">
+                    <button type="button" id="mode-trigger" class="mode-trigger" aria-haspopup="listbox" aria-expanded="false" title="Switch agent">
+                        <span class="mode-dot"></span>
+                        <span id="mode-label" class="mode-label">Full</span>
+                        <svg class="mode-arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                    <div id="mode-list" class="mode-list" role="listbox" hidden></div>
+                </div>
                 <div id="attach-preview"></div>
                 <div id="attach-row">
                     <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif,text/*,.txt,.md,.markdown,.py,.js,.jsx,.ts,.tsx,.json,.toml,.yaml,.yml,.csv,.html,.css,.scss,.sql,.sh,.bash,.go,.rs,.java,.c,.cpp,.h,.hpp,.rb,.php,.lua,.xml" multiple hidden>
