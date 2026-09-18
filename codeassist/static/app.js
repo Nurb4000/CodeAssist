@@ -237,11 +237,21 @@ async function loadSessions() {
         const div = document.createElement('div');
         div.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
         div.dataset.id = s.id;
+        div.onclick = () => switchSession(s.id);
+
+        const row = document.createElement('div');
+        row.className = 'session-item-main';
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = s.name || 'Untitled';
         nameSpan.className = 'session-name';
         nameSpan.onclick = () => switchSession(s.id);
+
+        const pinBtn = document.createElement('button');
+        pinBtn.className = 'pin-btn' + (s.is_pinned ? ' pinned' : '');
+        pinBtn.innerHTML = s.is_pinned ? '&#9733;' : '&#9734;';
+        pinBtn.title = s.is_pinned ? 'Unpin session' : 'Pin session';
+        pinBtn.onclick = (e) => { e.stopPropagation(); togglePin(s.id, s.is_pinned, pinBtn); };
 
         const renameBtn = document.createElement('button');
         renameBtn.className = 'rename-btn';
@@ -249,7 +259,7 @@ async function loadSessions() {
         renameBtn.title = 'Rename session';
         renameBtn.onclick = (e) => {
             e.stopPropagation();
-            startRename(div, s.id, nameSpan);
+            startRename(s.id, nameSpan);
         };
 
         const delBtn = document.createElement('button');
@@ -259,14 +269,33 @@ async function loadSessions() {
         delBtn.title = 'Delete session';
         delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
 
-        div.appendChild(nameSpan);
-        div.appendChild(renameBtn);
-        div.appendChild(delBtn);
+        row.appendChild(nameSpan);
+        row.appendChild(pinBtn);
+        row.appendChild(renameBtn);
+        row.appendChild(delBtn);
+        div.appendChild(row);
+
+        if (s.summary) {
+            const sum = document.createElement('div');
+            sum.className = 'session-summary';
+            sum.textContent = s.summary.length > 120 ? s.summary.slice(0, 120) + '…' : s.summary;
+            sum.title = s.summary;
+            div.appendChild(sum);
+        }
         sessionListEl.appendChild(div);
     }
 }
 
-function startRename(container, sessionId, nameSpan) {
+async function togglePin(id, currentlyPinned, btn) {
+    try {
+        await api('PATCH', `/api/sessions/${id}`, { pinned: !currentlyPinned });
+        await loadSessions();
+    } catch (e) {
+        showError(e.message || 'Failed to update pin');
+    }
+}
+
+function startRename(sessionId, nameSpan) {
     const current = nameSpan.textContent;
     const input = document.createElement('input');
     input.type = 'text';
@@ -275,7 +304,7 @@ function startRename(container, sessionId, nameSpan) {
     input.style.cssText = 'background:var(--bg-primary);border:1px solid var(--accent);color:var(--text-primary);border-radius:4px;padding:2px 4px;font-size:13px;width:100%;outline:none;flex:1;min-width:0;';
 
     nameSpan.style.display = 'none';
-    container.insertBefore(input, nameSpan.nextSibling);
+    nameSpan.parentElement.insertBefore(input, nameSpan.nextSibling);
     input.focus();
     input.select();
 

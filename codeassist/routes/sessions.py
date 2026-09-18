@@ -32,14 +32,18 @@ async def delete_session(session_id: str):
 
 
 @router.patch("/{session_id}")
-async def rename_session(session_id: str, body: dict):
-    """Rename a session. Body must contain a 'name' field (max 200 chars)."""
-    name = body.get("name", "Untitled")
-    if not isinstance(name, str) or len(name) > MAX_SESSION_NAME_LEN:
-        raise HTTPException(status_code=400, detail=f"Session name must be <= {MAX_SESSION_NAME_LEN} characters")
+async def update_session(session_id: str, body: dict):
+    """Update a session. Body may contain 'name' (rename) and/or 'pinned' (bool)."""
     from codeassist.session import Session
+
     session = Session(session_id)
-    await session.rename(name)
+    if "name" in body:
+        name = body.get("name", "Untitled")
+        if not isinstance(name, str) or len(name) > MAX_SESSION_NAME_LEN:
+            raise HTTPException(status_code=400, detail=f"Session name must be <= {MAX_SESSION_NAME_LEN} characters")
+        await session.rename(name)
+    if "pinned" in body:
+        await Session.set_pinned(session_id, bool(body.get("pinned")))
     return {"ok": True}
 
 

@@ -33,5 +33,8 @@ async def create_agent(body: dict):
 async def delete_agent(agent_name: str):
     """Delete an agent by name."""
     from codeassist.agents import agent_manager
-    await agent_manager.delete_agent(agent_name)
+    try:
+        await agent_manager.delete_agent(agent_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}

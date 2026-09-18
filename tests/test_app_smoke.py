@@ -194,3 +194,54 @@ def test_ws_agent_switcher(live_client, monkeypatch):
         ws.send_json({"type": "switch_agent", "agent_name": "does-not-exist"})
         err = _drain_until(ws, "error")
         assert "not found" in err["message"]
+
+
+def test_session_pin_api(live_client):
+    """PATCH /api/sessions/{id} with pinned toggles the flag; pinned sorts first."""
+    sid = live_client.post("/api/sessions").json()["id"]
+    assert live_client.get("/api/sessions").json()[0]["is_pinned"] == 0
+
+    r = live_client.patch(f"/api/sessions/{sid}", json={"pinned": True})
+    assert r.status_code == 200
+
+    pinned = {s["id"]: s["is_pinned"] for s in live_client.get("/api/sessions").json()}
+    assert pinned[sid] == 1
+    assert list(pinned)[0] == sid, "pinned session should sort to the top"
+
+    live_client.patch(f"/api/sessions/{sid}", json={"pinned": False})
+    pinned = {s["id"]: s["is_pinned"] for s in live_client.get("/api/sessions").json()}
+    assert pinned[sid] == 0
+
+
+def test_session_patch_still_renames(live_client):
+    """PATCH with a name field keeps working alongside the new pinned support."""
+    sid = live_client.post("/api/sessions").json()["id"]
+    live_client.patch(f"/api/sessions/{sid}", json={"name": "Renamed"})
+    row = next(s for s in live_client.get("/api/sessions").json() if s["id"] == sid)
+    assert row["name"] == "Renamed"
+
+
+def test_agent_management_api(live_client):
+    """POST/DELETE /api/agents work; built-in agents can't be deleted."""
+    agents = {a["id"]: a for a in live_client.get("/api/agents").json()}
+    assert "default" in agents and agents["default"]["builtin"] is True
+
+    # Creating a custom agent surfaces it as non-builtin.
+    r = live_client.post("/api/agents", json={
+        "name": "qa-custom",
+        "description": "QA reviewer",
+        "model": "gpt-4o",
+    })
+    assert r.status_code == 200
+    agents = {a["id"]: a for a in live_client.get("/api/agents").json()}
+    assert agents["qa-custom"]["builtin"] is False
+
+    # Built-ins are protected.
+    r = live_client.delete("/api/agents/default")
+    assert r.status_code == 400
+    assert "built-in" in r.json()["detail"]
+
+    # Custom agents delete cleanly.
+    r = live_client.delete("/api/agents/qa-custom")
+    assert r.status_code == 200
+    assert "qa-custom" not in {a["id"] for a in live_client.get("/api/agents").json()}

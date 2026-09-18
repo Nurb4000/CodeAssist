@@ -303,3 +303,84 @@ class TestAgentSelection:
         await s1.set_agent_name("default")
         assert await s1.get_agent_name() == "default"
         assert await s2.get_agent_name() is None
+
+
+class TestAutoTitle:
+    """Sessions with untouched timestamp names get auto-titled from the first user message."""
+
+    @pytest.mark.asyncio
+    async def test_first_user_message_replaces_default_title(self):
+        from codeassist.session import is_default_title
+        await init_db()
+        s = await Session.create()
+        sessions = await Session.list_all()
+        original = next(s_ for s_ in sessions if s_["id"] == s.id)["name"]
+        assert is_default_title(original)
+
+        await s.add_message("user", "Fix the login timeout bug")
+        sessions = await Session.list_all()
+        title = next(s_ for s_ in sessions if s_["id"] == s.id)["name"]
+        assert title == "Fix the login timeout bug"
+
+    @pytest.mark.asyncio
+    async def test_second_user_message_does_not_retitle(self):
+        from codeassist.session import is_default_title
+        await init_db()
+        s = await Session.create()
+        await s.add_message("user", "Refactor auth module")
+        await s.add_message("user", "Add test coverage")
+        sessions = await Session.list_all()
+        title = next(s_ for s_ in sessions if s_["id"] == s.id)["name"]
+        assert title == "Refactor auth module"
+
+    @pytest.mark.asyncio
+    async def test_renamed_session_not_overwritten(self):
+        await init_db()
+        s = await Session.create(name="My Project")
+        await s.add_message("user", "Help me build a CLI")
+        sessions = await Session.list_all()
+        title = next(s_ for s_ in sessions if s_["id"] == s.id)["name"]
+        assert title == "My Project"
+
+    @pytest.mark.asyncio
+    async def test_long_title_truncated_at_word(self):
+        from codeassist.session import derive_title
+        long = "Investigate the strange race condition in the async worker pool" * 2
+        title = derive_title(long)
+        assert len(title) <= 62
+        assert title.endswith('…')
+        assert not title.endswith(' ')
+
+
+class TestPinning:
+    """Pin/unpin sessions and pinned-first ordering."""
+
+    @pytest.mark.asyncio
+    async def test_set_pinned(self):
+        await init_db()
+        s = await Session.create(name="Pin me")
+        await Session.set_pinned(s.id, True)
+        sessions = await Session.list_all()
+        row = next(s_ for s_ in sessions if s_["id"] == s.id)
+        assert row["is_pinned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_pinned_sessions_sort_first(self):
+        import asyncio
+        await init_db()
+        s1 = await Session.create(name="First")
+        await asyncio.sleep(0.05)
+        s2 = await Session.create(name="Second")
+        await Session.set_pinned(s2.id, True)
+        sessions = await Session.list_all()
+        ids = [s_["id"] for s_ in sessions]
+        assert ids.index(s2.id) < ids.index(s1.id)
+
+    @pytest.mark.asyncio
+    async def test_list_all_includes_summary_field(self):
+        await init_db()
+        s = await Session.create(name="Summary test")
+        sessions = await Session.list_all()
+        row = next(s_ for s_ in sessions if s_["id"] == s.id)
+        assert "summary" in row
+        assert row["summary"] is None
