@@ -35,6 +35,7 @@ let textBuffer = '';
 let reconnectTimer = null;
 let currentToolPanel = null;
 let toolCallCount = 0;
+let currentReasoningEl = null;
 
 marked.setOptions({
     highlight: (code, lang) => {
@@ -383,6 +384,7 @@ async function loadMessages() {
     currentToolPanel = null;
     toolCallCount = 0;
     currentContentEl = null;
+    currentReasoningEl = null;
     textBuffer = '';
     if (msgs.length === 0) {
         showWelcome();
@@ -395,11 +397,13 @@ async function loadMessages() {
         } else if (m.role === 'assistant') {
             const hasContent = !!m.content;
             const hasTools = !!m.tool_calls;
+            const hasReasoning = !!m.reasoning_content;
             if (hasTools) {
                 if (!currentToolPanel) {
                     startAssistantMessage();
                     currentToolPanel.style.display = '';
                 }
+                if (hasReasoning) appendReasoningToCurrent(m.reasoning_content);
                 if (hasContent) {
                     currentContentEl.innerHTML = marked.parse(m.content);
                 }
@@ -410,6 +414,11 @@ async function loadMessages() {
             } else if (hasContent) {
                 finalizeToolPanel();
                 appendAssistantMessage(m.content);
+                if (hasReasoning) appendReasoningToCurrent(m.reasoning_content);
+            } else if (hasReasoning) {
+                // Pure reasoning turn (e.g. a reasoning model with no answer text).
+                finalizeToolPanel();
+                appendReasoningToCurrent(m.reasoning_content);
             }
         } else if (m.role === 'tool') {
             updateLastToolResult(m.content);
@@ -463,19 +472,28 @@ function appendAssistantMessage(text) {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
-    div.innerHTML = `<div class="message-role assistant">CodeAssist</div><div class="message-content"></div>`;
+    div.innerHTML =
+        `<div class="message-role assistant">CodeAssist</div>` +
+        `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
+        `<div class="message-content"></div>`;
     messagesEl.appendChild(div);
     div.querySelector('.message-content').innerHTML = marked.parse(text);
+    currentReasoningEl = div.querySelector('.thinking-content');
+    applyThinkingVisibility(div.querySelector('.thinking-block'));
 }
 
 function startAssistantMessage() {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
-    div.innerHTML = `<div class="message-role assistant">CodeAssist</div><div class="tool-panel"></div><div class="message-content"></div>`;
+    div.innerHTML =
+        `<div class="message-role assistant">CodeAssist</div>` +
+        `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
+        `<div class="tool-panel"></div><div class="message-content"></div>`;
     messagesEl.appendChild(div);
     currentContentEl = div.querySelector('.message-content');
     currentToolPanel = div.querySelector('.tool-panel');
+    currentReasoningEl = div.querySelector('.thinking-content');
     toolCallCount = 0;
     const header = document.createElement('div');
     header.className = 'tool-panel-header';
@@ -487,6 +505,51 @@ function startAssistantMessage() {
     currentToolPanel.appendChild(header);
     currentToolPanel.style.display = 'none';
     return currentContentEl;
+}
+
+// ── Thinking block (collapsible reasoning) ──────────────────────────────────
+const THINKING_PREF_KEY = 'codeassist.thinkingVisible';
+
+function thinkingVisibility() {
+    return localStorage.getItem(THINKING_PREF_KEY) !== 'hidden';
+}
+
+function thinkingSummaryText() {
+    return thinkingVisibility() ? '🤖 Thinking…' : '🤖 Thinking (hidden)';
+}
+
+function thinkingHiddenAttr() {
+    return thinkingVisibility() ? '' : 'hidden';
+}
+
+function applyThinkingVisibility(wrapperEl) {
+    // wrapperEl is the .thinking-block div; it owns the `hidden` attribute so
+    // the initial template state and live toggles stay in sync.
+    if (!wrapperEl) return;
+    const summary = wrapperEl.querySelector('summary');
+    if (thinkingVisibility()) {
+        wrapperEl.removeAttribute('hidden');
+        if (summary) summary.textContent = '🤖 Thinking…';
+    } else {
+        wrapperEl.setAttribute('hidden', '');
+        if (summary) summary.textContent = '🤖 Thinking (hidden)';
+    }
+}
+
+function toggleThinking() {
+    localStorage.setItem(THINKING_PREF_KEY, thinkingVisibility() ? 'hidden' : 'shown');
+    // Flip every thinking block to match the new preference.
+    messagesEl.querySelectorAll('.thinking-block').forEach((w) => applyThinkingVisibility(w));
+    const btn = document.getElementById('toggle-thinking-btn');
+    if (btn) btn.textContent = thinkingVisibility() ? 'Hide thinking' : 'Show thinking';
+}
+
+function appendReasoningToCurrent(text) {
+    if (!currentReasoningEl) startAssistantMessage();
+    const p = document.createElement('p');
+    p.textContent = text;
+    currentReasoningEl.appendChild(p);
+    applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
 }
 
 function appendToolCall(name, args, output) {
@@ -876,6 +939,7 @@ function connectWS() {
             scrollToBottom();
 
             currentContentEl = null;
+            currentReasoningEl = null;
             textBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
@@ -888,6 +952,16 @@ function connectWS() {
             hideProgress();
             if (!currentContentEl) currentContentEl = startAssistantMessage();
             currentContentEl.innerHTML += `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Stopped by user</p>`;
+            scrollToBottom();
+        } else if (data.type === 'reasoning') {
+            hideProgress();
+            if (!currentReasoningEl) {
+                startAssistantMessage();
+            }
+            const p = document.createElement('p');
+            p.textContent = data.content;
+            currentReasoningEl.appendChild(p);
+            applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
             scrollToBottom();
         } else if (data.type === 'finish') {
             const usage = data.usage;
@@ -1206,6 +1280,12 @@ stopBtn.addEventListener('click', () => {
     }
 });
 newSessionBtn.addEventListener('click', createSession);
+
+const toggleThinkingBtn = document.getElementById('toggle-thinking-btn');
+if (toggleThinkingBtn) {
+    toggleThinkingBtn.addEventListener('click', toggleThinking);
+    toggleThinkingBtn.textContent = thinkingVisibility() ? 'Hide thinking' : 'Show thinking';
+}
 
 (async () => {
     await loadConfig();

@@ -11,3 +11,4 @@ config.toml~
 .coverage
 .pytest_cache/
 htmlcov/
+.codeassist/snapshot/

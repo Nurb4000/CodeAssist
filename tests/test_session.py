@@ -384,3 +384,71 @@ class TestPinning:
         row = next(s_ for s_ in sessions if s_["id"] == s.id)
         assert "summary" in row
         assert row["summary"] is None
+
+    @pytest.mark.asyncio
+    async def test_update_message_persists_reasoning(self):
+        """reasoning_content round-trips through update_message/get_messages so a
+        reasoning-only turn survives reloads (schema v10)."""
+        await init_db()
+        s = await Session.create(name="Reasoning")
+        msg_id = await s.add_message("assistant", content="")
+        await s.update_message(
+            msg_id,
+            content=None,
+            reasoning_content="Let me think through this step by step.",
+        )
+        msgs = await s.get_messages()
+        assistant = next(m for m in msgs if m["id"] == msg_id)
+        assert assistant["reasoning_content"] == "Let me think through this step by step."
+
+    @pytest.mark.asyncio
+    async def test_update_message_reasoning_none_leaves_column_null(self):
+        """Updating content without reasoning must not clobber an existing
+        reasoning block (partial update semantics)."""
+        await init_db()
+        s = await Session.create(name="Reasoning2")
+        msg_id = await s.add_message("assistant", content="")
+        await s.update_message(msg_id, reasoning_content="thinking")
+        await s.update_message(msg_id, content="the answer")
+        msgs = await s.get_messages()
+        assistant = next(m for m in msgs if m["id"] == msg_id)
+        assert assistant["content"] == "the answer"
+        assert assistant["reasoning_content"] == "thinking"
+
+    @pytest.mark.asyncio
+    async def test_schema_v9_to_v10_migration_adds_reasoning_column(self):
+        """Upgrading an existing v9 database adds the nullable reasoning_content
+        column to messages and bumps schema_info to v10 (no data loss)."""
+        await init_db()
+        # Seed a pre-existing assistant message (as a v9 deploy would have).
+        s = await Session.create(name="Legacy")
+        legacy_id = await s.add_message("assistant", content="old answer without reasoning")
+
+        # Simulate a v9 database by downgrading the recorded schema version.
+        from codeassist import session as smod
+
+        async with smod.get_db() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', '9')"
+            )
+            await db.commit()
+
+        # Re-run init_db -> should migrate 9 -> 10.
+        await init_db()
+
+        async with smod.get_db() as db:
+            cur = await db.execute("PRAGMA table_info(messages)")
+            cols = [r[1] for r in await cur.fetchall()]
+            vcur = await db.execute(
+                "SELECT value FROM schema_info WHERE key = 'version'"
+            )
+            version = (await vcur.fetchone())[0]
+
+        assert version == "10"
+        assert "reasoning_content" in cols
+
+        # The pre-existing message is preserved (column is nullable, not dropped).
+        msgs = await s.get_messages()
+        legacy = next(m for m in msgs if m["id"] == legacy_id)
+        assert legacy["content"] == "old answer without reasoning"
+        assert legacy["reasoning_content"] is None

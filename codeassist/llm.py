@@ -23,6 +23,18 @@ class TextDelta:
 
 
 @dataclass
+class ReasoningDelta:
+    """Reasoning/thinking text emitted separately from the final answer.
+
+    Some reasoning models (e.g. llama.cpp Ornith) reply via
+    ``reasoning_content`` with empty ``content``; this lets the client render
+    thinking in a collapsible block instead of inline with the answer.
+    """
+
+    content: str
+
+
+@dataclass
 class ToolCall:
     id: str
     name: str
@@ -47,7 +59,7 @@ class Finish:
     usage: Usage = field(default_factory=Usage)
 
 
-LLMEvent = TextDelta | ToolCall | ToolResult | Finish
+LLMEvent = TextDelta | ReasoningDelta | ToolCall | ToolResult | Finish
 
 
 class LLMClient:
@@ -125,7 +137,6 @@ class LLMClient:
             raise RuntimeError("LLM connection failed after all retry attempts")
 
         current_tool_calls: dict[int, dict] = {}
-        accumulated_text = ""
         stream_backoff = INITIAL_BACKOFF
 
         for stream_attempt in range(MAX_RETRIES):
@@ -135,16 +146,17 @@ class LLMClient:
 
                     if choice and choice.delta:
                         # Reasoning models (e.g. llama.cpp Ornith) can emit the
-                        # reply in reasoning_content with empty content; fall
-                        # back to it so no text is lost (review item D2).
+                        # reply in reasoning_content with empty content. Route
+                        # those deltas to a separate ReasoningDelta event so the
+                        # client can render thinking in a collapsible block
+                        # instead of inline with the answer (review item D2).
                         delta_text = choice.delta.content or ""
-                        if not delta_text:
-                            reasoning = getattr(choice.delta, "reasoning_content", None)
-                            if isinstance(reasoning, str):
-                                delta_text = reasoning
                         if delta_text:
-                            accumulated_text += delta_text
                             yield TextDelta(delta_text)
+                        else:
+                            reasoning = getattr(choice.delta, "reasoning_content", None)
+                            if isinstance(reasoning, str) and reasoning:
+                                yield ReasoningDelta(reasoning)
 
                         if choice.delta.tool_calls:
                             for tc_delta in choice.delta.tool_calls:

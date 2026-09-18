@@ -311,7 +311,58 @@ class TestAgentRun:
             events.append(event)
             if event.type == "done":
                 break
-        
+
         # Should have done event (cancellation may or may not produce cancelled event)
         types = [e.type for e in events]
         assert "done" in types
+
+    @pytest.mark.asyncio
+    async def test_run_emits_and_persists_reasoning(self, agent, mock_session):
+        """Reasoning model output is emitted as a 'reasoning' event and
+        persisted in session.update_message.reasoning_content (schema v10)."""
+        from codeassist.llm import TextDelta, ReasoningDelta, Finish, Usage
+
+        async def fake_stream(messages, openai_tools):
+            yield ReasoningDelta("Let me think step by step.")
+            yield TextDelta("Here is the answer.")
+            yield Finish("stop", usage=Usage(prompt_tokens=10, completion_tokens=5))
+
+        agent.llm.stream = fake_stream
+
+        events = []
+        async for event in agent.run("Hello"):
+            events.append(event)
+
+        # A 'reasoning' WS event must carry the reasoning text.
+        reasoning_events = [e for e in events if e.type == "reasoning"]
+        assert len(reasoning_events) == 1
+        assert reasoning_events[0].data["content"] == "Let me think step by step."
+
+        # The assistant message must persist reasoning_content separately.
+        assert mock_session.update_message.await_count >= 1
+        last = mock_session.update_message.call_args_list[-1]
+        assert last.kwargs["reasoning_content"] == "Let me think step by step."
+        # Content is stored separately (not folded into the answer).
+        assert last.kwargs["content"] == "Here is the answer."
+
+    @pytest.mark.asyncio
+    async def test_run_pure_reasoning_turn_persists(self, agent, mock_session):
+        """A turn with only reasoning_content (no answer text) still persists and
+        updates the message rather than dropping it."""
+        from codeassist.llm import ReasoningDelta, Finish, Usage
+
+        async def fake_stream(messages, openai_tools):
+            yield ReasoningDelta("Pure thinking, no answer.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = fake_stream
+
+        events = []
+        async for event in agent.run("Hello"):
+            events.append(event)
+
+        assert any(e.type == "reasoning" for e in events)
+        last = mock_session.update_message.call_args_list[-1]
+        assert last.kwargs["reasoning_content"] == "Pure thinking, no answer."
+        # content=None means the answer column is left untouched/empty.
+        assert last.kwargs["content"] is None
