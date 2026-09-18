@@ -101,20 +101,27 @@ Gaps found during the review sweep that are missing *features*, not bugs:
 
 ## Chat UX / telemetry
 
-- **Collapsible "thinking" block.** Reasoning content currently streams inline as plain text
-  (`llm.py` falls back to `reasoning_content` when `content` is empty; the `.thinking` CSS class
-  exists but nothing renders it). Plan: per assistant message, render reasoning in a collapsed
-  "Thinking" disclosure (italic, muted, expandable), default collapsed to keep output clean; a
-  global preference to always hide it. Also close the "Reasoning models" loop below by storing
-  reasoning separately from the final answer so it can be collapsed/skipped.
+- **Collapsible "thinking" block.** ✅ Done (commit `f47abb8`). Reasoning content is now emitted as
+  a separate `ReasoningDelta` (`llm.py`), forwarded as a WS `reasoning` event and accumulated in
+  `agent.py`, then persisted in the new nullable `messages.reasoning_content` column (schema v10,
+  `session.py`). The chat UI renders per-message collapsible `<details>` "Thinking" blocks
+  (`app.js` `appendReasoningToCurrent` / `applyThinkingVisibility`), defaulting to collapsed with a
+  global Show/Hide toggle persisted in `localStorage`. Verified live against the Ornith backend:
+  reasoning deltas stream separately from the answer.
 
-- **Export / import a chat.** Server-side export already exists
-  (`SessionManager.export_session`, `POST /api/sessions/export`, redact + self-contained bundle),
-  but there is **no chat UI** for it and **no import path at all**. Plan:
-  - per-session Export/Import actions (sidebar per-session menu or message toolbar) producing the
-    existing JSON bundle; Import creates a new session from a bundle (messages + attachments);
-  - surface the redact/PII option in the dialog;
-  - consider a fork-of-export ("import as new session") rather than overwriting.
+- **Export / import a chat.** ✅ Done (this batch). Backend export/import endpoints already existed;
+  the gap was the chat UI and a round-trip bug. Added:
+  - Export button on each sidebar session item (`loadSessions`) → `openExportDialog` with a
+    "Redact PII" checkbox; downloads a self-contained JSON bundle via `downloadJSON`.
+  - Import button in the sidebar header (`#import-btn`) → `openImportDialog`; accepts a `.json`
+    file (auto-reads into a paste area) or pasted JSON, POSTs `/api/sessions/import`, then
+    `switchSession` to the newly created session. Backdrop-click / Escape / close-button dismiss.
+  - `session.add_message` now accepts/persists `reasoning_content`; `SessionManager.import_session`
+    forwards it (and tolerates already-parsed `tool_calls`), so thinking blocks survive export→import.
+  - Transient `showStatus` toast for success/failure feedback.
+  Tests: `test_export_import_preserves_reasoning_content` (data layer) and REST round-trip in
+  `test_app_smoke.py::test_session_lifecycle`. Verified end-to-end through the live container:
+  exported `reasoning_content` reappears verbatim on the imported session.
 
 - **Running token count + token rate.** ✅ Done (this batch). The sidebar footer now shows a
   `#token-info` line: cumulative session tokens + live `tok/s` rate. Tokens are accumulated on the

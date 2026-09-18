@@ -85,13 +85,15 @@ class SessionManager:
         new_session = await Session.create(name=name or "Imported Session")
 
         for msg in export_data.get("messages", []):
+            tool_calls_raw = msg.get("tool_calls")
             await new_session.add_message(
                 role=msg["role"],
                 content=msg.get("content"),
-                tool_calls=json.loads(msg["tool_calls"]) if msg.get("tool_calls") else None,
+                tool_calls=json.loads(tool_calls_raw) if isinstance(tool_calls_raw, str) else tool_calls_raw,
                 tool_call_id=msg.get("tool_call_id"),
                 name=msg.get("name"),
                 attachments=msg.get("attachments"),
+                reasoning_content=msg.get("reasoning_content"),
             )
 
         return new_session
