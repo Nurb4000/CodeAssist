@@ -536,12 +536,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 remember = data.get("remember", False)
                 if confirm_id:
                     agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember)
-                    # Save permission if user chose to remember
+                    # Persist a remembered permission from server-bound context,
+                    # never from client-echoed tool/file_path values.
                     if remember and approved:
-                        tool_name = data.get("tool", "")
-                        file_path = data.get("file_path", "")
-                        if tool_name:
-                            await agent.save_permission(tool_name, file_path, "allow")
+                        ctx = agent.get_confirm_context(confirm_id)
+                        if ctx and ctx.get("tool"):
+                            await agent.save_permission(ctx["tool"], ctx.get("file_path") or "", "allow")
 
             elif data.get("type") == "question_response":
                 question_id = data.get("id")

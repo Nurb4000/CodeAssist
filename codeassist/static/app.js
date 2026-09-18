@@ -699,6 +699,12 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     }
 
     // Build trust options based on tool type
+    const rememberHtml = `
+        <label class="trust-option">
+            <input type="checkbox" id="remember-${confirmId}">
+            Always allow ${escapeHtml(toolName)} (remember permission)
+        </label>
+    `;
     let trustHtml = '';
     if (toolName === 'write' || toolName === 'edit') {
         trustHtml = `
@@ -706,6 +712,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
                 <input type="checkbox" id="trust-workspace-${confirmId}">
                 Trust all writes in workspace
             </label>
+            ${rememberHtml}
         `;
     } else if (toolName === 'shell') {
         trustHtml = `
@@ -713,6 +720,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
                 <input type="checkbox" id="trust-shell-${confirmId}">
                 Trust all shell commands for this session
             </label>
+            ${rememberHtml}
         `;
     } else {
         trustHtml = `
@@ -720,6 +728,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
                 <input type="checkbox" id="trust-tool-${confirmId}">
                 Trust this tool for this session
             </label>
+            ${rememberHtml}
         `;
     }
 
@@ -740,6 +749,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
         const trustWorkspace = div.querySelector(`#trust-workspace-${confirmId}`)?.checked || false;
         const trustShell = div.querySelector(`#trust-shell-${confirmId}`)?.checked || false;
         const trustTool = div.querySelector(`#trust-tool-${confirmId}`)?.checked || false;
+        const remember = div.querySelector(`#remember-${confirmId}`)?.checked || false;
         div.remove();
         showProgress(`Executing ${toolName}...`);
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -750,6 +760,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
                 trust_workspace: trustWorkspace,
                 trust_shell: trustShell,
                 trust_tool: trustTool,
+                remember: remember,
             }));
         }
     };

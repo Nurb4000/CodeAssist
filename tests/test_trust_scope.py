@@ -40,7 +40,8 @@ def test_trust_defaults_off():
     assert agent._trust_workspace_writes is False
 
 
-def test_trust_persists_across_agents_same_session(tmp_path):
+@pytest.mark.asyncio
+async def test_trust_persists_across_agents_same_session(tmp_path):
     a1 = _agent("sess-B", tmp_path)
     a1.set_trust(trust_shell=True, trust_workspace=True)
     assert SESSION_TRUST["sess-B"] == {"workspace": True, "shell": True}
@@ -50,7 +51,7 @@ def test_trust_persists_across_agents_same_session(tmp_path):
     assert a2._trust_shell is True
     assert a2._trust_workspace_writes is True
     # Shell short-circuits before the permission manager, so this is deterministic.
-    assert a2.needs_confirmation("shell", {"shell_command": "ls"}) is False
+    assert await a2.needs_confirmation("shell", {"shell_command": "ls"}) is False
 
 
 def test_trust_isolated_per_session_id(tmp_path):
@@ -89,7 +90,8 @@ class _StubTools:
         return SimpleNamespace(output="ok", error=None)
 
 
-def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch):
     """resolve_confirm(trust_tool=True) must trust that tool for the session (A1)."""
     agent = _agent("sess-G", tmp_path)
     agent._confirm_tools["c1"] = "shell"
@@ -98,7 +100,7 @@ def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch):
     agent.resolve_confirm("c1", True, trust_tool=True)
 
     assert "shell" in SESSION_TOOL_TRUST["sess-G"]
-    assert agent.needs_confirmation("shell", {}) is False
+    assert await agent.needs_confirmation("shell", {}) is False
     # Other tools are not session-trusted by this choice.
     assert "bash" not in SESSION_TOOL_TRUST["sess-G"]
 
@@ -177,4 +179,75 @@ async def test_ws_confirm_flow_grants_per_tool_session_trust(tmp_path, monkeypat
     assert confirms == ["shell"]
     assert state["stream_calls"] == 2
     assert "shell" in SESSION_TOOL_TRUST["sess-J"]
-    assert agent.needs_confirmation("shell", {"shell_command": "echo hi"}) is False
+    assert await agent.needs_confirmation("shell", {"shell_command": "echo hi"}) is False
+
+
+@pytest.mark.asyncio
+async def test_ws_confirm_flow_remember_saves_permanent_allow(tmp_path, monkeypatch):
+    """Approving with remember=True must persist a permanent allow derived from
+    server-bound confirm context (tool + file_path), so the next identical call
+    runs without prompting again."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import codeassist.llm as llm_mod
+    from codeassist.agent import Agent as AgentCls
+
+    async def _no_snapshot(self, phase):
+        return None
+
+    monkeypatch.setattr(AgentCls, "_create_turn_snapshot", _no_snapshot)
+
+    state = {"stream_calls": 0}
+
+    async def _stub_stream(self, messages, tools=None):
+        state["stream_calls"] += 1
+        if state["stream_calls"] == 1:
+            yield ToolCall(id="call_1", name="write", arguments={"file_path": str(tmp_path / "remembered_target.py"), "content": "x = 1"})
+            yield Finish(finish_reason="tool_calls", usage=Usage(prompt_tokens=1, completion_tokens=1))
+        else:
+            yield TextDelta("done")
+            yield Finish(finish_reason="stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    cfg = Config()
+    cfg.workspace = tmp_path
+    cfg.llm.api_key = "not-used-in-test"
+    session = MagicMock(spec=Session)
+    session.id = "sess-K"
+    session.add_message = AsyncMock(return_value="mid-1")
+    session.get_messages = AsyncMock(return_value=[])
+    session.update_message = AsyncMock()
+    agent = Agent(cfg, session, _StubTools(), "system prompt")
+
+    seen = asyncio.Event()
+    confirm_ids: dict[str, dict] = {}
+    confirms: list[str] = []
+
+    async def _pump():
+        async for event in agent.run("edit the file"):
+            if event.type == "confirm_request":
+                confirm_ids[event.data["id"]] = event.data
+                confirms.append(event.data["tool"])
+                seen.set()
+            elif event.type in ("done", "error", "cancelled"):
+                return
+
+    async def _approver():
+        # Mirror the real WS confirm_response handler: bind to the stored
+        # server-side context, persist the remembered allow, then resolve.
+        await seen.wait()
+        cid = next(iter(confirm_ids))
+        ctx = agent.get_confirm_context(cid)
+        assert ctx["tool"] == "write"
+        assert ctx["file_path"] == str(tmp_path / "remembered_target.py")
+        await agent.save_permission(ctx["tool"], ctx["file_path"], "allow")
+        agent.resolve_confirm(cid, True, remember=True)
+
+    await asyncio.wait_for(asyncio.gather(_pump(), _approver()), timeout=15)
+
+    assert confirms == ["write"]
+    assert state["stream_calls"] == 2
+    assert await agent.needs_confirmation("write", {"file_path": str(tmp_path / "remembered_target.py"), "content": "x = 1"}) is False
+    # The saved permission is permanent (persisted), not just session-scoped.
+    assert agent.get_confirm_context("any") is None

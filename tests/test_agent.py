@@ -148,30 +148,35 @@ class TestAgentTrust:
 class TestAgentConfirmation:
     """Test agent confirmation logic."""
 
-    def test_needs_confirmation_no_tool(self, agent):
+    @pytest.mark.asyncio
+    async def test_needs_confirmation_no_tool(self, agent):
         """Test that non-confirm tools don't need confirmation."""
-        assert not agent.needs_confirmation("read", {})
+        assert not await agent.needs_confirmation("read", {})
 
-    def test_needs_confirmation_confirm_tools(self, agent):
+    @pytest.mark.asyncio
+    async def test_needs_confirmation_confirm_tools(self, agent):
         """Test that confirm tools need confirmation by default."""
         for tool in CONFIRM_TOOLS:
-            assert agent.needs_confirmation(tool, {})
+            assert await agent.needs_confirmation(tool, {})
 
-    def test_needs_confirmation_shell_trusted(self, agent):
+    @pytest.mark.asyncio
+    async def test_needs_confirmation_shell_trusted(self, agent):
         """Test that shell doesn't need confirmation when trusted."""
         agent.set_trust(trust_shell=True)
-        assert not agent.needs_confirmation("shell", {})
+        assert not await agent.needs_confirmation("shell", {})
 
-    def test_needs_confirmation_write_in_workspace(self, mock_config, agent):
+    @pytest.mark.asyncio
+    async def test_needs_confirmation_write_in_workspace(self, mock_config, agent):
         """Test that write doesn't need confirmation for in-workspace files."""
         agent.set_trust(trust_workspace=True)
         file_path = str(mock_config.workspace / "test.py")
-        assert not agent.needs_confirmation("write", {"file_path": file_path})
+        assert not await agent.needs_confirmation("write", {"file_path": file_path})
 
-    def test_needs_confirmation_write_outside_workspace(self, agent):
+    @pytest.mark.asyncio
+    async def test_needs_confirmation_write_outside_workspace(self, agent):
         """Test that write still needs confirmation for outside-workspace files."""
         agent.set_trust(trust_workspace=True)
-        assert agent.needs_confirmation("write", {"file_path": "/tmp/test.py"})
+        assert await agent.needs_confirmation("write", {"file_path": "/tmp/test.py"})
 
     def test_is_in_workspace(self, mock_config, agent):
         """Test _is_in_workspace helper."""
