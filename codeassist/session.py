@@ -797,13 +797,14 @@ class Session:
         tool_call_id: str | None = None,
         name: str | None = None,
         attachments: list[dict] | None = None,
+        reasoning_content: str | None = None,
     ) -> str:
         mid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_calls, name, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_calls, name, reasoning_content, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     mid,
                     self.id,
@@ -812,6 +813,7 @@ class Session:
                     tool_call_id,
                     json.dumps(tool_calls) if tool_calls else None,
                     name,
+                    reasoning_content,
                     now,
                 ),
             )

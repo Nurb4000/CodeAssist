@@ -280,6 +280,12 @@ async function loadSessions() {
             startRename(s.id, nameSpan);
         };
 
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'export-btn';
+        exportBtn.innerHTML = '&#128451;';
+        exportBtn.title = 'Export session';
+        exportBtn.onclick = (e) => { e.stopPropagation(); openExportDialog(s.id); };
+
         const delBtn = document.createElement('button');
         delBtn.className = 'delete-btn';
         delBtn.dataset.id = s.id;
@@ -290,6 +296,7 @@ async function loadSessions() {
         row.appendChild(nameSpan);
         row.appendChild(pinBtn);
         row.appendChild(renameBtn);
+        row.appendChild(exportBtn);
         row.appendChild(delBtn);
         div.appendChild(row);
 
@@ -857,6 +864,129 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     };
 }
 
+// ── Session export / import ─────────────────────────────────────────────────
+
+function openModal(bodyHtml, actionsHtml) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    const card = document.createElement('div');
+    card.className = 'modal-card';
+    card.innerHTML = `
+        <div class="modal-body">${bodyHtml}</div>
+        <div class="modal-actions">${actionsHtml}</div>
+    `;
+    backdrop.appendChild(card);
+    document.body.appendChild(backdrop);
+
+    const close = () => {
+        backdrop.remove();
+        if (typeof backdrop._onClose === 'function') backdrop._onClose();
+    };
+    backdrop.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close();
+    });
+    backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
+    card.querySelector('.modal-close')?.addEventListener('click', close);
+    return backdrop;
+}
+
+async function downloadJSON(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function openExportDialog(sessionId) {
+    const bd = openModal(
+        `<p class="modal-hint">Download this session as a JSON file you can later <strong>Import</strong>.</p>
+         <label class="trust-option modal-check">
+             <input type="checkbox" id="export-redact"> Redact PII (API keys, secrets, images)
+         </label>`,
+        `<button class="modal-btn" id="export-cancel">Cancel</button>
+         <button class="modal-btn primary" id="export-download">Download JSON</button>`
+    );
+    bd.querySelector('#export-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#export-download').addEventListener('click', async () => {
+        const btn = bd.querySelector('#export-download');
+        const redact = bd.querySelector('#export-redact').checked;
+        btn.disabled = true;
+        btn.textContent = 'Exporting…';
+        try {
+            const data = await api('POST', '/api/sessions/export', { session_id: sessionId, redact });
+            const base = (data.name || 'session').replace(/[^\w\-]+/g, '_');
+            await downloadJSON(`${base}${redact ? '-redacted' : ''}.json`, data);
+            showStatus(`Exported session${redact ? ' (PII redacted)' : ''}.`, 'success');
+        } catch (e) {
+            showError(e.message || 'Failed to export session');
+            btn.disabled = false;
+            btn.textContent = 'Download JSON';
+        }
+    });
+}
+
+async function openImportDialog() {
+    const bd = openModal(
+        `<p class="modal-hint">Import a session from a JSON file or pasted JSON. A new session is created; your current chat is untouched.</p>
+         <label class="modal-label">Session name (optional)</label>
+         <input type="text" id="import-name" class="modal-input" placeholder="Imported session" />
+         <label class="modal-label">Choose a .json file</label>
+         <input type="file" id="import-file" class="modal-file" accept=".json,application/json" />
+         <label class="modal-label">— or paste JSON here</label>
+         <textarea id="import-paste" class="modal-textarea" placeholder='{"version": 2, "messages": [...]}'></textarea>
+         <p class="modal-hint" id="import-file-name"></p>`,
+        `<button class="modal-btn" id="import-cancel">Cancel</button>
+         <button class="modal-btn primary" id="import-run">Import</button>`
+    );
+    const fileInput = bd.querySelector('#import-file');
+    const nameField = bd.querySelector('#import-name');
+    const pasteArea = bd.querySelector('#import-paste');
+    const fileNameLabel = bd.querySelector('#import-file-name');
+
+    fileInput.addEventListener('change', () => {
+        fileNameLabel.textContent = fileInput.files[0] ? `Selected: ${fileInput.files[0].name}` : '';
+        // Pre-fill the paste area with the chosen file's contents.
+        const reader = new FileReader();
+        reader.onload = () => { pasteArea.value = String(reader.result || ''); };
+        reader.readAsText(fileInput.files[0]);
+    });
+
+    bd.querySelector('#import-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#import-run').addEventListener('click', async () => {
+        const btn = bd.querySelector('#import-run');
+        let raw = pasteArea.value.trim();
+        if (!raw) {
+            showError('Choose a .json file or paste JSON before importing.');
+            return;
+        }
+        let exportData;
+        try {
+            exportData = JSON.parse(raw);
+        } catch (e) {
+            showError(`Import failed: invalid JSON (${e.message})`);
+            return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Importing…';
+        try {
+            const name = nameField.value.trim() || undefined;
+            const res = await api('POST', '/api/sessions/import', { data: exportData, name });
+            bd.remove();
+            await switchSession(res.id);
+            showStatus('Session imported.', 'success');
+        } catch (e) {
+            showError(e.message || 'Failed to import session');
+            btn.disabled = false;
+            btn.textContent = 'Import';
+        }
+    });
+}
+
 function connectWS() {
     if (ws) {
         ws.onclose = null;
@@ -1084,6 +1214,20 @@ function hideError() {
     }
 }
 
+let statusTimers = [];
+function showStatus(msg, kind = 'info') {
+    removeWelcome();
+    hideProgress();
+    const div = document.createElement('div');
+    div.className = `message system-status system-${kind}`;
+    const color = kind === 'success' ? 'var(--green)' : kind === 'error' ? 'var(--red)' : 'var(--text-secondary)';
+    div.innerHTML = `<div class="message-role" style="color:${color}">Status</div><div class="message-content"><p style="color:${color}">${escapeHtml(msg)}</p></div>`;
+    messagesEl.appendChild(div);
+    scrollToBottom();
+    const timer = setTimeout(() => { div.classList.add('fading'); setTimeout(() => div.remove(), 300); }, 4000);
+    statusTimers.push(timer);
+}
+
 let progressEl = null;
 let progressShowTime = 0;
 let progressMinTimer = null;
@@ -1285,6 +1429,11 @@ const toggleThinkingBtn = document.getElementById('toggle-thinking-btn');
 if (toggleThinkingBtn) {
     toggleThinkingBtn.addEventListener('click', toggleThinking);
     toggleThinkingBtn.textContent = thinkingVisibility() ? 'Hide thinking' : 'Show thinking';
+}
+
+const importBtn = document.getElementById('import-btn');
+if (importBtn) {
+    importBtn.addEventListener('click', openImportDialog);
 }
 
 (async () => {

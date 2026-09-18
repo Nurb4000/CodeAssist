@@ -76,6 +76,16 @@ def test_session_lifecycle(live_client):
     assert export.status_code == 200
     assert export.json()["version"] == 2
 
+    # Import round-trip: importing the exported bundle creates a new session
+    # with the same message count as the original.
+    original_count = len(live_client.get(f"/api/sessions/{sid}/messages").json())
+    imported = live_client.post("/api/sessions/import", json={"data": export.json()})
+    assert imported.status_code == 200
+    imported_sid = imported.json()["id"]
+    assert imported_sid != sid
+    msgs = live_client.get(f"/api/sessions/{imported_sid}/messages").json()
+    assert len(msgs) == original_count
+
 
 def test_tools_management_specific_routes_not_shadowed(live_client):
     """/api/tools/manage/usage and /manage/scan must not be swallowed by /manage/{tool_name}."""

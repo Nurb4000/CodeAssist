@@ -79,6 +79,26 @@ class TestSessionManager:
         assert messages[0]["content"] == "Original message"
 
     @pytest.mark.asyncio
+    async def test_export_import_preserves_reasoning_content(self):
+        """reasoning_content must survive an export->import round trip so a
+        reasoning model's thinking block is not lost when sharing sessions."""
+        await init_db()
+        source = await Session.create(name="Reasoning Source")
+        await source.add_message("user", "Question")
+        assistant_id = await source.add_message(
+            "assistant",
+            content="The answer",
+            reasoning_content="Let me think about this step by step.",
+        )
+
+        export_data = await SessionManager.export_session(source.id)
+        imported = await SessionManager.import_session(export_data, "Reasoning Import")
+
+        messages = await imported.get_messages()
+        imported_assistant = next(m for m in messages if m["content"] == "The answer")
+        assert imported_assistant["reasoning_content"] == "Let me think about this step by step."
+
+    @pytest.mark.asyncio
     async def test_get_session_summary(self):
         """Test getting session summary."""
         await init_db()
