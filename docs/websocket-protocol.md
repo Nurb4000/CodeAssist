@@ -30,8 +30,10 @@ The password is NEVER accepted via query parameters (security best practice).
 // Rollback to a specific message (deletes all messages after it)
 {"type": "rollback", "message_id": "uuid"}
 
-// Respond to a tool confirmation prompt
-{"type": "confirm_response", "id": "...", "approved": true, "trust_workspace": false, "trust_shell": false, "trust_tool": false}
+// Respond to a tool confirmation prompt.
+// remember: "always allow this tool" — persisted server-side, bound to the
+// confirm_id's own tool + file_path (client tool/file_path values are ignored).
+{"type": "confirm_response", "id": "...", "approved": true, "trust_workspace": false, "trust_shell": false, "trust_tool": false, "remember": false}
 
 // Respond to a question from the agent
 {"type": "question_response", "id": "...", "answer": "..."}

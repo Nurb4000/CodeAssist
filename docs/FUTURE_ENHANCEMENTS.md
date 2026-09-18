@@ -58,13 +58,12 @@ Gaps found during the review sweep that are missing *features*, not bugs:
 
 ## Robustness / correctness (found during the runtime review)
 
-- **Tool permission "allow for rest of session"** — a previous version offered a permission choice
-  that let the agent use an unapproved tool for the *whole session*; the current confirm dialog only
-  offers session-scope trust for `write`/`edit` and `shell` (see `docs/CODE_REVIEW_2026-09-17.md`,
-  A1/A2). The server's `remember` path is half-wired (`server.py:468-481`) but dead: the client
-  never sends `tool`/`file_path`/`remember`, and `confirm_id` isn't bound to its tool server-side.
-  To implement: track tool+args per `confirm_id`, add a per-tool "Trust for this session" checkbox,
-  and keep "remember permanently" via `save_permission_choice`.
+- ~~**Tool permission "allow for rest of session".**~~ ✅ Done: session-scope trust for `write`/`edit`
+  and `shell`, per-tool session trust (A1), and **"remember permanently"** via `save_permission_choice`.
+  The confirm dialog's "Always allow <tool> (remember permission)" checkbox sends `remember: true`;
+  the server binds each `confirm_id` to its tool + file_path at request time
+  (`Agent._confirm_requests` / `get_confirm_context`) and persists the allow from that
+  server-side context, never from client-echoed values (`server.py` `confirm_response`).
 
 ## Knowledge base
 

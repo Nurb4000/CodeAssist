@@ -51,6 +51,7 @@ class Agent:
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
         self._confirm_tools: dict[str, str] = {}
+        self._confirm_requests: dict[str, dict] = {}
         # Session trust flags (seeded from the session-scoped store so a
         # reconnected WS for the same session keeps its trust).
         stored_trust = SESSION_TRUST.get(self.session.id, {})
@@ -110,7 +111,7 @@ class Agent:
         except (ValueError, OSError, RuntimeError):
             return False
 
-    def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:
+    async def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:
         """Check if a tool call requires user confirmation.
 
         Uses the new permission system with pattern-based rules and saved preferences.
@@ -133,7 +134,7 @@ class Agent:
 
         # Use permission manager for granular checks
         try:
-            action = permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
+            action = await permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
             if action == "allow":
                 return False
             if action == "deny":
@@ -157,6 +158,14 @@ class Agent:
         result = self._confirm_results.pop(confirm_id, False)
         self._confirm_events.pop(confirm_id, None)
         return result
+
+    def get_confirm_context(self, confirm_id: str) -> dict | None:
+        """Return (and clear) the stored tool/file_path context bound to a confirm id.
+
+        Used by the WS confirm_response handler to persist a remembered permission
+        from server-side data rather than client-echoed values.
+        """
+        return self._confirm_requests.pop(confirm_id, None)
 
     def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False):
         """Resolve a pending confirmation from WebSocket."""
@@ -508,10 +517,17 @@ class Agent:
                         })
                         continue
 
-                    if perm_action == "ask" or self.needs_confirmation(tc.name, tc.arguments):
+                    if perm_action == "ask" or await self.needs_confirmation(tc.name, tc.arguments):
                         confirm_id = f"{tc.id}_{tc.name}"
                         # Check if there's a saved permission hint
                         saved_hint = permission_manager.saved.check_saved(tc.name, file_path)
+                        # Bind the request context server-side so a later "remember"
+                        # decision is never derived from client-echoed values.
+                        self._confirm_requests[confirm_id] = {
+                            "tool": tc.name,
+                            "file_path": file_path,
+                            "arguments": tc.arguments,
+                        }
                         yield AgentEvent("confirm_request", {
                             "id": confirm_id,
                             "tool": tc.name,

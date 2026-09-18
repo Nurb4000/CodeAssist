@@ -26,8 +26,10 @@ Status legend: `OPEN` (documented, unfixed) · `CLEARED` (investigated, not a bu
   waiting (`_confirm_tools`); `resolve_confirm(..., trust_tool=...)` records the tool for the session;
   `needs_confirmation` honors per-tool session trust (after legacy trust flags, before permission
   rules). `server.py` WS `confirm_response` reads `trust_tool` and passes it through; `reset_trust`
-  clears per-tool trust too. The "remember permanently" path stays separate (see
-  `FUTURE_ENHANCEMENTS.md`, settings/security UI item).
+  clears per-tool trust too. "Remember permanently" is wired separately: the confirm dialog's
+  "Always allow <tool> (remember permission)" checkbox sends `remember`, each `confirm_id` is bound
+  to its tool + file_path server-side (`Agent._confirm_requests` / `get_confirm_context`), and the
+  server persists the allow from that stored context (see `FUTURE_ENHANCEMENTS.md`).
 - **Fix (client `app.js`):** the confirm dialog shows a generic "Trust this tool for this session"
   checkbox for any non-`write`/`edit`/`shell` tool and sends `trust_tool: true` on approve.
 - Covered by `tests/test_trust_scope.py` (per-tool trust via `resolve_confirm`, isolation between
