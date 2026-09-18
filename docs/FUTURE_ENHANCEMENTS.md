@@ -126,6 +126,23 @@ Gaps found during the review sweep that are missing *features*, not bugs:
      `&#128454;`) which render as tofu squares in this environment — the export button was
      effectively invisible and the import button looked like a blank square. Replaced all session
      + header action icons with inline SVG (`ICONS` in `app.js`, `currentColor` so they inherit
+     hover color). Grouped header actions under `.header-actions` so the import button no longer
+     overhangs the sidebar edge and widened the sidebar `260px → 340px` so names/buttons no longer
+     clip. Rename button now a clear pencil SVG (still hover-revealed with pin/delete). Verified via
+     CDP that clicking import/export/new-session all work (`MODAL_OPEN` / session count grows), with
+     no load-time JS exceptions.
+   - **Stale-cache after rebuild (root cause of "half-applied" UI).** Browsers fell back to
+     heuristic caching and served a stale `app.js`/`style.css` after a container rebuild, so fresh
+     icons/layout appeared half-done even on a clean load. Added a `static_cache_headers` middleware
+     in `server.py` that sets `Cache-Control: no-cache, no-store, must-revalidate` (+ Pragma/Expires)
+     on every `/static/*` response and dropped the useless static `?v=dev` query strings from
+     `index.html`. Also converted the header **nav** icons (`🔧⚙️📚`) to SVG — those emoji rendered at
+     different sizes in Firefox vs Chrome and wrapped the header onto multiple lines (pushing
+     import/new-session off-row). Sidebar now stays a single row across browsers.
+   - **Icon polish (follow-up).** Session/header buttons previously used emoji (`&#128451;`,
+     `&#128454;`) which render as tofu squares in this environment — the export button was
+     effectively invisible and the import button looked like a blank square. Replaced all session
+     + header action icons with inline SVG (`ICONS` in `app.js`, `currentColor` so they inherit
      hover color). Sidebar widened `260px → 320px` and header actions grouped under `.header-actions`
      so the import button no longer overhangs the menu edge. Rename button now a clear pencil SVG
      (still hover-revealed with pin/delete). Verified via CDP that clicking import/export both open
