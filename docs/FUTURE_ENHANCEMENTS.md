@@ -87,6 +87,25 @@ Gaps found during the review sweep that are missing *features*, not bugs:
 - ~~**Expose session summaries in the chat UI.**~~ ✅ Done: `Session.list_all` LEFT JOINs
   `session_summaries`, sidebar shows a truncated summary line under each session name
   (tooltip with full text).
+
+- **UI screenshot + vision-analysis loop (debugging/QA tool).** The project already has an
+  `image_analyze` tool (sends an image file to a vision-capable LLM), but nothing can *take* a
+  screenshot of the running UI. Add a **`screenshot` tool** that drives headless Chromium via the
+  DevTools Protocol (CDP) to capture a page (by URL or the live app) and save a PNG, then optionally
+  pipe it straight into `image_analyze`. Why: reliable UI verification without a human in front of a
+  browser — the agent can capture the sidebar/header after a change, confirm layout/icons/rendering,
+  and report regressions. Notes:
+  - **Tool, not a skill.** It must execute an external program (chromium) and return a binary image,
+    so it is a registered `Tool` (like `image_analyze`). A companion **skill** (`ui-debug.md`) can
+    document the workflow — "change UI → screenshot → analyze vs. expected → fix" — but the skill
+    alone cannot capture an image. So: tool required, skill optional for guidance.
+  - **Docker deployments need Chromium in the image.** Headless Chrome is ~150MB+ with deps; make it
+    an optional install (tool fails gracefully with a clear "chromium not found" error if absent) so
+    minimal images don't pay the size cost. On the dev host, system Chrome/Chromium is enough — no
+    extra libs required to drive it (CDP over a raw WebSocket + stdlib `http.client`/`socket`).
+  - **Verification harness.** The same CDP approach can be used for automated click/DOM checks
+    (dispatch events, assert modals render) as a `test`-adjacent tool, complementing the existing
+    pytest suite.
 - **Pin/archive depth beyond the boolean** (starred folders, archive vs pin semantics) remains
   an idea if wanted later.
 
