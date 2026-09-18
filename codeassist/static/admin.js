@@ -160,10 +160,127 @@ async function loadAgents() {
 async function loadAll() {
     try {
         await Promise.all([loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings()]);
+        updateCounts();
         setStatus('Updated');
     } catch (e) {
         setStatus(e.message, true);
     }
+}
+
+// --- Collapsible sections (admin page UX) ---------------------------------
+
+const COLLAPSE_KEY = 'admin:collapsedSections';
+
+function loadCollapsed() {
+    try { return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); }
+    catch { return {}; }
+}
+
+function saveCollapsed(state) {
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state)); } catch {}
+}
+
+function initAdminSections() {
+    const main = document.getElementById('chat-area');
+    const headings = Array.from(main.querySelectorAll(':scope > h2[id]'));
+    const collapsed = loadCollapsed();
+
+    headings.forEach((h2) => {
+        const id = h2.id;
+        if (!id) return;
+
+        // Collect body elements that belong to this section (until next h2).
+        const bodyEls = [];
+        let el = h2.nextElementSibling;
+        while (el && !el.matches('h2')) {
+            bodyEls.push(el);
+            el = el.nextElementSibling;
+        }
+
+        // Wrap them in a section so we can collapse the body independently.
+        const section = document.createElement('section');
+        section.className = 'admin-section';
+        section.dataset.section = id;
+        main.insertBefore(section, h2);
+        section.appendChild(h2);
+        const content = document.createElement('div');
+        content.className = 'section-content';
+        bodyEls.forEach((e) => content.appendChild(e));
+        section.appendChild(content);
+
+        // Turn the plain <h2> into a collapsible header.
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'section-toggle';
+        toggle.setAttribute('aria-expanded', 'true');
+        toggle.title = 'Collapse section';
+        toggle.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+        toggle.addEventListener('click', () => toggleSection(id));
+
+        const title = document.createElement('span');
+        title.className = 'section-title';
+        title.textContent = h2.textContent.trim();
+
+        const count = document.createElement('span');
+        count.className = 'section-count';
+        count.dataset.section = id;
+
+        h2.className = 'section-heading';
+        h2.innerHTML = '';
+        h2.appendChild(toggle);
+        h2.appendChild(title);
+        h2.appendChild(count);
+
+        if (collapsed[id]) {
+            section.classList.add('collapsed');
+            toggle.setAttribute('aria-expanded', 'false');
+        }
+    });
+
+    // Sidebar nav: expand + smooth-scroll + flash on click.
+    document.querySelectorAll('.admin-nav a').forEach((link) => {
+        link.addEventListener('click', (e) => navigateSection(e, link.getAttribute('href')));
+    });
+
+    updateCounts();
+}
+
+function toggleSection(id) {
+    const section = document.querySelector(`.admin-section[data-section="${CSS.escape(id)}"]`);
+    if (!section) return;
+    const collapsed = section.classList.toggle('collapsed');
+    const toggle = section.querySelector('.section-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+    const state = loadCollapsed();
+    if (collapsed) state[id] = true; else delete state[id];
+    saveCollapsed(state);
+}
+
+function navigateSection(e, href) {
+    const id = (href || '').replace('#', '');
+    const section = document.querySelector(`.admin-section[data-section="${CSS.escape(id)}"]`);
+    if (!section) return;
+    if (section.classList.contains('collapsed')) toggleSection(id);
+    const heading = section.querySelector('.section-heading');
+    if (heading) {
+        e.preventDefault();
+        heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        heading.classList.remove('section-flash');
+        // force reflow so the animation restarts
+        void heading.offsetWidth;
+        heading.classList.add('section-flash');
+    }
+}
+
+function updateCounts() {
+    document.querySelectorAll('.section-count').forEach((el) => {
+        const id = el.dataset.section;
+        const section = document.querySelector(`.admin-section[data-section="${CSS.escape(id)}"]`);
+        if (!section) return;
+        const tbody = section.querySelector('tbody');
+        const n = tbody ? tbody.rows.length : section.querySelectorAll('.settings-group').length;
+        el.textContent = String(n);
+    });
 }
 
 // --- Settings tab ---
@@ -366,4 +483,5 @@ document.getElementById('agent-create').onclick = async () => {
     } catch (e) { setStatus(e.message, true); }
 };
 
+initAdminSections();
 loadAll();
