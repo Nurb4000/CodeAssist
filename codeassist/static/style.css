@@ -13,7 +13,7 @@
     --red: #f85149;
     --yellow: #d29922;
     --orange: #db6d28;
-    --sidebar-width: 260px;
+    --sidebar-width: 320px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -70,6 +70,38 @@ body {
 .header-icon:hover {
     background: var(--bg-hover);
 }
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.header-links {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.header-action-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+
+.header-action-btn svg { width: 16px; height: 16px; display: block; }
+.header-action-btn.new-session { font-size: 18px; font-weight: 300; line-height: 1; }
+.header-action-btn:hover { background: var(--bg-hover); }
 
 #agent-select {
     background: var(--bg-tertiary);
@@ -326,69 +358,45 @@ body {
 .session-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 .session-item.active { background: var(--bg-tertiary); color: var(--text-primary); }
 
-.session-item .pin-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 12px;
-    padding: 0 4px;
-    flex-shrink: 0;
-}
-
-.session-item .pin-btn:hover { color: var(--accent); }
-.session-item .pin-btn.pinned { color: #e3b341; }
-
-.session-item .export-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 12px;
-    padding: 0 4px;
-    flex-shrink: 0;
-}
-.session-item .export-btn:hover { color: var(--accent); }
-.session-item .delete-btn { color: var(--text-muted); }
-.session-item .delete-btn:hover { color: var(--red); }
-
-.session-summary {
-    font-size: 11px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: 2px;
-    padding-left: 2px;
-    min-width: 0;
-}
-
+/* Session row action buttons — consistent 24px touch targets with SVG icons. */
+.session-item .pin-btn,
+.session-item .export-btn,
+.session-item .rename-btn,
 .session-item .delete-btn {
-    display: none;
     background: none;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 12px;
-    padding: 0 4px;
-    flex-shrink: 0;
-}
-
-.session-item .rename-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
     display: none;
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 11px;
-    padding: 0 4px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+}
+.session-item .pin-btn svg,
+.session-item .export-btn svg,
+.session-item .rename-btn svg,
+.session-item .delete-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
 }
 
-.session-item:hover .delete-btn,
-.session-item:hover .rename-btn { display: block; }
-.session-item .delete-btn:hover { color: var(--red); }
+/* Pin + export always visible; rename + delete revealed on hover. */
+.session-item .pin-btn,
+.session-item .export-btn { display: flex; }
+.session-item:hover .rename-btn,
+.session-item:hover .delete-btn { display: flex; }
+
+.session-item .pin-btn.pinned { color: #e3b341; }
+.session-item .pin-btn:hover { color: #e3b341; }
+.session-item .export-btn:hover { color: var(--accent); }
 .session-item .rename-btn:hover { color: var(--accent); }
+.session-item .delete-btn:hover { color: var(--red); }
 
 .sidebar-footer {
     padding: 12px 16px;

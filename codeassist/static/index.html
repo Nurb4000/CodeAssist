@@ -14,14 +14,16 @@
         <aside id="sidebar">
             <div class="sidebar-header">
                 <h1>CodeAssist</h1>
-                <div class="header-links">
-                    <a href="/static/tools.html" class="header-icon" title="Tool Manager">🔧</a>
-                    <a href="/static/admin.html" class="header-icon" title="Admin / Settings">⚙️</a>
-                    <a href="/static/kb.html" class="header-icon" title="Knowledge Base">📚</a>
-                    <select id="agent-select" title="Active agent" style="display:none;"></select>
+                <div class="header-actions">
+                    <div class="header-links">
+                        <a href="/static/tools.html" class="header-icon" title="Tool Manager">🔧</a>
+                        <a href="/static/admin.html" class="header-icon" title="Admin / Settings">⚙️</a>
+                        <a href="/static/kb.html" class="header-icon" title="Knowledge Base">📚</a>
+                        <select id="agent-select" title="Active agent" style="display:none;"></select>
+                    </div>
+                    <button id="import-btn" class="header-action-btn" title="Import session from JSON"></button>
+                    <button id="new-session-btn" class="header-action-btn new-session" title="New Session">+</button>
                 </div>
-                <button id="import-btn" class="header-icon" title="Import session from JSON">&#128454;</button>
-                <button id="new-session-btn" title="New Session">+</button>
             </div>
             <div id="session-list"></div>
             <div class="sidebar-footer">

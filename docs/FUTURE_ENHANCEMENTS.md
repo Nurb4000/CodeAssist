@@ -119,9 +119,17 @@ Gaps found during the review sweep that are missing *features*, not bugs:
   - `session.add_message` now accepts/persists `reasoning_content`; `SessionManager.import_session`
     forwards it (and tolerates already-parsed `tool_calls`), so thinking blocks survive export→import.
   - Transient `showStatus` toast for success/failure feedback.
-  Tests: `test_export_import_preserves_reasoning_content` (data layer) and REST round-trip in
-  `test_app_smoke.py::test_session_lifecycle`. Verified end-to-end through the live container:
-  exported `reasoning_content` reappears verbatim on the imported session.
+   Tests: `test_export_import_preserves_reasoning_content` (data layer) and REST round-trip in
+   `test_app_smoke.py::test_session_lifecycle`. Verified end-to-end through the live container:
+   exported `reasoning_content` reappears verbatim on the imported session.
+   - **Icon polish (follow-up).** Session/header buttons previously used emoji (`&#128451;`,
+     `&#128454;`) which render as tofu squares in this environment — the export button was
+     effectively invisible and the import button looked like a blank square. Replaced all session
+     + header action icons with inline SVG (`ICONS` in `app.js`, `currentColor` so they inherit
+     hover color). Sidebar widened `260px → 320px` and header actions grouped under `.header-actions`
+     so the import button no longer overhangs the menu edge. Rename button now a clear pencil SVG
+     (still hover-revealed with pin/delete). Verified via CDP that clicking import/export both open
+     their modals (`MODAL_OPEN`), and the export dialog contains the redact checkbox + download btn.
 
 - **Running token count + token rate.** ✅ Done (this batch). The sidebar footer now shows a
   `#token-info` line: cumulative session tokens + live `tok/s` rate. Tokens are accumulated on the
