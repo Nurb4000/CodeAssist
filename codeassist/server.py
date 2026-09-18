@@ -347,9 +347,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     session = await Session.get_or_create(session_id)
 
-    # Get current agent
-    current_agent_name = cfg.agent.default_agent
+    # Get current agent: per-session choice (agent switcher), defaulting to config.
+    current_agent_name = await session.get_agent_name() or cfg.agent.default_agent
     agent_config_obj = agent_manager.get_agent(current_agent_name)
+    if agent_config_obj is None:
+        # Stored agent no longer exists (deleted since); fall back to default.
+        current_agent_name = cfg.agent.default_agent
+        agent_config_obj = agent_manager.get_agent(current_agent_name)
 
     # Discover and load project instructions (AGENTS.md, CLAUDE.md, etc.)
     discoverer = get_instruction_discoverer()
@@ -404,6 +408,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     agent = Agent(cfg, session, tools, system_prompt)
     agent_task: asyncio.Task | None = None
+
+    # Tell the client which agent is active for this session (agent switcher).
+    if agent_config_obj:
+        _agent_info = agent_config_obj.to_dict()
+        _agent_info["id"] = current_agent_name
+        await websocket.send_json({
+            "type": "active_agent",
+            "agent": _agent_info,
+        })
 
     async def run_agent_task(message: str, images: list | None = None):
         nonlocal agent_task
@@ -500,14 +513,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             elif data.get("type") == "switch_agent":
                 agent_name = data.get("agent_name")
-                if agent_name:
+                if agent_name and agent_name != current_agent_name:
                     new_config = agent_manager.get_agent(agent_name)
-                    if new_config:
-                        agent.system_prompt = new_config.get_system_prompt()
+                    if not new_config:
                         await websocket.send_json({
-                            "type": "agent_switched",
-                            "agent": agent_name,
+                            "type": "error",
+                            "message": f"Agent '{agent_name}' not found",
                         })
+                        continue
+                    if agent_task and not agent_task.done():
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Agent is busy, switch when the current turn finishes",
+                        })
+                        continue
+                    await session.set_agent_name(agent_name)
+                    current_agent_name = agent_name
+
+                    # Rebuild the system prompt for the new agent (mirrors connect path).
+                    new_base_prompt = new_config.get_system_prompt() if new_config else "You are a helpful coding assistant."
+                    new_header = new_config.get_system_prompt() if new_config else None
+                    new_system_prompt = build_system_prompt(
+                        workspace=cfg.workspace,
+                        model_id=cfg.llm.model,
+                        features={
+                            "mcp_enabled": cfg.mcp.enabled,
+                            "skills_enabled": cfg.skills.enabled,
+                            "plugins_enabled": cfg.plugins.enabled,
+                            "lsp_enabled": cfg.lsp.enabled,
+                            "git_enabled": cfg.git.enabled,
+                        },
+                        instructions=instructions_text if instructions_text else None,
+                    )
+                    if new_header and new_header != new_base_prompt:
+                        new_system_prompt = new_header + "\n\n" + new_system_prompt
+                    agent.system_prompt = new_system_prompt
+
+                    await websocket.send_json({
+                        "type": "agent_switched",
+                        "agent": {**new_config.to_dict(), "id": agent_name},
+                    })
 
             elif data.get("type") == "approve_tool":
                 file_path = data.get("file_path")

@@ -71,6 +71,123 @@ body {
     background: var(--bg-hover);
 }
 
+#agent-select {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 6px;
+    font-size: 12px;
+    padding: 2px 4px;
+    max-width: 150px;
+    cursor: pointer;
+    height: 28px;
+}
+
+#agent-select:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.admin-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 0;
+}
+
+.admin-status {
+    font-size: 12px;
+    color: var(--green);
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 16px;
+    font-size: 13px;
+}
+
+.admin-table th,
+.admin-table td {
+    border: 1px solid var(--border);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.admin-table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+}
+
+.admin-table td code {
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.admin-table .cell-em {
+    font-weight: 600;
+}
+
+.admin-toolbar {
+    margin: 4px 0 8px;
+}
+
+.admin-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.admin-btn:hover {
+    background: var(--bg-hover);
+}
+
+.admin-btn-danger {
+    color: var(--red);
+}
+
+.admin-create {
+    margin: 6px 0 18px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    background: var(--bg-secondary);
+}
+
+.admin-create summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.admin-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+    max-width: 480px;
+}
+
+.admin-form input,
+.admin-form textarea {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.admin-form textarea {
+    min-height: 72px;
+    resize: vertical;
+}
+
 .sidebar-footer {
     padding: 12px 16px;
     border-top: 1px solid var(--border);

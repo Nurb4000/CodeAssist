@@ -277,3 +277,29 @@ class TestSession:
             assert count == 0
         finally:
             conn.close()
+
+
+class TestAgentSelection:
+    """Per-session agent selection persistence (review item I / agent switcher)."""
+
+    @pytest.mark.asyncio
+    async def test_set_and_get_agent_name_round_trip(self):
+        await init_db()
+        session = await Session.create(name="Agent Pick")
+        assert await session.get_agent_name() is None
+
+        await session.set_agent_name("research")
+        assert await session.get_agent_name() == "research"
+
+        await session.set_agent_name("default")
+        assert await session.get_agent_name() == "default"
+
+    @pytest.mark.asyncio
+    async def test_agent_name_is_per_session(self):
+        await init_db()
+        s1 = await Session.create(name="One")
+        s2 = await Session.create(name="Two")
+
+        await s1.set_agent_name("default")
+        assert await s1.get_agent_name() == "default"
+        assert await s2.get_agent_name() is None

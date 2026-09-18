@@ -75,6 +75,13 @@ def test_health(live_client):
     assert r.json()["status"] == "ok"
 
 
+def test_static_admin_page_served(live_client):
+    """Registry admin page (review item I) must be served with its JS."""
+    assert live_client.get("/static/admin.html").status_code == 200
+    assert live_client.get("/static/admin.js").status_code == 200
+    assert live_client.get("/static/admin.html").text.count("id=\"admin-status\"") == 1
+
+
 def test_session_lifecycle(live_client):
     r = live_client.post("/api/sessions")
     assert r.status_code == 200
@@ -163,3 +170,49 @@ def test_ws_unknown_session_id_creates_session_not_orphan(live_client, monkeypat
     # Direct proof across the whole table: zero orphan message rows.
     import codeassist.session as sess_mod
     assert _orphan_message_count(sess_mod.DB_PATH) == 0
+
+
+def _drain_until(ws, msg_type, max_reads=50):
+    """Read WS messages until one of the wanted type appears. Returns that dict."""
+    for _ in range(max_reads):
+        data = ws.receive_json()
+        if data.get("type") == msg_type:
+            return data
+    raise AssertionError(f"never received a '{msg_type}' WS message")
+
+
+def test_ws_agent_switcher(live_client, monkeypatch):
+    """Agent switcher (review item I): the server announces the active agent on
+    connect, applies a switch_agent request, and remembers the choice per session
+    across reconnects."""
+    import uuid
+    import codeassist.llm as llm_mod
+
+    async def _stub_stream(self, *args, **kwargs):
+        raise ConnectionError("stubbed LLM for test")
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    agents = {a["id"] for a in live_client.get("/api/agents").json()}
+    assert "research" in agents, "default AgentManager seeds a 'research' agent"
+
+    sid = f"agent-switcher-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        initial = _drain_until(ws, "active_agent")
+        assert initial["agent"]["id"] == "default", initial
+
+        ws.send_json({"type": "switch_agent", "agent_name": "research"})
+        switched = _drain_until(ws, "agent_switched")
+        assert switched["agent"]["id"] == "research", switched
+
+    # Reconnect to the same session: the per-session choice must persist.
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        again = _drain_until(ws, "active_agent")
+        assert again["agent"]["id"] == "research", again
+
+    # Unknown agent -> error reply.
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        _drain_until(ws, "active_agent")
+        ws.send_json({"type": "switch_agent", "agent_name": "does-not-exist"})
+        err = _drain_until(ws, "error")
+        assert "not found" in err["message"]

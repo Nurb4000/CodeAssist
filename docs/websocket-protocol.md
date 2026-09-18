@@ -33,8 +33,9 @@ The password is NEVER accepted via query parameters (security best practice).
 // Respond to a question from the agent
 {"type": "question_response", "id": "...", "answer": "..."}
 
-// Switch the active agent
-{"type": "switch_agent", "agent_name": "..."}
+// Switch the active agent for this session (agent_name is the registry id/key,
+// e.g. "default" or "research"; persisted per session across reconnects)
+{"type": "switch_agent", "agent_name": "research"}
 
 // Approve a dynamically loaded custom tool
 {"type": "approve_tool", "file_path": "..."}
@@ -85,7 +86,11 @@ The password is NEVER accepted via query parameters (security best practice).
 {"type": "cancelled"}
 
 // Agent was switched
-{"type": "agent_switched", "agent": "..."}
+{"type": "agent_switched", "agent": {"id": "research", "name": "Research", "description": "...", "model": null}}
+
+// Active agent for this session (sent once right after connect). The choice is
+// persisted per session, so reconnecting to a session reports its agent.
+{"type": "active_agent", "agent": {"id": "default", "name": "CodeAssist", ...}}
 ```
 
 ### Non-agent events

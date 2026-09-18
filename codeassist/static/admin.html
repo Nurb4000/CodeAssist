@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeAssist Admin</title>
+    <link rel="stylesheet" href="/static/style.css?v=dev">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>Admin</h1>
+                <div class="header-links">
+                    <a href="/static/index.html" class="header-icon" title="Back to chat">&#8592;</a>
+                </div>
+                <button id="refresh-btn" title="Refresh all">&#8635;</button>
+            </div>
+            <div id="session-list">
+                <nav class="admin-nav">
+                    <a href="#skills" class="kb-link">Skills</a>
+                    <a href="#mcp" class="kb-link">MCP servers</a>
+                    <a href="#lsp" class="kb-link">LSP servers</a>
+                    <a href="#plugins" class="kb-link">Plugins</a>
+                    <a href="#custom-tools" class="kb-link">Custom tools</a>
+                    <a href="#agents" class="kb-link">Agents</a>
+                </nav>
+            </div>
+            <div class="sidebar-footer">
+                <div id="admin-status" class="admin-status"></div>
+            </div>
+        </aside>
+        <main id="chat-area" style="overflow:auto;padding:20px;">
+            <h2 id="skills">Skills</h2>
+            <div class="admin-toolbar">
+                <button class="admin-btn" id="skills-reload">Reload skills from disk</button>
+            </div>
+            <table class="admin-table">
+                <thead><tr><th>Name</th><th>Description</th><th>Slash</th><th>Source</th></tr></thead>
+                <tbody id="skills-body"></tbody>
+            </table>
+            <details class="admin-create">
+                <summary>Create skill</summary>
+                <div class="admin-form">
+                    <input id="skill-name" placeholder="name (required)">
+                    <input id="skill-desc" placeholder="description">
+                    <input id="skill-slash" placeholder="/slash_command">
+                    <textarea id="skill-content" placeholder="skill content / instructions"></textarea>
+                    <button class="admin-btn" id="skill-create">Create</button>
+                </div>
+            </details>
+
+            <h2 id="mcp">MCP servers</h2>
+            <table class="admin-table">
+                <thead><tr><th>Name</th><th>Config</th><th>Enabled</th><th></th></tr></thead>
+                <tbody id="mcp-body"></tbody>
+            </table>
+            <details class="admin-create">
+                <summary>Add MCP server</summary>
+                <div class="admin-form">
+                    <input id="mcp-name" placeholder="name (required)">
+                    <textarea id="mcp-config" placeholder='{"command": "...", "args": [...]}'></textarea>
+                    <button class="admin-btn" id="mcp-create">Add</button>
+                </div>
+            </details>
+
+            <h2 id="lsp">LSP servers</h2>
+            <table class="admin-table">
+                <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Languages</th><th></th></tr></thead>
+                <tbody id="lsp-body"></tbody>
+            </table>
+            <details class="admin-create">
+                <summary>Add LSP server</summary>
+                <div class="admin-form">
+                    <input id="lsp-name" placeholder="name (required)">
+                    <input id="lsp-command" placeholder="command (required)">
+                    <input id="lsp-args" placeholder='args JSON, e.g. ["--stdio"]'>
+                    <input id="lsp-langs" placeholder='languages JSON, e.g. ["python"]'>
+                    <button class="admin-btn" id="lsp-create">Add</button>
+                </div>
+            </details>
+
+            <h2 id="plugins">Plugins</h2>
+            <table class="admin-table">
+                <thead><tr><th>Name</th><th>Version</th><th>Enabled</th></tr></thead>
+                <tbody id="plugins-body"></tbody>
+            </table>
+
+            <h2 id="custom-tools">Custom tools</h2>
+            <div class="admin-toolbar">
+                <button class="admin-btn" id="custom-reload">Reload custom tools</button>
+            </div>
+            <table class="admin-table">
+                <thead><tr><th>Name</th><th>Description</th></tr></thead>
+                <tbody id="custom-body"></tbody>
+            </table>
+
+            <h2 id="agents">Agents</h2>
+            <table class="admin-table">
+                <thead><tr><th>Key</th><th>Name</th><th>Description</th><th>Model</th></tr></thead>
+                <tbody id="agents-body"></tbody>
+            </table>
+        </main>
+    </div>
+    <script src="/static/admin.js?v=dev"></script>
+</body>
+</html>
