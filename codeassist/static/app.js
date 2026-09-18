@@ -10,9 +10,11 @@ const attachBtn = document.getElementById('attach-btn');
 const fileInputEl = document.getElementById('file-input');
 const attachPreviewEl = document.getElementById('attach-preview');
 const inputAreaEl = document.getElementById('input-area');
+const agentSelectEl = document.getElementById('agent-select');
 
 let configData = {};
 let pendingImages = [];
+let currentAgentName = null;
 
 const MAX_IMAGES_PER_MESSAGE = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -62,6 +64,43 @@ async function loadConfig() {
     configData = await api('GET', '/api/config');
     modelInfoEl.textContent = `${configData.model} | ${configData.workspace}`;
     setAttachmentUiEnabled(!!configData.vision);
+    await loadAgents();
+}
+
+async function loadAgents() {
+    const agents = await api('GET', '/api/agents');
+    let label = configData.agent_name || 'default';
+    agentSelectEl.innerHTML = '';
+    for (const a of agents) {
+        if (a.id === 'compaction' || a.name === 'compaction') continue;
+        const opt = document.createElement('option');
+        opt.value = a.id || a.name;
+        opt.textContent = a.name + (a.description ? ` — ${a.description}` : '');
+        opt.title = a.description || a.name;
+        agentSelectEl.appendChild(opt);
+    }
+    setAgentSelection(label);
+    agentSelectEl.style.display = 'flex';
+    agentSelectEl.onchange = () => {
+        const name = agentSelectEl.value;
+        if (isStreaming) {
+            showError('Agent is busy, switch when the current turn finishes');
+            agentSelectEl.value = currentAgentName || agentSelectEl.value;
+            return;
+        }
+        if (name === currentAgentName) return;
+        if (ws && wsConnected) {
+            agentSelectEl.disabled = true;
+            ws.send(JSON.stringify({ type: 'switch_agent', agent_name: name }));
+        }
+    };
+}
+
+function setAgentSelection(id) {
+    currentAgentName = id;
+    for (const opt of agentSelectEl.options) {
+        if (opt.value === id) opt.selected = true;
+    }
 }
 
 function setAttachmentUiEnabled(enabled) {
@@ -654,7 +693,12 @@ function connectWS() {
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
 
-        if (data.type === 'text_delta') {
+        if (data.type === 'active_agent') {
+            if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
+        } else if (data.type === 'agent_switched') {
+            setAgentSelection((data.agent && (data.agent.id || data.agent.name)) || data.agent);
+            agentSelectEl.disabled = false;
+        } else if (data.type === 'text_delta') {
             hideProgress();
             if (!currentContentEl) startAssistantMessage();
             textBuffer += data.content;
@@ -682,6 +726,10 @@ function connectWS() {
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
+            if (agentSelectEl && agentSelectEl.disabled && currentAgentName) {
+                agentSelectEl.value = currentAgentName;
+                agentSelectEl.disabled = false;
+            }
             if (!currentContentEl) startAssistantMessage();
             currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();

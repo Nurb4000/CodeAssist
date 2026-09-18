@@ -19,6 +19,9 @@ fine for power users but opaque for everyone else, and it's the source of a lot 
 - Persist overrides (in the session DB or a dedicated `settings` table) layered on top of
   `config.toml`, so defaults stay in files and per-user values are internal.
 - Flag on every setting: "file-managed" vs "UI-managed" to avoid confusion.
+- (A first registry-only admin page — `static/admin.html` — already ships the skills/MCP/LSP
+  plugin/custom-tools/agent browsing + skills/MCP/LSP create & MCP/LSP delete; fold it into the
+  full settings UI rather than adding a separate "config" page.)
 
 ## Related "move internal" candidates
 
@@ -39,11 +42,10 @@ Gaps found during the review sweep that are missing *features*, not bugs:
   `"%Y-%m-%d %H:%M"` (`Session.create`) and only a timestamp or manual rename is seen; nothing
   derives a title from the first user message. Session summaries *do* capture `first_message`
   (`session_manager.py:115`), so reuse that to auto-set a readable title on first message.
-- **Agent switcher in the chat UI.** `default`/`research`/`review` agent configs and
-  `/api/agents` CRUD exist (`agents.py`, `routes/agents.py`), but the chat UI has no way to pick
-  the active agent — `server.py` hardcodes `cfg.agent.default_agent` per connection. Add a
-  per-session agent dropdown (and ideally an agent-management pane) so the configs are actually
-  usable.
+- ~~**Agent switcher in the chat UI.**~~ ✅ Done (review item I): sidebar dropdown keyed by
+  registry id, streaming guard, per-session persistence (`sessions.agent_name`, schema v7),
+  `active_agent` on connect. Remaining: an agent-management pane (create/edit/delete) — the
+  `POST/DELETE /api/agents` endpoints work, and the admin page lists agents read-only.
 - **Session pin/star/archive.** No favorite/pin/archive concept exists anywhere (session list is
   just `ORDER BY updated_at DESC`). Nice-to-have for long-running projects so important threads
   don't sink out of view.

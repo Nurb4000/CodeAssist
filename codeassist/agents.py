@@ -103,6 +103,15 @@ class AgentConfig:
 
         return AgentPermissions(permissions)
 
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description or "",
+            "instructions": self.instructions or "",
+            "model": self.model,
+            "max_iterations": self.max_iterations,
+        }
+
     def get_system_prompt(self) -> str:
         """Get the system prompt for this agent."""
         prompt = f"You are {self.name}.\n\n"
@@ -318,14 +327,20 @@ class AgentManager:
         return self._agents.get(name)
 
     def list_agents(self) -> list[dict]:
-        """List all available agents."""
+        """List all available agents.
+
+        Built-in agents use a stable registry key ("default", "research", ...) that
+        differs from their display name ("CodeAssist", "Research", ...). Clients
+        select by ``id`` (the key) and display ``name``.
+        """
         return [
             {
+                "id": key,
                 "name": config.name,
                 "description": config.description,
                 "model": config.model,
             }
-            for config in self._agents.values()
+            for key, config in self._agents.items()
         ]
 
     def get_default_agent(self) -> AgentConfig:

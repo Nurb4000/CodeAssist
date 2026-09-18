@@ -13,7 +13,7 @@ from dataclasses import dataclass
 # volume). Defaults to <package>/data for plain local runs.
 DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class _DBPool:
@@ -155,13 +155,17 @@ async def init_db():
             await _add_v4_tables(db)
             current_version = 4
 
-        if current_version < SCHEMA_VERSION:
+        if current_version < 5:
             await _add_v5_tables(db)
             current_version = 5
 
-        if current_version < SCHEMA_VERSION:
+        if current_version < 6:
             await _add_v6_tables(db)
-            current_version = SCHEMA_VERSION
+            current_version = 6
+
+        if current_version < 7:
+            await _add_v7_tables(db)
+            current_version = 7
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -529,6 +533,17 @@ async def _add_v6_tables(db):
     await db.commit()
 
 
+async def _add_v7_tables(db):
+    """Add per-session agent selection (agent switcher persistence)."""
+
+    # SQLite lacks ADD COLUMN IF NOT EXISTS; guard against duplicate column.
+    cursor = await db.execute("PRAGMA table_info(sessions)")
+    rows = await cursor.fetchall()
+    if not any(r["name"] == "agent_name" for r in rows):
+        await db.execute("ALTER TABLE sessions ADD COLUMN agent_name TEXT")
+        await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -662,6 +677,27 @@ class Session:
             )
             await db.commit()
         return cls(session_id)
+
+    async def get_agent_name(self) -> str | None:
+        """Agent selected for this session (persisted), if any."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT agent_name FROM sessions WHERE id = ?", (self.id,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+        return None
+
+    async def set_agent_name(self, agent_name: str):
+        """Persist the agent selected for this session."""
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE sessions SET agent_name = ?, updated_at = ? WHERE id = ?",
+                (agent_name, now, self.id),
+            )
+            await db.commit()
 
     async def add_message(
         self,

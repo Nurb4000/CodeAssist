@@ -176,14 +176,27 @@ import, clear) all exist in `routes/kb_gui.py`; `tools.js` (`/api/tools/manage/*
 
 ---
 
-## I. Registry feature surface (configs with API but no UI)
+## I. Registry feature surface (configs with API but no UI) — PARTIAL (agent switcher done)
 
 The server exposes registries for **skills** (`/api/skills`), **agents** (`/api/agents`),
 **MCP** (`/api/mcp/servers`), **LSP** (`/api/lsp/servers`), **plugins**, and **custom tools**
-(`/api/tools/manage/scan`), but the chat UI only links to Tool Manager (`tools.html`) and KB
-(`kb.html`). No UI exists for skills, agents (no agent switcher in `app.js`), MCP, or LSP servers.
-Consolidate these into the settings/admin page (see `FUTURE_ENHANCEMENTS.md`); until then the APIs
-are effectively headless.
+(`/api/tools/manage/scan`). The chat UI only linked to Tool Manager (`tools.html`) and KB
+(`kb.html`); no UI existed for skills, agents, MCP, or LSP servers.
+
+**Fixed — agent switcher (chat UI):** a dropdown in the chat sidebar (populated from
+`/api/agents`, keyed by registry id) sends the existing `switch_agent` WS message. The server
+now guards switching while a turn is streaming, rebuilds the agent's system prompt from the new
+`AgentConfig`, and **persists the choice per session** (new `sessions.agent_name` column, schema
+v7; `Session.get_agent_name`/`set_agent_name`). On every WS connect the server announces the
+active agent (`active_agent`), so per-session choices survive reconnects and reloads.
+`AgentConfig.to_dict()` added; `/api/agents` now returns `id` (registry key) alongside display
+`name`. Covered by `tests/test_app_smoke.py::test_ws_agent_switcher` plus `test_session.py`
+agent-selection tests.
+
+**Fixed — registry admin page:** new `static/admin.html` + `admin.js` backed entirely by the
+existing APIs — lists skills (create/reload), MCP servers (create/delete), LSP servers
+(create/delete), plugins (read-only), custom tools (reload), and agents (read-only). Linked from
+the chat sidebar header/footer. Covered by `test_static_admin_page_served`.
 
 ---
 
@@ -221,7 +234,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | 6 | M | **D2** — reasoning-model content | ✅ Done (audit: no non-stream call sites; `stream()` falls back to `reasoning_content`; 2 new stream tests). |
 | 7 | M | **F1** — snapshot in Docker | ✅ Done (safe.directory + HEAD-based initial commit; verified in rebuilt container: clean log, HEAD commit exists; `tests/test_snapshot.py`). |
 | 8 | M | **A1** — per-tool "trust for this session" | ✅ Done (`SESSION_TOOL_TRUST` + `_confirm_tools` binding in `agent.py`; generic trust checkbox + `trust_tool` in `app.js`/WS `confirm_response`; `needs_confirmation` honors it; `tests/test_trust_scope.py` incl. agent-level confirm-flow test). |
-| 9 | L | **I** — headless registry UIs | Ship an agent switcher (dropdown per session) first; then a settings/admin page for skills/MCP/LSP backed by the existing APIs; cover with smoke tests. |
+| 9 | L | **I** — headless registry UIs | ✅ Agent switcher (dropdown, streaming guard, per-session persistence via `sessions.agent_name` schema v7, `active_agent` on connect) + registry admin page (`static/admin.html`) for skills/MCP/LSP/plugins/custom-tools/agents; smoke + WS tests. |
 
 After #9, revisit `FUTURE_ENHANCEMENTS.md` (in-app settings UI, KB Q→A, auto-titles, pin/archive)
 as the next backlog.
@@ -230,7 +243,9 @@ as the next backlog.
 
 - `DONE`: A1, A2, B1, B2, B4, D2, E1, E2, F1, H1
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): the registry-UI gap (I)
+- `OPEN`: none — all review items are DONE or CLEARED (I is partially addressed: agent
+  switcher + registry admin page shipped; the broader in-app settings UI remains tracked in
+  `FUTURE_ENHANCEMENTS.md`).
 
 ## Revision history
 
