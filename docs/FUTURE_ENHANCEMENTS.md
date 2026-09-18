@@ -39,16 +39,16 @@ fine for power users but opaque for everyone else, and it's the source of a lot 
 `static/admin.html` currently renders every registry as a flat `<h2>` section (skills, MCP, LSP,
 plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to-haves:
 
-- **Collapsible sections** — make skills/agents/custom-tools sections collapsible like the
-  plugins/servers sections, defaulting to *collapsed* so the page stays compact. A per-section
-  count badge (`Skills (12)`) on the toggle makes the collapsed state still useful.
-- **Sidebar menu expands + navigates** — clicking a left-hand menu entry should do more than
-  `jump to #anchor`: expand its section if collapsed, then scroll to it (and flash/highlight the
-  section briefly so the landing is obvious).
-- **Visible "Back to chat" control** — the current `←` glyph in the admin sidebar header
-  (`.header-icon` link to `index.html`) is a tiny, easy-to-miss character. Replace with a
-  prominent labeled button (e.g. "&larr; Back to chat") styled like a real action, so admins
-  aren't hunting for the way back.
+- **Collapsible sections.** ✅ Done (commit `ff46a05`). Each `<h2>` section on `admin.html` is now
+  wrapped in a `.admin-section` with a chevron toggle and a live item-count badge (`Skills (16)`).
+  Wrapping is done in JS (`initAdminSections`) so the existing `*-body` `getElementById` references
+  in `admin.js` stay intact. Sections default **expanded** (content visible on load) and collapse
+  state persists per-section in `localStorage`; the toggle re-checks on window resize.
+- **Sidebar menu expands + navigates.** ✅ Done (`ff46a05`). Clicking a sidebar nav entry now
+  expands the target section if collapsed, smooth-scrolls to it, and flashes/highlights the heading
+  briefly so the landing is obvious (instead of a bare `jump to #anchor`).
+- **Visible "Back to chat" control.** ✅ Done (`ff46a05`). Replaced the tiny `←` glyph in the admin
+  sidebar header with a labeled "← Back to chat" button (inline SVG arrow + text).
 - **Edit/remove for every item** — today only create (skills/MCP/LSP/agents) and delete
   (MCP/LSP + custom agents) are wired; built-in agents are protected. Add:
   - edit (rename / description / config JSON / enabled toggle) for registered items, backed by
