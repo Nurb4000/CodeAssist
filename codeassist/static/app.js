@@ -28,6 +28,9 @@ let ws = null;
 let wsConnected = false;
 let isStreaming = false;
 let currentContentEl = null;
+
+// Running token accounting for the sidebar footer (cumulative + rate).
+let tokenState = { total: 0, lastTotal: 0, lastTime: null };
 let textBuffer = '';
 let reconnectTimer = null;
 let currentToolPanel = null;
@@ -66,7 +69,21 @@ async function api(method, path, body) {
 
 async function loadConfig() {
     configData = await api('GET', '/api/config');
-    modelInfoEl.textContent = `${configData.model} | ${configData.workspace}`;
+    const effModel = configData.effective_model || configData.model;
+    const effWindow = configData.effective_context_window || configData.context_window;
+    // Show just the model id (basename) in the footer for readability.
+    const displayModel = String(effModel || '(unknown)').split('/').pop();
+    let modelLabel = displayModel;
+    if (effWindow) {
+        modelLabel += ` (${Number(effWindow).toLocaleString()})`;
+    }
+    if (configData.backend_source === 'backend') {
+        modelLabel += ` • auto`;
+        modelInfoEl.title = `Auto-detected from local backend: ${effModel}`;
+    } else {
+        modelInfoEl.title = `Configured model: ${configData.model}${configData.backend_external ? ' (external provider)' : ''}`;
+    }
+    modelInfoEl.textContent = `${modelLabel} | ${configData.workspace}`;
     visionCapable = !!configData.vision_capable;
     setAttachmentUiEnabled(true);
     await loadAgents();
@@ -873,7 +890,20 @@ function connectWS() {
             currentContentEl.innerHTML += `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Stopped by user</p>`;
             scrollToBottom();
         } else if (data.type === 'finish') {
-            // usage info
+            const usage = data.usage;
+            if (usage) {
+                const turn = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
+                const now = performance.now();
+                if (tokenState.lastTime != null) {
+                    const dtSec = (now - tokenState.lastTime) / 1000;
+                    tokenState.rate = dtSec > 0 ? turn / dtSec : 0;
+                } else {
+                    tokenState.rate = 0;
+                }
+                tokenState.total += turn;
+                tokenState.lastTime = now;
+                updateTokenInfo(tokenState.total, tokenState.rate);
+            }
         }
     };
 
@@ -1046,6 +1076,20 @@ function updateContextUsage(tokens, usagePct, severity) {
     el.innerHTML = `<span style="color:${color}">${usagePct}% context used</span> (${tokens.toLocaleString()} tokens)`;
     el.style.fontSize = '11px';
     el.style.marginTop = '4px';
+}
+
+function updateTokenInfo(totalTokens, rate) {
+    let el = document.getElementById('token-info');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'token-info';
+        el.style.fontSize = '11px';
+        el.style.color = 'var(--text-muted)';
+        el.style.marginTop = '2px';
+        document.querySelector('.sidebar-footer').appendChild(el);
+    }
+    const rateText = rate > 0 ? ` · ${rate.toFixed(1)} tok/s` : '';
+    el.textContent = `${totalTokens.toLocaleString()} tokens${rateText}`;
 }
 
 function updatePlanDisplay(tasks) {
