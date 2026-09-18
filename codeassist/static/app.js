@@ -14,10 +14,14 @@ const agentSelectEl = document.getElementById('agent-select');
 
 let configData = {};
 let pendingImages = [];
+let pendingFiles = [];
+let visionCapable = false;
 let currentAgentName = null;
 
 const MAX_IMAGES_PER_MESSAGE = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_FILES_PER_MESSAGE = 5;
+const MAX_FILE_BYTES = 256 * 1024;
 
 let currentSessionId = null;
 let ws = null;
@@ -63,7 +67,8 @@ async function api(method, path, body) {
 async function loadConfig() {
     configData = await api('GET', '/api/config');
     modelInfoEl.textContent = `${configData.model} | ${configData.workspace}`;
-    setAttachmentUiEnabled(!!configData.vision);
+    visionCapable = !!configData.vision_capable;
+    setAttachmentUiEnabled(true);
     await loadAgents();
 }
 
@@ -123,7 +128,45 @@ function readFileAsDataURL(file) {
     });
 }
 
+const TEXT_FILE_EXTS = new Set(['txt','md','markdown','py','js','jsx','ts','tsx','json','toml','yaml','yml','csv','html','css','scss','sql','sh','bash','go','rs','java','c','cpp','h','hpp','rb','php','lua','xml']);
+
+function isTextFile(file) {
+    return file.type.startsWith('text/') || (file.name.split('.').pop() || '').toLowerCase() in TEXT_FILE_EXTS;
+}
+
+function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(file);
+    });
+}
+
+async function addPendingFile(file) {
+    if (file.size > MAX_FILE_BYTES) {
+        showError(`File '${file.name}' is too large (${(file.size / 1024).toFixed(0)}KB). Maximum is ${MAX_FILE_BYTES / 1024}KB`);
+        return;
+    }
+    if (pendingFiles.length >= MAX_FILES_PER_MESSAGE) {
+        showError(`Too many files. Maximum is ${MAX_FILES_PER_MESSAGE} per message`);
+        return;
+    }
+    const content = await readFileAsText(file);
+    pendingFiles.push({ name: file.name, content });
+    renderPendingImages();
+}
+
+function removePendingFile(index) {
+    pendingFiles.splice(index, 1);
+    renderPendingImages();
+}
+
 async function addPendingImage(file) {
+    if (!visionCapable) {
+        showError('This model/server does not support images. You can still attach text files.');
+        return;
+    }
     if (!file.type.startsWith('image/') || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
         showError(`Unsupported image type '${file.type || 'unknown'}'. Supported: PNG, JPEG, WebP, GIF`);
         return;
@@ -148,6 +191,21 @@ function removePendingImage(index) {
 
 function renderPendingImages() {
     attachPreviewEl.innerHTML = '';
+    pendingFiles.forEach((file, i) => {
+        const chip = document.createElement('div');
+        chip.className = 'attach-chip';
+        const label = document.createElement('span');
+        label.textContent = file.name;
+        label.title = file.name;
+        const remove = document.createElement('button');
+        remove.className = 'attach-remove';
+        remove.innerHTML = '&times;';
+        remove.title = 'Remove file';
+        remove.onclick = () => removePendingFile(i);
+        chip.appendChild(label);
+        chip.appendChild(remove);
+        attachPreviewEl.appendChild(chip);
+    });
     pendingImages.forEach((dataUrl, i) => {
         const thumb = document.createElement('div');
         thumb.className = 'attach-thumb';
@@ -167,6 +225,7 @@ function renderPendingImages() {
 
 function clearPendingImages() {
     pendingImages = [];
+    pendingFiles = [];
     renderPendingImages();
     fileInputEl.value = '';
 }
@@ -334,7 +393,13 @@ function appendUserMessage(text, images = []) {
         flex.className = 'msg-image-row';
         for (const att of images) {
             const dataUrl = typeof att === 'string' ? att : att.data;
-            if (dataUrl) {
+            if (typeof att === 'object' && att && att.attachment_type === 'text') {
+                const chip = document.createElement('span');
+                chip.className = 'msg-file-chip';
+                chip.textContent = att.file_name || 'File';
+                chip.title = 'Text file attached';
+                flex.appendChild(chip);
+            } else if (dataUrl) {
                 const img = document.createElement('img');
                 img.className = 'msg-image';
                 img.src = dataUrl;
@@ -821,7 +886,8 @@ function updateConnectionStatus(status) {
 function sendMessage() {
     const text = inputEl.value.trim();
     const hasImages = pendingImages.length > 0;
-    if ((!text && !hasImages) || isStreaming) return;
+    const hasFiles = pendingFiles.length > 0;
+    if ((!text && !hasImages && !hasFiles) || isStreaming) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         showError('Not connected to server. Reconnecting...');
@@ -849,11 +915,12 @@ function sendMessage() {
     inputEl.style.height = 'auto';
 
     const images = pendingImages.slice();
-    appendUserMessage(text, images);
+    const files = pendingFiles.slice().map(f => ({ name: f.name, content: f.content }));
+    appendUserMessage(text, [...files.map(f => ({ attachment_type: 'text', file_name: f.name })), ...images]);
     clearPendingImages();
     hideContinueButton();
     showProgress('Thinking...');
-    ws.send(JSON.stringify({ type: 'user_message', content: text, images }));
+    ws.send(JSON.stringify({ type: 'user_message', content: text, images, files }));
 }
 
 function showError(msg) {
@@ -1007,7 +1074,13 @@ sendBtn.addEventListener('click', sendMessage);
 attachBtn.addEventListener('click', () => fileInputEl.click());
 fileInputEl.addEventListener('change', async () => {
     for (const file of Array.from(fileInputEl.files)) {
-        await addPendingImage(file);
+        if (file.type.startsWith('image/')) {
+            await addPendingImage(file);
+        } else if (isTextFile(file)) {
+            await addPendingFile(file);
+        } else {
+            showError(`Unsupported file type '${file.type || 'unknown'}' for '${file.name}'. Only images and text files are supported.`);
+        }
     }
     fileInputEl.value = '';
 });
@@ -1033,7 +1106,13 @@ inputAreaEl.addEventListener('drop', (e) => {
     e.preventDefault();
     inputAreaEl.classList.remove('drag-over');
     for (const file of Array.from(e.dataTransfer.files || [])) {
-        addPendingImage(file);
+        if (file.type.startsWith('image/')) {
+            addPendingImage(file);
+        } else if (isTextFile(file)) {
+            addPendingFile(file);
+        } else {
+            showError(`Unsupported file type '${file.type || 'unknown'}' for '${file.name}'. Only images and text files are supported.`);
+        }
     }
 });
 

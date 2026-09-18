@@ -811,6 +811,39 @@ body {
     border: 1px solid var(--border);
 }
 
+.attach-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 220px;
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.attach-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.attach-chip .attach-remove {
+    position: static;
+    flex-shrink: 0;
+}
+
+.msg-file-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
 #user-input {
     flex: 1;
     background: var(--bg-secondary);

@@ -205,7 +205,7 @@ class Agent:
             log.debug("Snapshot creation failed: %s", e)
         return None
 
-    async def run(self, user_message: str, images: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
+    async def run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
         # Reset compaction state for new user turn
         self._compaction_summary = ""
@@ -216,7 +216,7 @@ class Agent:
         if snap_before:
             yield AgentEvent("snapshot", snap_before)
 
-        await self.session.add_message("user", user_message, attachments=images)
+        await self.session.add_message("user", user_message, attachments=attachments)
 
         try:
             async for event in self._loop(user_message):

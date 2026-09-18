@@ -15,8 +15,11 @@ The password is NEVER accepted via query parameters (security best practice).
 ## Client → Server Messages
 
 ```jsonc
-// Send a user message to the agent
-{"type": "user_message", "content": "..."}
+// Send a user message to the agent. Optional images (array of base64 data
+// URLs, max 4, only accepted when the model is vision-capable) and files
+// (array of {name, content}, max 5, inlined into the prompt as text parts;
+// rejected with an error if too large).
+{"type": "user_message", "content": "...", "images": [...], "files": [...]}
 
 // Cancel the current agent turn
 {"type": "cancel"}

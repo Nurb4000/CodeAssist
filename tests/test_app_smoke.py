@@ -40,28 +40,6 @@ REST_ENDPOINTS_GET = [
 ]
 
 
-@pytest.fixture
-def live_client(monkeypatch, test_workspace):
-    """Boot the real app against an isolated temp workspace and test database."""
-    _GLOBALS = (
-        "_config", "tools", "skill_registry", "plugin_registry",
-        "trust_registry", "lsp_client", "mcp_client",
-    )
-    saved = {name: getattr(server, name) for name in _GLOBALS}
-    monkeypatch.setattr(server, "_config", None)
-    cfg = server.get_config()
-    monkeypatch.setattr(cfg.server, "workspace", str(test_workspace))
-    cfg.workspace = test_workspace.resolve()
-    try:
-        with TestClient(server.app, raise_server_exceptions=False) as client:
-            yield client
-    finally:
-        # Restore module globals the app lifespan mutated, to avoid leaking
-        # server state into other tests (e.g. the live tool registry).
-        for name, old in saved.items():
-            setattr(server, name, old)
-
-
 def test_rest_api_is_registered(live_client):
     """The whole REST surface must be mounted on the app (not 404/500)."""
     for path in REST_ENDPOINTS_GET:
