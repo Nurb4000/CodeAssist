@@ -12,6 +12,15 @@ const attachPreviewEl = document.getElementById('attach-preview');
 const inputAreaEl = document.getElementById('input-area');
 const agentSelectEl = document.getElementById('agent-select');
 
+// Inline SVG icons (crisp + consistently rendered; inherit color via currentColor).
+const ICONS = {
+    import: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V7"/><path d="M8 11l4-4 4 4"/><path d="M5 21h14"/></svg>`,
+    export: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v12"/><path d="M8 9l4 4 4-4"/><path d="M5 21h14"/></svg>`,
+    rename: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L20 8l-4-4L4 16z"/><path d="M13 5l4 4"/></svg>`,
+    trash: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg>`,
+    pin: `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="currentColor" stroke-width="1.5"><path d="M12 3l2 5 5 1-4 4 1 6-5-3-5 3 1-6-4-4 5-1z"/></svg>`,
+};
+
 let configData = {};
 let pendingImages = [];
 let pendingFiles = [];
@@ -267,13 +276,13 @@ async function loadSessions() {
 
         const pinBtn = document.createElement('button');
         pinBtn.className = 'pin-btn' + (s.is_pinned ? ' pinned' : '');
-        pinBtn.innerHTML = s.is_pinned ? '&#9733;' : '&#9734;';
+        pinBtn.innerHTML = ICONS.pin;
         pinBtn.title = s.is_pinned ? 'Unpin session' : 'Pin session';
         pinBtn.onclick = (e) => { e.stopPropagation(); togglePin(s.id, s.is_pinned, pinBtn); };
 
         const renameBtn = document.createElement('button');
         renameBtn.className = 'rename-btn';
-        renameBtn.innerHTML = '&#9998;';
+        renameBtn.innerHTML = ICONS.rename;
         renameBtn.title = 'Rename session';
         renameBtn.onclick = (e) => {
             e.stopPropagation();
@@ -282,14 +291,14 @@ async function loadSessions() {
 
         const exportBtn = document.createElement('button');
         exportBtn.className = 'export-btn';
-        exportBtn.innerHTML = '&#128451;';
+        exportBtn.innerHTML = ICONS.export;
         exportBtn.title = 'Export session';
         exportBtn.onclick = (e) => { e.stopPropagation(); openExportDialog(s.id); };
 
         const delBtn = document.createElement('button');
         delBtn.className = 'delete-btn';
         delBtn.dataset.id = s.id;
-        delBtn.innerHTML = '&times;';
+        delBtn.innerHTML = ICONS.trash;
         delBtn.title = 'Delete session';
         delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
 
@@ -1433,6 +1442,7 @@ if (toggleThinkingBtn) {
 
 const importBtn = document.getElementById('import-btn');
 if (importBtn) {
+    importBtn.innerHTML = ICONS.import;
     importBtn.addEventListener('click', openImportDialog);
 }
 
