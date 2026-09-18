@@ -149,6 +149,26 @@ function wireModeSelector() {
     const open = () => {
         listEl.hidden = false;
         trigger.setAttribute('aria-expanded', 'true');
+        positionList();
+    };
+    // Re-anchor on resize so the list stays on-screen at any viewport height.
+    window.addEventListener('resize', () => {
+        if (!listEl.hidden) positionList();
+    });
+    const positionList = () => {
+        const rect = trigger.getBoundingClientRect();
+        const needed = Math.min(listEl.offsetHeight, 360);
+        const below = window.innerHeight - rect.bottom;
+        const above = rect.top;
+        if (below < needed && above >= 120) {
+            // Not enough room below — flip upward and fit within available space,
+            // never taller than the 360px internal-scroll cap.
+            listEl.classList.add('flip');
+            listEl.style.maxHeight = Math.min(360, Math.max(120, above - 8)) + 'px';
+        } else {
+            listEl.classList.remove('flip');
+            listEl.style.maxHeight = '';
+        }
     };
     trigger.addEventListener('click', (e) => {
         e.stopPropagation();

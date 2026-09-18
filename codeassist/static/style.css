@@ -168,6 +168,12 @@ body {
     overflow-y: auto;
 }
 
+/* Flip upward when there isn't enough room below the trigger. */
+.mode-list.flip {
+    top: auto;
+    bottom: calc(100% + 6px);
+}
+
 .mode-option {
     border: none;
     background: transparent;
