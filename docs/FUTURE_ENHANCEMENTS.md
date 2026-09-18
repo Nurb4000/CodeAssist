@@ -86,20 +86,20 @@ Gaps found during the review sweep that are missing *features*, not bugs:
 
 ## Chat file uploads
 
-*Deferred: land with the "In-app settings / configuration UI" work above, where `vision` and the
-upload behavior become GUI-managed.*
+**Done.** Attach button is always visible and no longer gated on `vision`:
+- Attach button always visible; images (png/jpeg/webp/gif) attach only when the model is
+  vision-capable, with a clear "model doesn't support images" message otherwise.
+- Any text file (by `text/*` MIME or common extension) can be attached and is inlined into
+  the prompt as a `[Attached file: name]` text part ("Inline small files" behavior).
+- Vision capability is auto-detected from the backend `/v1/models` `capabilities`
+  (cached 60s, see `codeassist/capabilities.py`); `[llm] vision` remains a manual override
+  (override OR auto-detect). Unknown/unreachable backend → not vision-capable (fail closed).
+- `/api/config` exposes `vision_capable` to the client.
+- Rate/size caps: max 4 images × 8MB; max 5 text files × 256KB (server + client enforced).
+- Still open (later work): link/large-file streaming instead of inlining; upload progress UI.
 
-- **Attach button should always be visible** — not gated on `vision`. Behavior:
-  - Images (png/jpeg/webp/gif): attach only when the model/LLM is vision-capable; otherwise show a
-    clear "model doesn't support images" message instead of silently hiding the control.
-  - Any **text file**: always allowed to attach and inline into the prompt, vision or not
-    (useful for context/code review without cut/paste). Inline small files; link/large-file
-    handling is later work.
-  - Better: derive vision capability from the model (e.g. llama.cpp `/v1/models` `capabilities`)
-    rather than the manual `[llm] vision` flag, with the flag remaining as a manual override.
-- **Implementation notes for later**: `app.js` `setAttachmentUiEnabled(configData.vision)` gate;
-  `file-input` `accept` attribute currently image-only; `prompts.py:148-157`
-  `build_openai_messages` only emits `image_url` parts (add `text` parts for inlined files).
+Remaining backlog here: line 1 list from the "upload behavior" deferral (already handled by the
+above detection), plus any GUI-managed toggles to land with the in-app settings UI.
 
 ## Docker / ops
 

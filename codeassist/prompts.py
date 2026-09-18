@@ -150,10 +150,16 @@ def build_openai_messages(system_prompt: str, history: list[dict]) -> list[dict]
             if attachments:
                 content: list[dict] = [{"type": "text", "text": msg.get("content") or ""}]
                 for att in attachments:
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"url": att.get("data", "")},
-                    })
+                    if att.get("attachment_type") == "text":
+                        content.append({
+                            "type": "text",
+                            "text": f"[Attached file: {att.get('file_name', 'file')}]\n{att.get('data', '')}",
+                        })
+                    else:
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": att.get("data", "")},
+                        })
                 messages.append({"role": "user", "content": content})
             else:
                 messages.append({"role": "user", "content": msg.get("content")})

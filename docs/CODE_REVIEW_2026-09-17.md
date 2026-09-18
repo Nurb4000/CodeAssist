@@ -155,7 +155,7 @@ would need it.
 
 ### G2. `CLEARED` — `/api/config` does not leak secrets
 
-Response is a fixed dict (model, provider, workspace, agent_name, vision, features) — no
+Response is a fixed dict (model, provider, workspace, agent_name, vision, vision_capable, features) — no
 `base_url`/`api_key`. (`routes/config.py`)
 
 ---

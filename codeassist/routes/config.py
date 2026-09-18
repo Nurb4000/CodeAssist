@@ -8,6 +8,7 @@ router = APIRouter(tags=["config"])
 async def api_config():
     """Get current server configuration (model, workspace, enabled features)."""
     from ..server import get_config
+    from ..capabilities import model_vision_capable
     cfg = get_config()
     return {
         "model": cfg.llm.model,
@@ -15,6 +16,7 @@ async def api_config():
         "workspace": str(cfg.workspace),
         "agent_name": cfg.agent.name,
         "vision": cfg.llm.vision,
+        "vision_capable": await model_vision_capable(cfg),
         "features": {
             "mcp_enabled": cfg.mcp.enabled,
             "skills_enabled": cfg.skills.enabled,

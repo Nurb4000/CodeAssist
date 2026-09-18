@@ -272,6 +272,44 @@ MAX_IMAGES_PER_MESSAGE = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 ALLOWED_IMAGE_MIME = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
+MAX_FILES_PER_MESSAGE = 5
+MAX_FILE_BYTES = 256 * 1024
+
+
+def _parse_text_files(files) -> tuple[list[dict], str | None]:
+    """Validate incoming text-file attachments.
+
+    Returns (attachments, error_message). Each attachment is
+    {attachment_type, mime_type, file_name, data} where data is the file text.
+    """
+    if not files:
+        return [], None
+    if len(files) > MAX_FILES_PER_MESSAGE:
+        return [], f"Too many files. Maximum is {MAX_FILES_PER_MESSAGE} per message."
+
+    attachments = []
+    for i, file in enumerate(files):
+        if not isinstance(file, dict):
+            return [], "Invalid file attachment."
+        name = str(file.get("name") or f"file-{i + 1}").strip()[:255]
+        content = file.get("content")
+        if content is None:
+            return [], "Invalid file attachment."
+        content = str(content)
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            size_kb = len(content.encode("utf-8")) / 1024
+            return [], (
+                f"File '{name}' is too large ({size_kb:.0f}KB). "
+                f"Maximum is {MAX_FILE_BYTES // 1024}KB."
+            )
+        attachments.append({
+            "attachment_type": "text",
+            "mime_type": "text/plain",
+            "file_name": name,
+            "data": content,
+        })
+    return attachments, None
+
 
 def _parse_image_attachments(images: list) -> tuple[list[dict], str | None]:
     """Validate incoming base64 image data URLs.
@@ -418,10 +456,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             "agent": _agent_info,
         })
 
-    async def run_agent_task(message: str, images: list | None = None):
+    async def run_agent_task(message: str, attachments: list | None = None):
         nonlocal agent_task
         try:
-            async for event in agent.run(message, images or None):
+            async for event in agent.run(message, attachments or None):
                 await websocket.send_json({
                     "type": event.type,
                     **event.data,
@@ -440,8 +478,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             data = await websocket.receive_json()
 
             if data.get("type") == "user_message":
+                from codeassist.capabilities import model_vision_capable
                 content = data.get("content", "")
-                if not content.strip():
+                images, img_error = _parse_image_attachments(data.get("images") or [])
+                files, file_error = _parse_text_files(data.get("files") or [])
+                if img_error:
+                    await websocket.send_json({"type": "error", "message": img_error})
+                    continue
+                if file_error:
+                    await websocket.send_json({"type": "error", "message": file_error})
+                    continue
+                if not (content.strip() or images or files):
                     continue
                 if len(content) > MAX_MESSAGE_LEN:
                     await websocket.send_json({"type": "error", "message": f"Message too long. Maximum is {MAX_MESSAGE_LEN} characters."})
@@ -450,12 +497,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
                     continue
 
-                images, img_error = _parse_image_attachments(data.get("images") or [])
-                if img_error:
-                    await websocket.send_json({"type": "error", "message": img_error})
+                if images and not await model_vision_capable(cfg):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "This model/server does not support images. You can still attach text files.",
+                    })
                     continue
 
-                agent_task = asyncio.create_task(run_agent_task(content, images))
+                attachments = images + files
+                agent_task = asyncio.create_task(run_agent_task(content, attachments))
 
             elif data.get("type") == "cancel":
                 if agent_task and not agent_task.done():
