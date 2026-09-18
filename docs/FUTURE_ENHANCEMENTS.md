@@ -9,19 +9,53 @@ Currently all runtime configuration lives in `config.toml` (a local, gitignored 
 fine for power users but opaque for everyone else, and it's the source of a lot of the
 "wrong thing in config" bugs.
 
-- **Admin page/section with editable settings** for the most common knobs:
-  - **LLM provider** — provider (openai / custom), `base_url`, `api_key` (stored masked),
-    `model`, temperature, `context_window`, max tokens.
-  - Live "Test connection" button that hits `/v1/models` (or the provider's equivalent) and shows
-    the result.
-  - Server port/host, workspace path (with restart note), agent default name.
-  - Feature toggles already surfaced by `/api/config` (skills, plugins, MCP, LSP, git).
-- Persist overrides (in the session DB or a dedicated `settings` table) layered on top of
-  `config.toml`, so defaults stay in files and per-user values are internal.
-- Flag on every setting: "file-managed" vs "UI-managed" to avoid confusion.
+- ~~**First slice — admin Settings tab.**~~ ✅ Done (schema v9 `settings` table,
+  `codeassist/settings.py`): a declarative `SETTINGS_CATALOG` + `SettingsStore` layers UI
+  overrides on top of `config.toml` (applied at boot before subsystems init). `GET/PUT
+  /api/settings`, `DELETE /api/settings/{key}` (secret values stored masked, never returned),
+  and `POST /api/config/test-connection`. Admin page has a Settings tab (LLM, Server, Agent,
+  Tools, Features groups) with per-key source badge ("overridden" vs "from config.toml"),
+  restart-required flags, reset-per-key, and a "Test LLM connection" button.
+- **Admin page/section with editable settings** for the most common knobs (remaining):
+  - **LLM provider** — provider, `base_url`, `api_key` (masked), `model`, temperature,
+    `context_window`, max tokens — present but extend with per-field validation + sync-back
+    to `config.toml` for the container's mounted file.
+  - **Server port/host/workspace** are catalog-backed but restart-required; consider a
+    one-click "apply then restart" flow instead of just a notice.
+  - Feature toggles already surfaced by `/api/config` (skills, plugins, MCP, LSP, git) —
+    toggling still requires a restart (subsystems boot once); a live hot-reload for these is
+    the bigger remaining win.
+- Persistent overrides currently live ONLY in the DB (`config.toml` is mounted read-only in the
+  container). Decide whether "UI-managed ≠ file-managed" should eventually write back a
+  `config.overrides.toml` so overrides survive a data-dir reset.
+- Flag on every setting: "file-managed" vs "UI-managed" to avoid confusion — ✅ done via the
+  per-key source badge.
 - (A first registry-only admin page — `static/admin.html` — already ships the skills/MCP/LSP
   plugin/custom-tools/agent browsing + skills/MCP/LSP create & MCP/LSP delete; fold it into the
   full settings UI rather than adding a separate "config" page.)
+
+## Admin page UX
+
+`static/admin.html` currently renders every registry as a flat `<h2>` section (skills, MCP, LSP,
+plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to-haves:
+
+- **Collapsible sections** — make skills/agents/custom-tools sections collapsible like the
+  plugins/servers sections, defaulting to *collapsed* so the page stays compact. A per-section
+  count badge (`Skills (12)`) on the toggle makes the collapsed state still useful.
+- **Sidebar menu expands + navigates** — clicking a left-hand menu entry should do more than
+  `jump to #anchor`: expand its section if collapsed, then scroll to it (and flash/highlight the
+  section briefly so the landing is obvious).
+- **Visible "Back to chat" control** — the current `←` glyph in the admin sidebar header
+  (`.header-icon` link to `index.html`) is a tiny, easy-to-miss character. Replace with a
+  prominent labeled button (e.g. "&larr; Back to chat") styled like a real action, so admins
+  aren't hunting for the way back.
+- **Edit/remove for every item** — today only create (skills/MCP/LSP/agents) and delete
+  (MCP/LSP + custom agents) are wired; built-in agents are protected. Add:
+  - edit (rename / description / config JSON / enabled toggle) for registered items, backed by
+    `PUT`/`PATCH` endpoints (agents already have `PATCH /api/agents/{key}`-style surface; skills,
+    plugins, custom tools and their toggles need equivalent routes);
+  - remove/disable for skills, plugins, and custom tools (with a delete confirmation), so admins
+    aren't limited to "reload from disk" / read-only tables.
 
 ## Related "move internal" candidates
 
@@ -66,6 +100,30 @@ Gaps found during the review sweep that are missing *features*, not bugs:
   server-side context, never from client-echoed values (`server.py` `confirm_response`).
 
 ## Knowledge base
+
+- **Review the KB process end-to-end and harden it** — the pipeline currently writes *everything*
+  it heuristically matches and there's no real garbage control:
+  - **Extraction audit.** Seven extractors (`_extract_from_*` in `session_hook.py`) insert with
+    hard-coded confidences (0.4–0.7); the `_classify_and_create_knowledge` keyword indicators and
+    the "User request pattern" items (0.5) are the biggest junk source. Review each extractor:
+    tighten the indicators, drop or re-score low-value patterns, and stop logging one-off session
+    trivia as durable knowledge.
+  - **Automated article review / garbage collection.** Beyond the crude dedup today
+    (≥80% char overlap on the first 200 chars + per-session MD5 in `_create_knowledge_if_new`):
+    - add an embedding-similarity near-duplicate check before insert (cosine over the vector store,
+      not character overlap) and merge/update rather than duplicate;
+    - a background review pass that re-scores low-confidence and never-used entries and moves junk
+      to a soft-deleted/archived set (restorable), instead of leaving 0.4–0.5 clutter forever;
+    - a quality gate that flags or drops entries with no usable content, PII/secrets, or
+      < min active usage;
+    - retire or promote by `usage_count`: frequently-retrieved entries can be promoted (→ skills),
+      stale entries age out. (A repetitive-pattern → skill suggestion already exists at
+      `session_hook.py:865`; formalize it.)
+  - **Review UX.** Surface the existing `/api/kb/*` endpoints behind an admin "Knowledge base"
+    tab with review actions (verify / flag / archive / delete), a stats bar (entries by type and
+    confidence, orphan rows, near-duplicate clusters, usage distribution), and batch re-embed.
+  - The Q→A pairing item below is part of this: answers (and outcomes) are never captured today, so
+    the review should include "what was asked vs what actually worked."
 
 - **Track Q→A pairs, not just prompts** — knowledge extraction currently stores the *user's
   question alone* (`_extract_from_user_questions` in `session_hook.py`, "User request pattern:

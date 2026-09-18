@@ -14,7 +14,7 @@ from dataclasses import dataclass
 # volume). Defaults to <package>/data for plain local runs.
 DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class _DBPool:
@@ -171,6 +171,10 @@ async def init_db():
         if current_version < 8:
             await _add_v8_tables(db)
             current_version = 8
+
+        if current_version < 9:
+            await _add_v9_tables(db)
+            current_version = 9
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -556,6 +560,17 @@ async def _add_v8_tables(db):
     if not any(r["name"] == "is_pinned" for r in rows):
         await db.execute("ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
         await db.commit()
+
+
+async def _add_v9_tables(db):
+    """Add UI-managed settings overrides layered on top of config.toml."""
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT
+        )
+    """)
 
 
 async def _ensure_fts5_tables():

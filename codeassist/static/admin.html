@@ -24,6 +24,7 @@
                     <a href="#plugins" class="kb-link">Plugins</a>
                     <a href="#custom-tools" class="kb-link">Custom tools</a>
                     <a href="#agents" class="kb-link">Agents</a>
+                    <a href="#settings" class="kb-link">Settings</a>
                 </nav>
             </div>
             <div class="sidebar-footer">
@@ -110,6 +111,14 @@
                     <button class="admin-btn" id="agent-create">Create</button>
                 </div>
             </details>
+
+            <h2 id="settings">Settings</h2>
+            <div class="admin-toolbar">
+                <button class="admin-btn" id="settings-save">Save</button>
+                <button class="admin-btn" id="settings-test">Test LLM connection</button>
+                <span class="admin-muted">Changes flagged &quot;restart required&quot; apply after the server restarts.</span>
+            </div>
+            <div id="settings-body"></div>
         </main>
     </div>
     <script src="/static/admin.js?v=dev"></script>
