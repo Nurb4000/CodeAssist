@@ -469,9 +469,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 approved = data.get("approved", False)
                 trust_workspace = data.get("trust_workspace", False)
                 trust_shell = data.get("trust_shell", False)
+                trust_tool = data.get("trust_tool", False)
                 remember = data.get("remember", False)
                 if confirm_id:
-                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, remember)
+                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember)
                     # Save permission if user chose to remember
                     if remember and approved:
                         tool_name = data.get("tool", "")

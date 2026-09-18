@@ -581,6 +581,13 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
                 Trust all shell commands for this session
             </label>
         `;
+    } else {
+        trustHtml = `
+            <label class="trust-option">
+                <input type="checkbox" id="trust-tool-${confirmId}">
+                Trust this tool for this session
+            </label>
+        `;
     }
 
     div.innerHTML = `
@@ -599,6 +606,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     div.querySelector('.approve').onclick = () => {
         const trustWorkspace = div.querySelector(`#trust-workspace-${confirmId}`)?.checked || false;
         const trustShell = div.querySelector(`#trust-shell-${confirmId}`)?.checked || false;
+        const trustTool = div.querySelector(`#trust-tool-${confirmId}`)?.checked || false;
         div.remove();
         showProgress(`Executing ${toolName}...`);
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -608,6 +616,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
                 approved: true,
                 trust_workspace: trustWorkspace,
                 trust_shell: trustShell,
+                trust_tool: trustTool,
             }));
         }
     };
