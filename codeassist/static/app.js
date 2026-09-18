@@ -10,7 +10,15 @@ const attachBtn = document.getElementById('attach-btn');
 const fileInputEl = document.getElementById('file-input');
 const attachPreviewEl = document.getElementById('attach-preview');
 const inputAreaEl = document.getElementById('input-area');
-const agentSelectEl = document.getElementById('agent-select');
+// Short display labels for built-in agents (shown when the selector is collapsed).
+const AGENT_SHORT = {
+    default: 'Full', research: 'Research', review: 'Review',
+    build: 'Build', general: 'General', explore: 'Explore',
+};
+
+function agentShortLabel(id) {
+    return AGENT_SHORT[id] || id || 'Agent';
+}
 
 // Inline SVG icons (crisp + consistently rendered; inherit color via currentColor).
 const ICONS = {
@@ -101,37 +109,72 @@ async function loadConfig() {
 
 async function loadAgents() {
     const agents = await api('GET', '/api/agents');
-    let label = configData.agent_name || 'default';
-    agentSelectEl.innerHTML = '';
+    const listEl = document.getElementById('mode-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
     for (const a of agents) {
         if (a.id === 'compaction' || a.name === 'compaction') continue;
-        const opt = document.createElement('option');
-        opt.value = a.id || a.name;
-        opt.textContent = a.name + (a.description ? ` — ${a.description}` : '');
-        opt.title = a.description || a.name;
-        agentSelectEl.appendChild(opt);
+        const item = document.createElement('div');
+        item.className = 'mode-option';
+        item.dataset.id = a.id;
+        item.setAttribute('role', 'option');
+        let html = `<div class="mode-option-name">${escapeHtml(agentShortLabel(a.id))}</div>`;
+        if (a.description) html += `<div class="mode-option-desc">${escapeHtml(a.description)}</div>`;
+        item.innerHTML = html;
+        item.onclick = () => switchAgent(a.id);
+        listEl.appendChild(item);
     }
-    setAgentSelection(label);
-    agentSelectEl.style.display = 'flex';
-    agentSelectEl.onchange = () => {
-        const name = agentSelectEl.value;
-        if (isStreaming) {
-            showError('Agent is busy, switch when the current turn finishes');
-            agentSelectEl.value = currentAgentName || agentSelectEl.value;
-            return;
-        }
-        if (name === currentAgentName) return;
-        if (ws && wsConnected) {
-            agentSelectEl.disabled = true;
-            ws.send(JSON.stringify({ type: 'switch_agent', agent_name: name }));
-        }
-    };
+    setAgentSelection(configData.agent_name || 'default');
+    wireModeSelector();
 }
 
 function setAgentSelection(id) {
     currentAgentName = id;
-    for (const opt of agentSelectEl.options) {
-        if (opt.value === id) opt.selected = true;
+    const label = document.getElementById('mode-label');
+    if (label) label.textContent = agentShortLabel(id);
+    document.querySelectorAll('.mode-option').forEach((o) => {
+        o.classList.toggle('active', o.dataset.id === id);
+    });
+}
+
+function wireModeSelector() {
+    const trigger = document.getElementById('mode-trigger');
+    const listEl = document.getElementById('mode-list');
+    if (!trigger || !listEl || listEl.dataset.wired) return;
+    listEl.dataset.wired = '1';
+    const close = () => {
+        listEl.hidden = true;
+        trigger.setAttribute('aria-expanded', 'false');
+    };
+    const open = () => {
+        listEl.hidden = false;
+        trigger.setAttribute('aria-expanded', 'true');
+    };
+    trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        listEl.hidden ? open() : close();
+    });
+    document.addEventListener('click', (e) => {
+        if (!listEl.contains(e.target) && e.target !== trigger) close();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close();
+    });
+}
+
+async function switchAgent(id) {
+    if (id === currentAgentName) return;
+    if (isStreaming) {
+        showError('Agent is busy, switch when the current turn finishes');
+        return;
+    }
+    const listEl = document.getElementById('mode-list');
+    if (listEl) listEl.hidden = true;
+    if (listEl) listEl.querySelector('.mode-option.active')?.classList.remove('active');
+    if (ws && wsConnected) {
+        ws.send(JSON.stringify({ type: 'switch_agent', agent_name: id }));
+    } else {
+        setAgentSelection(id);
     }
 }
 
@@ -1021,7 +1064,6 @@ function connectWS() {
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
         } else if (data.type === 'agent_switched') {
             setAgentSelection((data.agent && (data.agent.id || data.agent.name)) || data.agent);
-            agentSelectEl.disabled = false;
         } else if (data.type === 'text_delta') {
             hideProgress();
             if (!currentContentEl) startAssistantMessage();
@@ -1050,10 +1092,6 @@ function connectWS() {
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
-            if (agentSelectEl && agentSelectEl.disabled && currentAgentName) {
-                agentSelectEl.value = currentAgentName;
-                agentSelectEl.disabled = false;
-            }
             if (!currentContentEl) startAssistantMessage();
             currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
