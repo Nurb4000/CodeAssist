@@ -29,6 +29,9 @@ CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 # isolated per session and ephemeral across server restarts.
 SESSION_TRUST: dict[str, dict] = {}
 
+# Per-session sets of tool names trusted "for the rest of this session".
+SESSION_TOOL_TRUST: dict[str, set[str]] = {}
+
 
 @dataclass
 class AgentEvent:
@@ -47,6 +50,7 @@ class Agent:
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
+        self._confirm_tools: dict[str, str] = {}
         # Session trust flags (seeded from the session-scoped store so a
         # reconnected WS for the same session keeps its trust).
         stored_trust = SESSION_TRUST.get(self.session.id, {})
@@ -81,6 +85,7 @@ class Agent:
         self._trust_workspace_writes = False
         self._trust_shell = False
         SESSION_TRUST.pop(self.session.id, None)
+        SESSION_TOOL_TRUST.pop(self.session.id, None)
 
     def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False):
         """Set trust flags from user confirmation (persisted per session id)."""
@@ -122,6 +127,10 @@ class Agent:
             if file_path and self._is_in_workspace(file_path):
                 return False
 
+        # Per-tool session trust ("trust this tool for the rest of this session")
+        if tool_name in SESSION_TOOL_TRUST.get(self.session.id, set()):
+            return False
+
         # Use permission manager for granular checks
         try:
             action = permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
@@ -149,12 +158,16 @@ class Agent:
         self._confirm_events.pop(confirm_id, None)
         return result
 
-    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, remember: bool = False):
+    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False):
         """Resolve a pending confirmation from WebSocket."""
-        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, remember=%s",
-                 confirm_id, approved, trust_workspace, trust_shell, remember)
+        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, trust_tool=%s, remember=%s",
+                 confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember)
+        tool_name = self._confirm_tools.pop(confirm_id, None)
         if approved:
             self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell)
+            if trust_tool and tool_name:
+                SESSION_TOOL_TRUST.setdefault(self.session.id, set()).add(tool_name)
+                log.info("Tool '%s' trusted for session %s", tool_name, self.session.id)
         if confirm_id in self._confirm_events:
             self._confirm_results[confirm_id] = approved
             self._confirm_events[confirm_id].set()
@@ -508,6 +521,7 @@ class Agent:
                             "permission_action": perm_action,
                             "saved_permission": saved_hint,
                         })
+                        self._confirm_tools[confirm_id] = tc.name
                         approved = await self.wait_for_confirm(confirm_id)
                         if not approved:
                             await self.session.add_message(

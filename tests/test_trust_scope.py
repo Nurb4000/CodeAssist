@@ -6,19 +6,25 @@ to the same session keeps the trust while other sessions stay isolated and
 nothing survives a server restart.
 """
 from pathlib import Path
+from types import SimpleNamespace
+
+import asyncio
 
 import pytest
 
-from codeassist.agent import Agent, SESSION_TRUST
+from codeassist.agent import Agent, SESSION_TRUST, SESSION_TOOL_TRUST
 from codeassist.config import Config
+from codeassist.llm import Finish, LLMClient, TextDelta, ToolCall, Usage
 from codeassist.session import Session
 
 
 @pytest.fixture(autouse=True)
 def _clear_session_trust():
     SESSION_TRUST.clear()
+    SESSION_TOOL_TRUST.clear()
     yield
     SESSION_TRUST.clear()
+    SESSION_TOOL_TRUST.clear()
 
 
 def _agent(session_id: str, workspace: Path) -> Agent:
@@ -70,3 +76,105 @@ def test_shell_only_trust_keeps_writes_untrusted(tmp_path):
     reconnect = _agent("sess-F", tmp_path)
     assert reconnect._trust_shell is True
     assert reconnect._trust_workspace_writes is False
+
+
+class _StubTools:
+    def schemas(self):
+        return []
+
+    def get(self, name):
+        return None
+
+    async def execute(self, name, args):
+        return SimpleNamespace(output="ok", error=None)
+
+
+def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch):
+    """resolve_confirm(trust_tool=True) must trust that tool for the session (A1)."""
+    agent = _agent("sess-G", tmp_path)
+    agent._confirm_tools["c1"] = "shell"
+    assert "shell" not in SESSION_TOOL_TRUST.get("sess-G", set())
+
+    agent.resolve_confirm("c1", True, trust_tool=True)
+
+    assert "shell" in SESSION_TOOL_TRUST["sess-G"]
+    assert agent.needs_confirmation("shell", {}) is False
+    # Other tools are not session-trusted by this choice.
+    assert "bash" not in SESSION_TOOL_TRUST["sess-G"]
+
+
+def test_per_tool_trust_isolated_between_sessions(tmp_path):
+    agent = _agent("sess-H", tmp_path)
+    agent._confirm_tools["c1"] = "shell"
+    agent.resolve_confirm("c1", True, trust_tool=True)
+
+    assert SESSION_TOOL_TRUST.get("sess-I") is None
+    assert SESSION_TOOL_TRUST.get("sess-H") == {"shell"}
+
+
+@pytest.mark.asyncio
+async def test_ws_confirm_flow_grants_per_tool_session_trust(tmp_path, monkeypatch):
+    """Drive the exact agent path the WS confirm_response uses: stream yields a
+    tool call, we approve with trust_tool=True, and the tool runs + stays trusted.
+
+    Mirrors the real server: one task pumps the agent's event stream while a
+    separate task resolves the confirm_request (which run() registers only after
+    yielding it), then once approved the tool executes and the loop continues.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import codeassist.llm as llm_mod
+    from codeassist.agent import SESSION_TOOL_TRUST, Agent as AgentCls
+
+    async def _no_snapshot(self, phase):
+        return None
+
+    monkeypatch.setattr(AgentCls, "_create_turn_snapshot", _no_snapshot)
+
+    state = {"stream_calls": 0}
+
+    async def _stub_stream(self, messages, tools=None):
+        state["stream_calls"] += 1
+        if state["stream_calls"] == 1:
+            yield ToolCall(id="call_1", name="shell", arguments={"shell_command": "echo hi"})
+            yield Finish(finish_reason="tool_calls", usage=Usage(prompt_tokens=1, completion_tokens=1))
+        else:
+            yield TextDelta("done")
+            yield Finish(finish_reason="stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    cfg = Config()
+    cfg.workspace = tmp_path
+    cfg.llm.api_key = "not-used-in-test"
+    session = MagicMock(spec=Session)
+    session.id = "sess-J"
+    session.add_message = AsyncMock(return_value="mid-1")
+    session.get_messages = AsyncMock(return_value=[])
+    session.update_message = AsyncMock()
+    agent = Agent(cfg, session, _StubTools(), "system prompt")
+
+    seen = asyncio.Event()
+    confirm_ids: dict[str, dict] = {}
+    confirms: list[str] = []
+
+    async def _pump():
+        async for event in agent.run("run a command"):
+            if event.type == "confirm_request":
+                confirm_ids[event.data["id"]] = event.data
+                confirms.append(event.data["tool"])
+                seen.set()
+            elif event.type in ("done", "error", "cancelled"):
+                return
+
+    async def _approver():
+        await seen.wait()
+        cid = next(iter(confirm_ids))
+        agent.resolve_confirm(cid, True, trust_tool=True)
+
+    await asyncio.wait_for(asyncio.gather(_pump(), _approver()), timeout=15)
+
+    assert confirms == ["shell"]
+    assert state["stream_calls"] == 2
+    assert "shell" in SESSION_TOOL_TRUST["sess-J"]
+    assert agent.needs_confirmation("shell", {"shell_command": "echo hi"}) is False

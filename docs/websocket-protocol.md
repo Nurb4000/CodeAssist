@@ -28,7 +28,7 @@ The password is NEVER accepted via query parameters (security best practice).
 {"type": "rollback", "message_id": "uuid"}
 
 // Respond to a tool confirmation prompt
-{"type": "confirm_response", "id": "...", "approved": true, "trust_workspace": false, "trust_shell": false}
+{"type": "confirm_response", "id": "...", "approved": true, "trust_workspace": false, "trust_shell": false, "trust_tool": false}
 
 // Respond to a question from the agent
 {"type": "question_response", "id": "...", "answer": "..."}

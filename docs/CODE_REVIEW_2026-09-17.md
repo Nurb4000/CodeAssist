@@ -12,24 +12,27 @@ Status legend: `OPEN` (documented, unfixed) · `CLEARED` (investigated, not a bu
 
 ## A. Permission / confirmation flow
 
-### A1. `OPEN` — no "allow this tool for the rest of the session" for generic tools
+### A1. `DONE` — no "allow this tool for the rest of the session" for generic tools
 
 - The confirm dialog (`codeassist/static/app.js`) offers session-scope trust **only** for:
   - `write`/`edit` → "Trust all writes in workspace"
   - `shell` → "Trust all shell commands for this session"
-- Every other tool (git push, apply_patch, custom tools, …) is one-time Allow / Deny; every
-  repeat use re-prompts.
-- Verified this is **not** a refactor regression: `git show 42b2946^:static/app.js` is byte-for-byte
+- Every other tool (git push, apply_patch, custom tools, …) was one-time Allow / Deny; every
+  repeat use re-prompted.
+- Verified this was **not** a refactor regression: `git show 42b2946^:static/app.js` is byte-for-byte
   the same dialog as today (Phase C.3 built it).
-- The server already has half-built support: WS `confirm_response` accepts
-  `remember`/`tool`/`file_path` and calls `agent.save_permission(...)` (`server.py:468-481`), but
-  (a) the client never sends those fields, and (b) the server doesn't track which tool a given
-  `confirm_id` belongs to, so the "remember" path is dead code.
-- **Action (post-review):** track tool+args per `confirm_id`; add a "Trust for this session"
-  checkbox for all tools (in-memory per connection) and a separate "Remember permanently"
-  (persist via `save_permission_choice`, which already exists). Extend
-  `needs_confirmation` to honor per-tool session trust. Already logged in
-  `docs/FUTURE_ENHANCEMENTS.md`.
+- **Fixed (serverside `agent.py`):** module-level `SESSION_TOOL_TRUST` (session-id → set of tools),
+  in-process only, same semantics as A2. `run()` binds each `confirm_id` to its tool name before
+  waiting (`_confirm_tools`); `resolve_confirm(..., trust_tool=...)` records the tool for the session;
+  `needs_confirmation` honors per-tool session trust (after legacy trust flags, before permission
+  rules). `server.py` WS `confirm_response` reads `trust_tool` and passes it through; `reset_trust`
+  clears per-tool trust too. The "remember permanently" path stays separate (see
+  `FUTURE_ENHANCEMENTS.md`, settings/security UI item).
+- **Fix (client `app.js`):** the confirm dialog shows a generic "Trust this tool for this session"
+  checkbox for any non-`write`/`edit`/`shell` tool and sends `trust_tool: true` on approve.
+- Covered by `tests/test_trust_scope.py` (per-tool trust via `resolve_confirm`, isolation between
+  sessions, and an agent-level WS-confirm flow test: pump + separate approver task resolving
+  `trust_tool=True`, tool executes, loop continues, `needs_confirmation` then False).
 
 ### A2. `DONE` — "this session" trust was actually "this connection"
 
@@ -217,7 +220,7 @@ definition of done. Fix one at a time, test, commit — no overlapping changes.
 | 5 | S-M | **A2** — trust scope | ✅ Done (session-keyed `SESSION_TRUST`; reconnect keeps trust; `reset_trust` on connect removed; `tests/test_trust_scope.py`). |
 | 6 | M | **D2** — reasoning-model content | ✅ Done (audit: no non-stream call sites; `stream()` falls back to `reasoning_content`; 2 new stream tests). |
 | 7 | M | **F1** — snapshot in Docker | ✅ Done (safe.directory + HEAD-based initial commit; verified in rebuilt container: clean log, HEAD commit exists; `tests/test_snapshot.py`). |
-| 8 | M | **A1** — per-tool "trust for this session" | Track tool+args per `confirm_id`; add a "Trust for this session" checkbox for all tools; honor it in `needs_confirmation`; (kept separate: "remember permanently" via `save_permission_choice`); tests for the WS confirm flow. |
+| 8 | M | **A1** — per-tool "trust for this session" | ✅ Done (`SESSION_TOOL_TRUST` + `_confirm_tools` binding in `agent.py`; generic trust checkbox + `trust_tool` in `app.js`/WS `confirm_response`; `needs_confirmation` honors it; `tests/test_trust_scope.py` incl. agent-level confirm-flow test). |
 | 9 | L | **I** — headless registry UIs | Ship an agent switcher (dropdown per session) first; then a settings/admin page for skills/MCP/LSP backed by the existing APIs; cover with smoke tests. |
 
 After #9, revisit `FUTURE_ENHANCEMENTS.md` (in-app settings UI, KB Q→A, auto-titles, pin/archive)
@@ -225,9 +228,9 @@ as the next backlog.
 
 ## Status summary
 
-- `DONE`: A2, B1, B2, B4, D2, E1, E2, F1, H1
+- `DONE`: A1, A2, B1, B2, B4, D2, E1, E2, F1, H1
 - `CLEARED`: A3, B3, C1, D1, G1, G2, H2, J1, K1
-- `OPEN` (fix after review sign-off): A1 and the registry-UI gap (I)
+- `OPEN` (fix after review sign-off): the registry-UI gap (I)
 
 ## Revision history
 
