@@ -79,9 +79,21 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
        and a seeded LSP `db-lsp` logs `Started LSP server: db-lsp`; empty DBs start cleanly. Tests:
        `tests/test_registry_edit.py::TestMergedMCPServers`, `::TestMergedLSPSpecs`,
        `::TestStartLSPServers`.
-     - **Still open (live reload):** the `enabled` toggle and edit endpoints only touch the DB today;
-       a live reload that re-runs `initialize()`/`start_server()` on an admin edit (so changes take
-       effect without a server restart) is not wired. Config.toml servers are unaffected throughout.
+      - **Done (live reload):** the `enabled` toggle and edit/delete endpoints now re-run the client
+        reconcile on an admin change, so changes take effect without a server restart.
+        `server.py::reload_mcp_servers()` calls `MCPClient.reload()` (adds new servers, drops removed
+        ones, reconnects when a URL changes, prunes that server's tools) and
+        `reload_lsp_servers()` calls `LSPClient.reload()` (starts new/changed specs, gracefully stops
+        removed ones via `shutdown`+`exit`, leaves unchanged servers running). The three admin routes
+        (`routes/mcp.py`, `routes/lsp.py`) call the matching reload after create/update/delete,
+        guarded so a reload error never fails the edit. Verified in-container on a live app: POSTing a
+        server logs `Connected to MCP server: live-srv` and deleting it logs `Disconnected MCP
+        server: live-srv`, no restart. Tests: `TestMCPClientReload`, `TestLSPClientReload`,
+        `TestReloadWiring`. Config.toml servers are unaffected throughout.
+      - **Still open:** an explicit "reload connections" button in the Admin UI (currently you must
+        edit/delete a server, or restart, to trigger a full re-sync) and moving the reload off the
+        request path so editing many servers at once doesn't hold the HTTP request open during
+        reconnect.
 
 - **Cosmetic — hide/show left menu toggle.** Both the chat sidebar (`index.html`) and the admin
   sidebar (`admin.html`) have a persistent left nav with no way to gain horizontal room. Add a

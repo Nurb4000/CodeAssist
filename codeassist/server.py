@@ -183,6 +183,27 @@ async def _start_lsp_servers(cfg: Config, lsp_client) -> None:
             log.error("Failed to start LSP server '%s': %s", name, e)
 
 
+async def reload_mcp_servers() -> list[str]:
+    """Reconnect MCP servers after an admin edit, using the merged DB+config set.
+
+    No-op when MCP is disabled (no live client). Returns names (re)connected.
+    """
+    if mcp_client is None:
+        return []
+    cfg = get_config()
+    servers = await _merged_mcp_servers(cfg)
+    return await mcp_client.reload(servers)
+
+
+async def reload_lsp_servers() -> None:
+    """Restart LSP servers after an admin edit, using the merged DB+config set."""
+    cfg = get_config()
+    if lsp_client is None or not cfg.lsp.enabled:
+        return
+    specs = await _merged_lsp_specs(cfg)
+    await lsp_client.reload(specs, cfg.workspace)
+
+
 async def _init_subsystems(cfg: Config):
     """Initialize all subsystems with the given config."""
     global mcp_client, skill_registry, plugin_registry, tools, trust_registry, lsp_client

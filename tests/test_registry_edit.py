@@ -302,3 +302,186 @@ class TestStartLSPServers:
         await server._start_lsp_servers(cfg, RecordingClient())
         # 'good' was attempted before 'bad' raised; loop continued past the error.
         assert "good" in started
+
+
+class _FakeHTTPX:
+    async def aclose(self):
+        pass
+
+
+class TestMCPClientReload:
+    @pytest.mark.asyncio
+    async def test_add_remove_reconnect_on_url_change(self):
+        from codeassist.mcp_client import MCPClient
+
+        client = MCPClient()
+        connected = []
+
+        async def fake_connect(name, config):
+            connected.append(name)
+            client._clients[name] = _FakeHTTPX()
+            client._urls[name] = config.get("url")
+            client._tools[f"mcp_{name}_t"] = object()
+
+        client._connect_server = fake_connect
+        await client.initialize({"a": {"url": "http://a"}})
+        assert connected == ["a"]
+
+        # Adding b reconnects only b; a is left running.
+        connected.clear()
+        await client.reload({"a": {"url": "http://a"}, "b": {"url": "http://b"}})
+        assert connected == ["b"]
+
+        # Removing a disconnects it and prunes its tools.
+        connected.clear()
+        await client.reload({"b": {"url": "http://b"}})
+        assert connected == []
+        assert "a" not in client._urls
+        assert "mcp_a_t" not in client._tools
+
+        # Changing b's URL reconnects it with the new url.
+        connected.clear()
+        await client.reload({"b": {"url": "http://b2"}})
+        assert connected == ["b"]
+        assert client._urls["b"] == "http://b2"
+
+
+class TestLSPClientReload:
+    @pytest.mark.asyncio
+    async def test_starts_stops_and_restarts_on_spec_change(self):
+        from pathlib import Path
+
+        from codeassist.lsp_client import LSPClient
+
+        client = LSPClient()
+        started, stopped = [], []
+
+        async def fake_start(name, command, args, languages, workspace):
+            started.append(name)
+            client._servers[name] = object()
+            client._specs[name] = {
+                "command": command,
+                "args": list(args),
+                "languages": list(languages),
+            }
+
+        async def fake_stop(name):
+            stopped.append(name)
+            client._servers.pop(name, None)
+            client._specs.pop(name, None)
+
+        client.start_server = fake_start
+        client._stop_server = fake_stop
+        ws = Path("/tmp")
+
+        await client.reload({"a": {"command": "ca", "args": [], "languages": ["py"]}}, ws)
+        assert started == ["a"] and stopped == []
+
+        # b is new (start), a's spec changed (restart).
+        started.clear()
+        await client.reload(
+            {
+                "a": {"command": "ca2", "args": [], "languages": ["py"]},
+                "b": {"command": "cb", "args": [], "languages": ["js"]},
+            },
+            ws,
+        )
+        assert sorted(started) == ["a", "b"]
+
+        # b unchanged (no restart); a removed (stopped).
+        started.clear()
+        await client.reload({"b": {"command": "cb", "args": [], "languages": ["js"]}}, ws)
+        assert started == [] and stopped == ["a"]
+
+
+class TestReloadWiring:
+    @pytest.mark.asyncio
+    async def test_mcp_create_triggers_reload(self, live_client, monkeypatch):
+        calls = []
+
+        async def spy():
+            calls.append(1)
+            return []
+
+        monkeypatch.setattr(server, "reload_mcp_servers", spy)
+        server.get_config().mcp.enabled = True
+
+        r = live_client.post(
+            "/api/mcp/servers", json={"name": "x", "config": {"url": "http://x"}}
+        )
+        assert r.status_code == 200, r.text
+        assert calls
+
+    @pytest.mark.asyncio
+    async def test_mcp_update_triggers_reload(self, live_client, monkeypatch):
+        calls = []
+
+        async def spy():
+            calls.append(1)
+            return []
+
+        monkeypatch.setattr(server, "reload_mcp_servers", spy)
+        cfg = server.get_config()
+        cfg.mcp.enabled = True
+
+        created = live_client.post(
+            "/api/mcp/servers", json={"name": "x", "config": {"url": "http://x"}}
+        )
+        sid = created.json()["id"]
+        r = live_client.put(f"/api/mcp/servers/{sid}", json={"enabled": False})
+        assert r.status_code == 200, r.text
+        assert calls
+
+    @pytest.mark.asyncio
+    async def test_mcp_delete_triggers_reload(self, live_client, monkeypatch):
+        calls = []
+
+        async def spy():
+            calls.append(1)
+            return []
+
+        monkeypatch.setattr(server, "reload_mcp_servers", spy)
+        cfg = server.get_config()
+        cfg.mcp.enabled = True
+
+        created = live_client.post(
+            "/api/mcp/servers", json={"name": "x", "config": {"url": "http://x"}}
+        )
+        sid = created.json()["id"]
+        r = live_client.delete(f"/api/mcp/servers/{sid}")
+        assert r.status_code == 200, r.text
+        assert calls
+
+    @pytest.mark.asyncio
+    async def test_lsp_create_triggers_reload(self, live_client, monkeypatch):
+        calls = []
+
+        async def spy():
+            calls.append(1)
+
+        monkeypatch.setattr(server, "reload_lsp_servers", spy)
+
+        r = live_client.post(
+            "/api/lsp/servers",
+            json={"name": "py", "command": "pyright-langserver", "args": ["--stdio"]},
+        )
+        assert r.status_code == 200, r.text
+        assert calls
+
+    @pytest.mark.asyncio
+    async def test_lsp_delete_triggers_reload(self, live_client, monkeypatch):
+        calls = []
+
+        async def spy():
+            calls.append(1)
+
+        monkeypatch.setattr(server, "reload_lsp_servers", spy)
+
+        created = live_client.post(
+            "/api/lsp/servers",
+            json={"name": "py", "command": "pyright-langserver", "args": ["--stdio"]},
+        )
+        sid = created.json()["id"]
+        r = live_client.delete(f"/api/lsp/servers/{sid}")
+        assert r.status_code == 200, r.text
+        assert calls
