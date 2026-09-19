@@ -335,7 +335,7 @@ function saveCollapsed(state) {
 function initAdminSections() {
     const main = document.getElementById('chat-area');
     const headings = Array.from(main.querySelectorAll(':scope > h2[id]'));
-    const collapsed = loadCollapsed();
+    const states = loadCollapsed();
 
     headings.forEach((h2) => {
         const id = h2.id;
@@ -383,9 +383,15 @@ function initAdminSections() {
         h2.appendChild(title);
         h2.appendChild(count);
 
-        if (collapsed[id]) {
+        // Default to collapsed for a cleaner view; only force-open when the user
+        // has explicitly expanded this section before (persisted as `false`).
+        const isCollapsed = states[id] !== false;
+        if (isCollapsed) {
             section.classList.add('collapsed');
             toggle.setAttribute('aria-expanded', 'false');
+        } else {
+            section.classList.remove('collapsed');
+            toggle.setAttribute('aria-expanded', 'true');
         }
     });
 
@@ -404,7 +410,7 @@ function toggleSection(id) {
     const toggle = section.querySelector('.section-toggle');
     if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
     const state = loadCollapsed();
-    if (collapsed) state[id] = true; else delete state[id];
+    state[id] = collapsed; // true = collapsed, false = expanded (explicit)
     saveCollapsed(state);
 }
 
