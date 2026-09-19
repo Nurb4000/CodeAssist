@@ -273,6 +273,24 @@ Gaps found during the review sweep that are missing *features*, not bugs:
 Remaining backlog here: line 1 list from the "upload behavior" deferral (already handled by the
 above detection), plus any GUI-managed toggles to land with the in-app settings UI.
 
+## MCP test server (dev tooling)
+
+- **Need a dummy/simple MCP server to exercise the MCP feature.** CodeAssist can manage MCP servers
+  (add/edit/delete/enabled toggle in the Admin page, `codeassist/routes/mcp.py`,
+  `codeassist/session.py::MCPServer`), but there is no trivial local server to test that path
+  against. Build a small one so the round-trip — Admin registers a server → CodeAssist connects over
+  stdio → agent calls its tools — can be verified without depending on a remote/third-party server.
+  - **Language: Python** (would be great), so it can grow into a more realistic demo later.
+  - **Surface:** a handful of stdio tools per the MCP spec (JSON-RPC 2.0 over `stdio`), e.g.
+    `echo`, `add`, and `current_time`; optionally one resource and one prompt to test those too.
+    Keep it dependency-light (stdlib only if possible) so it boots anywhere.
+  - **It is NOT part of the CodeAssist project.** Create it as its own standalone project (a sibling
+    directory or a separate repo) — don't add it under `codeassist/` — so it never bloats the main
+    codebase or ships in the image. It exists purely for local testing.
+  - **How it'll be used:** point CodeAssist's `[mcp] servers` config at it via a stdio command
+    (e.g. `python /path/to/mcp_test_server/main.py` with `args: ["--stdio"]`) and confirm the server
+    appears in Admin, toggles enabled/disabled, and its tools are callable in chat.
+
 ## Docker / ops
 
 - Port `EXPOSE` already aligned to 8090; consider deriving `nginx`/reverse-proxy example.
