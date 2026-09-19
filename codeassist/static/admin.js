@@ -643,3 +643,47 @@ document.getElementById('agent-create').onclick = async () => {
 
 initAdminSections();
 loadAll();
+
+// --- Sidebar show/hide toggle ---------------------------------------------
+const SIDEBAR_HIDDEN_KEY = 'codeassist:sidebarVisible';
+
+function applySidebarHidden(hidden) {
+    const app = document.getElementById('app');
+    if (!app) return;
+    app.classList.toggle('sidebar-hidden', !!hidden);
+    const reveal = document.getElementById('sidebar-reveal');
+    if (reveal) reveal.title = hidden ? 'Show sidebar' : 'Collapse sidebar';
+}
+
+function initSidebarToggle() {
+    const app = document.getElementById('app');
+    if (!app) return;
+    const stored = localStorage.getItem(SIDEBAR_HIDDEN_KEY);
+    applySidebarHidden(stored === 'false');
+
+    const collapse = document.getElementById('sidebar-collapse');
+    if (collapse) {
+        collapse.addEventListener('click', () => {
+            const hidden = !app.classList.contains('sidebar-hidden');
+            applySidebarHidden(hidden);
+            localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(hidden));
+        });
+    }
+    const reveal = document.getElementById('sidebar-reveal');
+    if (reveal) {
+        reveal.addEventListener('click', () => {
+            applySidebarHidden(false);
+            localStorage.setItem(SIDEBAR_HIDDEN_KEY, 'true');
+        });
+    }
+    window.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+            e.preventDefault();
+            const hidden = !app.classList.contains('sidebar-hidden');
+            applySidebarHidden(hidden);
+            localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(hidden));
+        }
+    });
+}
+
+initSidebarToggle();

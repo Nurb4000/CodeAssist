@@ -95,11 +95,15 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
         request path so editing many servers at once doesn't hold the HTTP request open during
         reconnect.
 
-- **Cosmetic — hide/show left menu toggle.** Both the chat sidebar (`index.html`) and the admin
-  sidebar (`admin.html`) have a persistent left nav with no way to gain horizontal room. Add a
-  small toggle (chevron icon in the header) that collapses the left menu to just its icon strip /
-  hides it entirely, expanding the main content area; state persists in `localStorage`. Purely
-  cosmetic UX polish — no backend change.
+- **Cosmetic — hide/show left menu toggle.** ✅ Done. Both the chat sidebar (`index.html`) and the
+  admin sidebar (`admin.html`) now have a show/hide toggle. A chevron **collapse** button lives in
+  each sidebar header (points left, toward the pane); a fixed circular **reveal** button sits at the
+  top-left of the page and appears only while the sidebar is hidden (points right). Toggling adds or
+  removes `.sidebar-hidden` on `#app` (`#app.sidebar-hidden #sidebar { display: none }`), expanding
+  the main content area. State persists in `localStorage` under `codeassist:sidebarVisible`
+  (default visible); `Ctrl/Cmd+B` also toggles. Purely frontend — no backend change. Verified in a
+  container: `/static/index.html` and `/static/admin.html` both serve the collapse + reveal buttons,
+  and `style.css`/`app.js`/`admin.js` ship the `.sidebar-hidden` rule and `initSidebarToggle()`.
 
 ## Related "move internal" candidates
 
