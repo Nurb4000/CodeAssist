@@ -141,3 +141,47 @@ class TestAgentRoutes:
     def test_patch_unknown_agent_404(self, live_client):
         r = live_client.patch("/api/agents/no-such-agent", json={"description": "x"})
         assert r.status_code == 404
+
+
+# --- Boot-time merge: config.toml servers + admin-managed DB servers ---------
+
+class TestMergedMCPServers:
+    @pytest.mark.asyncio
+    async def test_combines_toml_and_db_servers(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.mcp.servers = {"toml_srv": {"url": "http://toml/mcp"}}
+        await MCPServer.create("db_srv", {"url": "http://db/mcp"})
+
+        merged = await server._merged_mcp_servers(cfg)
+        assert set(merged) == {"toml_srv", "db_srv"}
+        assert merged["db_srv"] == {"url": "http://db/mcp"}
+
+    @pytest.mark.asyncio
+    async def test_toml_wins_on_name_collision(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.mcp.servers = {"shared": {"url": "http://toml"}}
+        await MCPServer.create("shared", {"url": "http://db"})
+
+        merged = await server._merged_mcp_servers(cfg)
+        assert merged["shared"] == {"url": "http://toml"}
+
+    @pytest.mark.asyncio
+    async def test_skips_malformed_db_config(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.mcp.servers = {}
+        # Store an invalid JSON blob in the config column.
+        await MCPServer.create("broken", {"url": "http://ok"})
+        import codeassist.session as session_mod
+
+        async with session_mod.get_db() as db:
+            await db.execute(
+                "UPDATE mcp_servers SET config = ? WHERE name = 'broken'",
+                ("not-json",),
+            )
+
+        merged = await server._merged_mcp_servers(cfg)
+        assert "broken" not in merged  # skipped, startup did not raise
+        assert merged == {}
