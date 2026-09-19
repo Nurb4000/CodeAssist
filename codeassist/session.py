@@ -1146,12 +1146,33 @@ class MCPServer:
                 return config
         return {}
 
-    async def update(self, config: dict):
+    async def update(self, name: str | None = None, config: dict | None = None):
+        now = datetime.now(timezone.utc).isoformat()
+        fields = []
+        values = []
+        if name is not None:
+            fields.append("name = ?")
+            values.append(name)
+        if config is not None:
+            fields.append("config = ?")
+            values.append(json.dumps(config))
+        if not fields:
+            return
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.append(self.id)
+        async with get_db() as db:
+            await db.execute(
+                f"UPDATE mcp_servers SET {', '.join(fields)} WHERE id = ?", values
+            )
+            await db.commit()
+
+    async def set_enabled(self, enabled: bool):
         now = datetime.now(timezone.utc).isoformat()
         async with get_db() as db:
             await db.execute(
-                "UPDATE mcp_servers SET config = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(config), now, self.id),
+                "UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if enabled else 0, now, self.id),
             )
             await db.commit()
 
@@ -1306,6 +1327,48 @@ class LSPServer:
                     "languages": json.loads(row["languages"]),
                 }
         return {}
+
+    async def update(
+        self,
+        name: str | None = None,
+        command: str | None = None,
+        args: list[str] | None = None,
+        languages: list[str] | None = None,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        fields = []
+        values = []
+        if name is not None:
+            fields.append("name = ?")
+            values.append(name)
+        if command is not None:
+            fields.append("command = ?")
+            values.append(command)
+        if args is not None:
+            fields.append("args = ?")
+            values.append(json.dumps(args))
+        if languages is not None:
+            fields.append("languages = ?")
+            values.append(json.dumps(languages))
+        if not fields:
+            return
+        fields.append("updated_at = ?")
+        values.append(now)
+        values.append(self.id)
+        async with get_db() as db:
+            await db.execute(
+                f"UPDATE lsp_servers SET {', '.join(fields)} WHERE id = ?", values
+            )
+            await db.commit()
+
+    async def set_enabled(self, enabled: bool):
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE lsp_servers SET enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if enabled else 0, now, self.id),
+            )
+            await db.commit()
 
     async def delete(self):
         async with get_db() as db:

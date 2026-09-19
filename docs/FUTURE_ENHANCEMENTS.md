@@ -54,8 +54,19 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
   - edit (rename / description / config JSON / enabled toggle) for registered items, backed by
     `PUT`/`PATCH` endpoints (agents already have `PATCH /api/agents/{key}`-style surface; skills,
     plugins, custom tools and their toggles need equivalent routes);
-  - remove/disable for skills, plugins, and custom tools (with a delete confirmation), so admins
-    aren't limited to "reload from disk" / read-only tables.
+   - remove/disable for skills, plugins, and custom tools (with a delete confirmation), so admins
+     aren't limited to "reload from disk" / read-only tables.
+   - **Edit/remove wiring status:** MCP (`PUT /api/mcp/servers/{id}`), LSP
+     (`PUT /api/lsp/servers/{id}`) and custom agents (`PATCH /api/agents/{id}`) now have edit
+     endpoints + inline edit modals on `admin.html`; `MCPServer`/`LSPServer` gained `update()` and
+     `set_enabled()` in `session.py`, and `AgentManager.update_agent` persists in-memory + DB.
+     Skills/plugins/custom-tools remain disk-registry-backed (see below).
+
+- **Cosmetic — hide/show left menu toggle.** Both the chat sidebar (`index.html`) and the admin
+  sidebar (`admin.html`) have a persistent left nav with no way to gain horizontal room. Add a
+  small toggle (chevron icon in the header) that collapses the left menu to just its icon strip /
+  hides it entirely, expanding the main content area; state persists in `localStorage`. Purely
+  cosmetic UX polish — no backend change.
 
 ## Related "move internal" candidates
 

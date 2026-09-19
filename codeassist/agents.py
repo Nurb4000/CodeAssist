@@ -341,7 +341,9 @@ class AgentManager:
                 "id": key,
                 "name": config.name,
                 "description": config.description,
+                "instructions": config.instructions,
                 "model": config.model,
+                "max_iterations": config.max_iterations,
                 "builtin": key in BUILTIN_AGENT_KEYS,
             }
             for key, config in self._agents.items()
@@ -385,6 +387,25 @@ class AgentManager:
                 await agent_record.delete()
         except Exception as e:
             log.error("Failed to delete agent from database: %s", e)
+
+    async def update_agent(self, name: str, **kwargs):
+        """Update a custom agent's editable fields (description/model/instructions/max_iterations)."""
+        if name not in self._agents:
+            raise ValueError(f"Agent '{name}' not found")
+        config = self._agents[name]
+        allowed = {"description", "instructions", "model", "max_iterations"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        for key, value in updates.items():
+            setattr(config, key, value)
+
+        # Persist to database.
+        try:
+            record = await AgentRecord.get_by_name(name)
+            if record:
+                await record.update(**updates)
+        except Exception as e:
+            log.error("Failed to persist agent changes for '%s': %s", name, e)
+        return config
 
 
 # Singleton instance
