@@ -1358,12 +1358,6 @@ body {
     margin-bottom: 8px;
 }
 
-.welcome-hint {
-    font-size: 12px;
-    margin-top: 16px;
-    color: var(--text-muted);
-}
-
 .message-actions {
     max-width: 800px;
     margin: -16px auto 24px;

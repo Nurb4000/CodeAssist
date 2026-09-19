@@ -512,7 +512,6 @@ function showWelcome() {
         <div class="welcome">
             <h2>CodeAssist</h2>
             <p>AI coding assistant connected to your workspace</p>
-            <p class="welcome-hint">Hover a session name to rename or delete it</p>
         </div>`;
 }
 
