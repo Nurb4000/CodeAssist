@@ -29,6 +29,25 @@ async def create_agent(body: dict):
     return agent.to_dict() if hasattr(agent, 'to_dict') else {"name": name}
 
 
+@router.patch("/{agent_name}")
+async def update_agent(agent_name: str, body: dict):
+    """Update a custom agent's editable fields (description/model/instructions/max_iterations)."""
+    from codeassist.agents import agent_manager, BUILTIN_AGENT_KEYS
+    if agent_name in BUILTIN_AGENT_KEYS:
+        raise HTTPException(status_code=400, detail=f"Built-in agent '{agent_name}' is not editable (built-in)")
+    try:
+        await agent_manager.update_agent(
+            agent_name,
+            description=body.get("description"),
+            instructions=body.get("instructions"),
+            model=body.get("model"),
+            max_iterations=body.get("max_iterations"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True}
+
+
 @router.delete("/{agent_name}")
 async def delete_agent(agent_name: str):
     """Delete an agent by name."""

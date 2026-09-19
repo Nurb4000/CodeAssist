@@ -64,6 +64,121 @@ function delButton(id, label, onDelete) {
     return b;
 }
 
+function editButton(label, onEdit) {
+    const b = document.createElement('button');
+    b.className = 'admin-btn';
+    b.textContent = label;
+    b.onclick = (e) => {
+        e.preventDefault();
+        onEdit();
+    };
+    return b;
+}
+
+let editModalEl = null;
+
+function closeEditModal() {
+    if (editModalEl && editModalEl.parentNode) editModalEl.remove();
+    editModalEl = null;
+}
+
+// Reusable edit modal. `fields` = [{key,label,type,value,required}], type in
+// {text,textarea,json,number,bool}. `onSubmit(payload)` returns a promise; on
+// success the modal closes and the registry reloads.
+function openEditModal(title, fields, onSubmit) {
+    closeEditModal();
+    const card = document.createElement('div');
+    card.className = 'modal-card';
+    card.innerHTML =
+        `<div class="modal-label" style="margin-top:0">${escapeHtml(title)}</div>` +
+        `<div class="modal-body"></div>` +
+        `<div class="modal-actions"></div>`;
+    const body = card.querySelector('.modal-body');
+    const actions = card.querySelector('.modal-actions');
+    const inputs = {};
+
+    for (const f of fields) {
+        const label = document.createElement('div');
+        label.className = 'modal-label';
+        label.textContent = f.label;
+        body.appendChild(label);
+        let inp;
+        if (f.type === 'textarea' || f.type === 'json') {
+            inp = document.createElement('textarea');
+            inp.className = 'modal-textarea';
+        } else {
+            inp = document.createElement('input');
+            inp.className = 'modal-input';
+            if (f.type === 'number') inp.type = 'number';
+        }
+        inp.dataset.key = f.key;
+        inp.value = f.value ?? '';
+        if (f.required) inp.required = true;
+        body.appendChild(inp);
+        inputs[f.key] = inp;
+    }
+
+    const cancel = document.createElement('button');
+    cancel.className = 'modal-btn';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = closeEditModal;
+
+    const save = document.createElement('button');
+    save.className = 'modal-btn primary';
+    save.textContent = 'Save';
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+
+    const collect = () => {
+        const payload = {};
+        for (const f of fields) {
+            const inp = inputs[f.key];
+            const raw = inp.value;
+            if (f.type === 'bool') { payload[f.key] = inp.checked; continue; }
+            if (f.type === 'number') {
+                payload[f.key] = raw.trim() === '' ? null : Number(raw);
+                continue;
+            }
+            if (f.type === 'json') {
+                const t = raw.trim();
+                payload[f.key] = t === '' ? [] : JSON.parse(t);
+                continue;
+            }
+            payload[f.key] = raw;
+        }
+        return payload;
+    };
+
+    save.onclick = async () => {
+        let payload;
+        try {
+            payload = collect();
+        } catch (e) {
+            setStatus('Invalid JSON: ' + e.message, true);
+            return;
+        }
+        try {
+            await onSubmit(payload);
+            closeEditModal();
+            setStatus('Saved');
+            await loadAll();
+        } catch (e) {
+            setStatus(e.message, true);
+        }
+    };
+
+    editModalEl = card;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.appendChild(card);
+    backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeEditModal();
+    });
+    document.body.appendChild(backdrop);
+    const first = card.querySelector('.modal-input, .modal-textarea');
+    if (first) first.focus();
+}
+
 async function loadSkills() {
     const data = await api('GET', '/api/skills');
     const tbody = document.getElementById('skills-body');
@@ -87,7 +202,18 @@ async function loadMcp() {
             `<td><code>${escapeHtml(fmtField(s.config))}</code></td>` +
             `<td>${s.enabled ? 'yes' : 'no'}</td>` +
             `<td></td>`);
-        tr.lastElementChild.appendChild(delButton(s.id, 'Delete', (id) => api('DELETE', `/api/mcp/servers/${id}`)));
+        const actions = tr.lastElementChild;
+        actions.appendChild(editButton('Edit', () =>
+            openEditModal(`MCP server: ${s.name}`, [
+                { key: 'name', label: 'Name', type: 'text', value: s.name, required: true },
+                { key: 'config', label: 'Config (JSON)', type: 'json', value: fmtField(s.config) },
+                { key: 'enabled', label: 'Enabled', type: 'bool', value: !!s.enabled },
+            ], async (p) => {
+                await api('PUT', `/api/mcp/servers/${encodeURIComponent(s.id)}`, {
+                    name: p.name, config: p.config, enabled: p.enabled,
+                });
+            })));
+        actions.appendChild(delButton(s.id, 'Delete', (id) => api('DELETE', `/api/mcp/servers/${id}`)));
         tbody.appendChild(tr);
     }
 }
@@ -96,14 +222,27 @@ async function loadLsp() {
     const data = await api('GET', '/api/lsp/servers');
     const tbody = document.getElementById('lsp-body');
     tbody.innerHTML = '';
-    for (const s of data || []) {
+    for (const s of data.servers || []) {
         const tr = row(
             `<td class="cell-em">${escapeHtml(s.name || '')}</td>` +
             `<td><code>${escapeHtml(s.command || '')}</code></td>` +
             `<td>${escapeHtml(fmtField(s.args))}</td>` +
             `<td>${escapeHtml(fmtField(s.languages))}</td>` +
             `<td></td>`);
-        tr.lastElementChild.appendChild(delButton(s.id, 'Delete', (id) => api('DELETE', `/api/lsp/servers/${id}`)));
+        const actions = tr.lastElementChild;
+        actions.appendChild(editButton('Edit', () =>
+            openEditModal(`LSP server: ${s.name}`, [
+                { key: 'name', label: 'Name', type: 'text', value: s.name, required: true },
+                { key: 'command', label: 'Command', type: 'text', value: s.command || '', required: true },
+                { key: 'args', label: 'Args (JSON)', type: 'json', value: fmtField(s.args) },
+                { key: 'languages', label: 'Languages (JSON)', type: 'json', value: fmtField(s.languages) },
+                { key: 'enabled', label: 'Enabled', type: 'bool', value: !!s.enabled },
+            ], async (p) => {
+                await api('PUT', `/api/lsp/servers/${encodeURIComponent(s.id)}`, {
+                    name: p.name, command: p.command, args: p.args, languages: p.languages, enabled: p.enabled,
+                });
+            })));
+        actions.appendChild(delButton(s.id, 'Delete', (id) => api('DELETE', `/api/lsp/servers/${id}`)));
         tbody.appendChild(tr);
     }
 }
@@ -149,9 +288,22 @@ async function loadAgents() {
             label.textContent = 'built-in';
             tr.lastElementChild.appendChild(label);
         } else {
-            tr.lastElementChild.appendChild(
-                delButton(a.id, 'Delete', (id) => api('DELETE', `/api/agents/${encodeURIComponent(id)}`))
-            );
+            const actions = tr.lastElementChild;
+            actions.appendChild(editButton('Edit', () =>
+                openEditModal(`Agent: ${a.name}`, [
+                    { key: 'description', label: 'Description', type: 'textarea', value: a.description || '' },
+                    { key: 'instructions', label: 'Instructions', type: 'textarea', value: a.instructions || '' },
+                    { key: 'model', label: 'Model', type: 'text', value: a.model || '' },
+                    { key: 'max_iterations', label: 'Max iterations', type: 'number', value: a.max_iterations ?? '' },
+                ], async (p) => {
+                    await api('PATCH', `/api/agents/${encodeURIComponent(a.id)}`, {
+                        description: p.description || null,
+                        instructions: p.instructions || null,
+                        model: p.model || null,
+                        max_iterations: p.max_iterations,
+                    });
+                })));
+            actions.appendChild(delButton(a.id, 'Delete', (id) => api('DELETE', `/api/agents/${encodeURIComponent(id)}`)));
         }
         tbody.appendChild(tr);
     }
