@@ -211,6 +211,9 @@ codeassist --workspace ~/Projects/myapp --port 9000
 codeassist --workspace ~/Projects/myapp --no-browser
 ```
 
+For a screen-by-screen walkthrough of the chat, Admin, Knowledge Base, and Tool Manager interfaces,
+see [`docs/user-guide.md`](docs/user-guide.md).
+
 ## What it does
 
 - **Chat with an AI** that can read, write, and edit your code
