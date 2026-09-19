@@ -4,6 +4,17 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(tags=["config"])
 
 
+def _human_size(num: int) -> str:
+    """Format a byte count as a human-readable string (B/KB/MB/GB)."""
+    unit = "B"
+    value = float(num)
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or u == "TB":
+            return f"{value:.0f} {u}" if u == "B" else f"{value:.1f} {u}"
+        value /= 1024
+    return f"{num} B"
+
+
 @router.get("/api/config")
 async def api_config():
     """Get current server configuration (model, workspace, enabled features)."""
@@ -43,6 +54,37 @@ async def api_config():
             "lsp_enabled": cfg.lsp.enabled,
             "git_enabled": cfg.git.enabled,
         },
+    }
+
+
+@router.get("/api/status")
+async def api_status():
+    """Operational status for the admin Health panel: DB path/size and whether
+    any applied settings override requires a restart."""
+    from ..session import DB_PATH
+    from ..settings import BY_KEY, settings_store
+
+    size_bytes = 0
+    if DB_PATH.exists():
+        try:
+            size_bytes = DB_PATH.stat().st_size
+        except OSError:  # pragma: no cover - path vanished between check and stat
+            size_bytes = 0
+
+    restart_keys = []
+    if not settings_store.is_loaded():
+        await settings_store.load()
+    for key in settings_store.all():
+        spec = BY_KEY.get(key)
+        if spec and spec.get("restart_required"):
+            restart_keys.append(spec["label"])
+
+    return {
+        "db_path": str(DB_PATH),
+        "db_size_bytes": size_bytes,
+        "db_size_human": _human_size(size_bytes),
+        "restart_needed": len(restart_keys) > 0,
+        "restart_count": len(restart_keys),
     }
 
 

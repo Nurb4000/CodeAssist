@@ -120,8 +120,15 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
   exist as endpoints (`/api/kb/*`); surface them behind an admin tab rather than raw JSON.
 - **Tool trust management UI**: `/api/tools/manage/*` (trust, usage, scan) works; give it a real
   page instead of the raw console.
-- **Health/status panel**: embed `/health`, LLM connectivity, DB path + size, and a "Restart
-  needed" indicator when settings change.
+- **Health/status panel.** ✅ Done (2026-09-19). New `GET /api/status`
+  (`routes/config.py`) returns DB path, byte size, human-readable size, and whether any applied
+  settings override needs a restart (cross-referenced against the catalog's `restart_required`
+  flags; the settings store is loaded lazily so it works on first panel open). The Admin page has a
+  **Health** section (`admin.html`) with a **Refresh** button that calls `loadHealth()` in
+  `admin.js`: it reads `/health`, `/api/config` (model/provider and `backend_source` for LLM
+  connectivity), and `/api/status`, rendered as a compact table. Restart-needed flips True→False
+  live via PUT/DELETE `/api/settings`. Native tests in `test_app_smoke.py` (`test_api_status_shape`,
+  `test_api_status_restart_flag`) + full REST surface smoke; verified end-to-end in a container.
 
 ## Feature gaps (from the 2026-09-17 code review) worth adding
 

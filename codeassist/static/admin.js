@@ -311,7 +311,7 @@ async function loadAgents() {
 
 async function loadAll() {
     try {
-        await Promise.all([loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings()]);
+        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings()]);
         updateCounts();
         setStatus('Updated');
     } catch (e) {
@@ -436,9 +436,54 @@ function updateCounts() {
         const section = document.querySelector(`.admin-section[data-section="${CSS.escape(id)}"]`);
         if (!section) return;
         const tbody = section.querySelector('tbody');
-        const n = tbody ? tbody.rows.length : section.querySelectorAll('.settings-group').length;
-        el.textContent = String(n);
+        const groups = section.querySelectorAll('.settings-group').length;
+        // Sections without a table or settings groups (e.g. Health) get no count badge.
+        if (!tbody && groups === 0) { el.textContent = ''; return; }
+        el.textContent = String(tbody ? tbody.rows.length : groups);
     });
+}
+
+// --- Health panel ---
+
+async function loadHealth() {
+    const body = document.getElementById('health-body');
+    if (!body) return;
+    let cfg = {};
+    let health = { status: 'unknown' };
+    let st = null;
+    try { cfg = await api('GET', '/api/config'); } catch (e) { /* config optional */ }
+    try { health = await api('GET', '/health'); } catch (e) { /* health optional */ }
+    try { st = await api('GET', '/api/status'); } catch (e) { /* status optional */ }
+
+    const effModel = cfg.effective_model || cfg.model || '—';
+    const provider = cfg.provider || '—';
+    let conn;
+    if (cfg.backend_source === 'backend') {
+        conn = 'Connected (auto-detected from backend)';
+    } else if (cfg.backend_external) {
+        conn = 'External provider (not auto-probed)';
+    } else {
+        conn = health.status === 'ok' ? 'Configured' : String(health.status || 'unknown');
+    }
+
+    const rows = [
+        ['Server', health.status || 'unknown'],
+        ['Model', `${effModel} (${provider})`],
+        ['LLM connectivity', conn],
+        ['Workspace', cfg.workspace || '—'],
+    ];
+    if (st) {
+        rows.push(['Database', st.db_path || '—']);
+        rows.push(['DB size', st.db_size_human || '—']);
+        rows.push(['Restart needed', st.restart_needed
+            ? `Yes (${st.restart_count} setting${st.restart_count === 1 ? '' : 's'})`
+            : 'No']);
+    } else {
+        rows.push(['Database', 'unavailable']);
+    }
+    body.innerHTML = rows
+        .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td class="cell-em">${escapeHtml(v)}</td></tr>`)
+        .join('');
 }
 
 // --- Settings tab ---
@@ -584,6 +629,14 @@ function parseJsonField(input, label) {
 }
 
 document.getElementById('refresh-btn').onclick = loadAll;
+document.getElementById('health-refresh').onclick = async () => {
+    try {
+        await loadHealth();
+        setStatus('Health refreshed');
+    } catch (e) {
+        setStatus(e.message, true);
+    }
+};
 document.getElementById('skills-reload').onclick = async () => {
     try {
         await api('POST', '/api/skills/reload');
