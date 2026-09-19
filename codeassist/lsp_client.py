@@ -39,6 +39,7 @@ class LSPClient:
 
     def __init__(self):
         self._servers: dict[str, asyncio.subprocess.Process] = {}
+        self._specs: dict[str, dict] = {}
         self._next_id = 1
         self._responses: dict[int, asyncio.Future] = {}
         self._readers: dict[str, asyncio.Task] = {}
@@ -56,6 +57,11 @@ class LSPClient:
             )
 
             self._servers[name] = proc
+            self._specs[name] = {
+                "command": command,
+                "args": list(args),
+                "languages": list(languages),
+            }
 
             # Start background reader for this server
             self._readers[name] = asyncio.create_task(
@@ -452,22 +458,46 @@ class LSPClient:
                 })
         return result
 
-    async def shutdown(self):
-        """Shutdown all LSP servers."""
-        for name, proc in self._servers.items():
+    async def _stop_server(self, name: str):
+        """Gracefully stop a single running LSP server and drop its state."""
+        proc = self._servers.pop(name, None)
+        reader = self._readers.pop(name, None)
+        if reader:
+            reader.cancel()
+        self._specs.pop(name, None)
+        if proc is not None and proc.returncode is None:
             try:
-                reader = self._readers.pop(name, None)
-                if reader:
-                    reader.cancel()
-
                 await self._send_request(proc, "shutdown", {}, timeout=3.0)
                 await self._send_notification(proc, "exit", {})
-                proc.terminate()
-                log.info("Shutdown LSP server: %s", name)
-            except Exception as e:
-                log.error("Error shutting down LSP server '%s': %s", name, e)
+            except Exception:  # pragma: no cover - server may already be gone
+                pass
+            proc.terminate()
+            log.info("Stopped LSP server: %s", name)
 
-        self._servers.clear()
+    async def shutdown(self):
+        """Shutdown all LSP servers."""
+        for name in list(self._servers):
+            await self._stop_server(name)
+
+    async def reload(self, specs: dict[str, dict], workspace: Path):
+        """Reconcile running LSP servers with a new spec set.
+
+        Stops servers removed from the set; (re)starts servers whose command,
+        args, or languages changed; and leaves unchanged servers running.
+        """
+        current = set(self._servers)
+        desired = set(specs)
+        for name in current - desired:
+            await self._stop_server(name)
+        for name, spec in specs.items():
+            if name not in current or self._specs.get(name) != spec:
+                await self.start_server(
+                    name=name,
+                    command=spec["command"],
+                    args=spec["args"],
+                    languages=spec["languages"],
+                    workspace=workspace,
+                )
 
 
 class LSPTool(Tool):

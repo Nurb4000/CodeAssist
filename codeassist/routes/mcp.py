@@ -1,5 +1,9 @@
 """MCP server API routes."""
+import logging
+
 from fastapi import APIRouter, HTTPException
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mcp/servers", tags=["mcp"])
 
@@ -26,6 +30,12 @@ async def create_mcp_server(body: dict):
     name = body.get("name")
     server_config = body.get("config", {})
     server = await MCPServer.create(name, server_config)
+    from ..server import reload_mcp_servers
+
+    try:
+        await reload_mcp_servers()
+    except Exception as e:  # pragma: no cover - never fail the edit on reload error
+        log.error("Failed to reload MCP servers after create: %s", e)
     return {"id": server.id}
 
 
@@ -47,6 +57,12 @@ async def update_mcp_server(server_id: str, body: dict):
     enabled = body.get("enabled")
     if enabled is not None:
         await server.set_enabled(bool(enabled))
+    from ..server import reload_mcp_servers
+
+    try:
+        await reload_mcp_servers()
+    except Exception as e:  # pragma: no cover - never fail the edit on reload error
+        log.error("Failed to reload MCP servers after update: %s", e)
     return {"ok": True}
 
 
@@ -54,6 +70,12 @@ async def update_mcp_server(server_id: str, body: dict):
 async def delete_mcp_server(server_id: str):
     """Delete an MCP server by ID."""
     from codeassist.session import MCPServer
+    from ..server import reload_mcp_servers
+
     server = MCPServer(server_id)
     await server.delete()
+    try:
+        await reload_mcp_servers()
+    except Exception as e:  # pragma: no cover - never fail the edit on reload error
+        log.error("Failed to reload MCP servers after delete: %s", e)
     return {"ok": True}

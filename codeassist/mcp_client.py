@@ -46,6 +46,49 @@ class MCPClient:
         self._initialized = True
         return initialized
 
+    async def reload(self, servers_config: dict[str, dict]) -> list[str]:
+        """Reconcile live connections with a new server set.
+
+        Servers removed from the set are disconnected and their tools pruned;
+        servers whose URL changed are reconnected; new servers connect. Servers
+        already connected with an unchanged URL are left running. Returns the
+        names that were (re)connected.
+        """
+        current = set(self._urls)
+        desired = set(servers_config)
+        for name in current - desired:
+            await self._disconnect(name)
+
+        to_connect = [
+            name
+            for name in desired
+            if name not in current or self._urls.get(name) != servers_config[name].get("url")
+        ]
+        initialized = []
+        for name in to_connect:
+            try:
+                await self._connect_server(name, servers_config[name])
+                initialized.append(name)
+                log.info("Connected to MCP server: %s", name)
+            except Exception as e:
+                log.error("Failed to connect to MCP server '%s': %s", name, e)
+        self._initialized = True
+        return initialized
+
+    async def _disconnect(self, name: str):
+        """Close a server connection and prune its tools from the registry."""
+        client = self._clients.pop(name, None)
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:  # pragma: no cover - best-effort close
+                pass
+        self._urls.pop(name, None)
+        prefix = f"mcp_{name}_"
+        for tool_name in [t for t in self._tools if t.startswith(prefix)]:
+            del self._tools[tool_name]
+        log.info("Disconnected MCP server: %s", name)
+
     async def _connect_server(self, name: str, config: dict):
         """Connect to a single MCP server via SSE."""
         url = config.get("url")

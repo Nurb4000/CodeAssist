@@ -1,5 +1,9 @@
 """LSP server API routes."""
+import logging
+
 from fastapi import APIRouter, HTTPException
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/lsp/servers", tags=["lsp"])
 
@@ -21,6 +25,12 @@ async def create_lsp_server(body: dict):
         args=body.get("args", []),
         languages=body.get("languages", []),
     )
+    from ..server import reload_lsp_servers
+
+    try:
+        await reload_lsp_servers()
+    except Exception as e:  # pragma: no cover - never fail the edit on reload error
+        log.error("Failed to reload LSP servers after create: %s", e)
     return {"id": server.id}
 
 
@@ -40,6 +50,12 @@ async def update_lsp_server(server_id: str, body: dict):
     enabled = body.get("enabled")
     if enabled is not None:
         await server.set_enabled(bool(enabled))
+    from ..server import reload_lsp_servers
+
+    try:
+        await reload_lsp_servers()
+    except Exception as e:  # pragma: no cover - never fail the edit on reload error
+        log.error("Failed to reload LSP servers after update: %s", e)
     return {"ok": True}
 
 
@@ -47,6 +63,12 @@ async def update_lsp_server(server_id: str, body: dict):
 async def delete_lsp_server(server_id: str):
     """Delete an LSP server by ID."""
     from codeassist.session import LSPServer
+    from ..server import reload_lsp_servers
+
     server = LSPServer(server_id)
     await server.delete()
+    try:
+        await reload_lsp_servers()
+    except Exception as e:  # pragma: no cover - never fail the edit on reload error
+        log.error("Failed to reload LSP servers after delete: %s", e)
     return {"ok": True}
