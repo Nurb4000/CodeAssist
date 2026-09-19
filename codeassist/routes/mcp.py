@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mcp/servers", tags=["mcp"])
+reload_router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 
 @router.get("")
@@ -30,12 +31,10 @@ async def create_mcp_server(body: dict):
     name = body.get("name")
     server_config = body.get("config", {})
     server = await MCPServer.create(name, server_config)
-    from ..server import reload_mcp_servers
+    from ..server import spawn_reload, reload_mcp_servers
 
-    try:
-        await reload_mcp_servers()
-    except Exception as e:  # pragma: no cover - never fail the edit on reload error
-        log.error("Failed to reload MCP servers after create: %s", e)
+    # Reconcile live connections off the request path (batch edits stay snappy).
+    spawn_reload(reload_mcp_servers())
     return {"id": server.id}
 
 
@@ -57,12 +56,9 @@ async def update_mcp_server(server_id: str, body: dict):
     enabled = body.get("enabled")
     if enabled is not None:
         await server.set_enabled(bool(enabled))
-    from ..server import reload_mcp_servers
+    from ..server import spawn_reload, reload_mcp_servers
 
-    try:
-        await reload_mcp_servers()
-    except Exception as e:  # pragma: no cover - never fail the edit on reload error
-        log.error("Failed to reload MCP servers after update: %s", e)
+    spawn_reload(reload_mcp_servers())
     return {"ok": True}
 
 
@@ -70,12 +66,22 @@ async def update_mcp_server(server_id: str, body: dict):
 async def delete_mcp_server(server_id: str):
     """Delete an MCP server by ID."""
     from codeassist.session import MCPServer
-    from ..server import reload_mcp_servers
+    from ..server import spawn_reload, reload_mcp_servers
 
     server = MCPServer(server_id)
     await server.delete()
-    try:
-        await reload_mcp_servers()
-    except Exception as e:  # pragma: no cover - never fail the edit on reload error
-        log.error("Failed to reload MCP servers after delete: %s", e)
+    spawn_reload(reload_mcp_servers())
     return {"ok": True}
+
+
+@reload_router.post("/reload")
+async def reload_mcp_connections():
+    """Manually re-sync live MCP connections with the DB+config server set."""
+    from ..server import reload_mcp_servers
+
+    try:
+        connected = await reload_mcp_servers()
+    except Exception as e:  # pragma: no cover - defensive; reload logs internally
+        log.error("Failed to reload MCP servers: %s", e)
+        raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
+    return {"ok": True, "reconnected": connected}

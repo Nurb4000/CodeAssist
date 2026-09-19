@@ -4,11 +4,24 @@ Covers the PUT /api/mcp/servers/{id}, PUT /api/lsp/servers/{id} and PATCH
 /api/agents/{id} endpoints plus the underlying model update()/set_enabled()
 methods added in session.py and AgentManager.update_agent.
 """
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
 import codeassist.server as server
 from codeassist.session import MCPServer, LSPServer, init_db
+
+
+async def _flush_reloads():
+    """Await any background reconcile tasks spawned by edit routes.
+
+    Admin edits fire reloads off the request path (server.spawn_reload), so
+    tests must drain _reload_tasks before asserting a reload ran.
+    """
+    pending = list(server._reload_tasks)
+    if pending:
+        await asyncio.gather(*pending)
 
 
 # --- Model-level: MCPServer -------------------------------------------------
@@ -410,6 +423,7 @@ class TestReloadWiring:
             "/api/mcp/servers", json={"name": "x", "config": {"url": "http://x"}}
         )
         assert r.status_code == 200, r.text
+        await _flush_reloads()
         assert calls
 
     @pytest.mark.asyncio
@@ -430,6 +444,7 @@ class TestReloadWiring:
         sid = created.json()["id"]
         r = live_client.put(f"/api/mcp/servers/{sid}", json={"enabled": False})
         assert r.status_code == 200, r.text
+        await _flush_reloads()
         assert calls
 
     @pytest.mark.asyncio
@@ -450,6 +465,7 @@ class TestReloadWiring:
         sid = created.json()["id"]
         r = live_client.delete(f"/api/mcp/servers/{sid}")
         assert r.status_code == 200, r.text
+        await _flush_reloads()
         assert calls
 
     @pytest.mark.asyncio
@@ -466,6 +482,7 @@ class TestReloadWiring:
             json={"name": "py", "command": "pyright-langserver", "args": ["--stdio"]},
         )
         assert r.status_code == 200, r.text
+        await _flush_reloads()
         assert calls
 
     @pytest.mark.asyncio
@@ -484,4 +501,40 @@ class TestReloadWiring:
         sid = created.json()["id"]
         r = live_client.delete(f"/api/lsp/servers/{sid}")
         assert r.status_code == 200, r.text
+        await _flush_reloads()
         assert calls
+
+
+class TestReloadEndpoints:
+    """Explicit manual reload endpoints triggered by the Admin 'Reload connections'
+    button. These are awaited (not fire-and-forget) so the UI can report results."""
+
+    @pytest.mark.asyncio
+    async def test_mcp_reload_endpoint(self, live_client, monkeypatch):
+        connected = ["svc-a", "svc-b"]
+
+        async def spy():
+            return connected
+
+        monkeypatch.setattr(server, "reload_mcp_servers", spy)
+        server.get_config().mcp.enabled = True
+
+        r = live_client.post("/api/mcp/reload")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["reconnected"] == connected
+
+    @pytest.mark.asyncio
+    async def test_lsp_reload_endpoint(self, live_client, monkeypatch):
+        called = []
+
+        async def spy():
+            called.append(1)
+
+        monkeypatch.setattr(server, "reload_lsp_servers", spy)
+
+        r = live_client.post("/api/lsp/reload")
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+        assert called
