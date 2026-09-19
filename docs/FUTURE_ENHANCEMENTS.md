@@ -61,8 +61,8 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
       endpoints + inline edit modals on `admin.html`; `MCPServer`/`LSPServer` gained `update()` and
       `set_enabled()` in `session.py`, and `AgentManager.update_agent` persists in-memory + DB.
       Skills/plugins/custom-tools remain disk-registry-backed (see below).
-     - **GAP — DB MCP/LSP servers are not loaded into the running client.** BOOT-LOAD DONE; live
-       reload still open. The admin page stores servers in the DB (`mcp_servers` / `lsp_servers`,
+      - **GAP — DB MCP/LSP servers are not loaded into the running client.** ✅ CLOSED (boot-load +
+        live reload). The admin page stores servers in the DB (`mcp_servers` / `lsp_servers`,
        `session.py`) and the
        edit endpoints persist there, but at boot `server.py::init_mcp()` only initialized
        `_config.mcp.servers` (the `[mcp].servers` block from `config.toml`) — it never read the DB
@@ -90,10 +90,17 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
         server logs `Connected to MCP server: live-srv` and deleting it logs `Disconnected MCP
         server: live-srv`, no restart. Tests: `TestMCPClientReload`, `TestLSPClientReload`,
         `TestReloadWiring`. Config.toml servers are unaffected throughout.
-      - **Still open:** an explicit "reload connections" button in the Admin UI (currently you must
-        edit/delete a server, or restart, to trigger a full re-sync) and moving the reload off the
-        request path so editing many servers at once doesn't hold the HTTP request open during
-        reconnect.
+       - **Done (admin UI + off-request-path):** a **Reload connections** button now sits in the MCP
+         and LSP section toolbars (`admin.html` `#mcp-reload` / `#lsp-reload`) and calls the new
+         awaited endpoints `POST /api/mcp/reload` (returns `{ok, reconnected:[...]}`) and
+         `POST /api/lsp/reload` (`{ok:true}`), wired in `admin.js` with a status toast. The
+         create/update/delete routes no longer await the reconcile — they hand it to
+         `server.spawn_reload()`, which runs it as a background `asyncio` task (retained in
+         `_reload_tasks` until done, errors logged) so batch edits never hold the HTTP response open
+         during reconnect. Verified in-container: `/api/mcp/reload` and `/api/lsp/reload` return 200,
+         both buttons ship in served `admin.html`, and a POST to an unreachable server returns 200 in
+         ~5ms (the failed reconnect is logged in the background, not on the request path). Tests:
+         `TestReloadEndpoints`, plus `TestReloadWiring` drained via `_flush_reloads()`.
 
 - **Cosmetic — hide/show left menu toggle.** ✅ Done. Both the chat sidebar (`index.html`) and the
   admin sidebar (`admin.html`) now have a show/hide toggle. A chevron **collapse** button lives in

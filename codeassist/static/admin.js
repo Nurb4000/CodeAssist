@@ -598,6 +598,21 @@ document.getElementById('custom-reload').onclick = async () => {
         await loadCustomTools();
     } catch (e) { setStatus(e.message, true); }
 };
+document.getElementById('mcp-reload').onclick = async () => {
+    try {
+        const res = await api('POST', '/api/mcp/reload');
+        const n = (res.reconnected || []).length;
+        setStatus(n ? `Reconnected ${n} MCP server(s)` : 'MCP connections up to date');
+        await loadMcp();
+    } catch (e) { setStatus(e.message, true); }
+};
+document.getElementById('lsp-reload').onclick = async () => {
+    try {
+        await api('POST', '/api/lsp/reload');
+        setStatus('LSP connections re-synced');
+        await loadLsp();
+    } catch (e) { setStatus(e.message, true); }
+};
 
 bindSettingsActions();
 

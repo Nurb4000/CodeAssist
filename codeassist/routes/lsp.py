@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/lsp/servers", tags=["lsp"])
+reload_router = APIRouter(prefix="/api/lsp", tags=["lsp"])
 
 
 @router.get("")
@@ -25,12 +26,10 @@ async def create_lsp_server(body: dict):
         args=body.get("args", []),
         languages=body.get("languages", []),
     )
-    from ..server import reload_lsp_servers
+    from ..server import spawn_reload, reload_lsp_servers
 
-    try:
-        await reload_lsp_servers()
-    except Exception as e:  # pragma: no cover - never fail the edit on reload error
-        log.error("Failed to reload LSP servers after create: %s", e)
+    # Reconcile live connections off the request path (batch edits stay snappy).
+    spawn_reload(reload_lsp_servers())
     return {"id": server.id}
 
 
@@ -50,12 +49,9 @@ async def update_lsp_server(server_id: str, body: dict):
     enabled = body.get("enabled")
     if enabled is not None:
         await server.set_enabled(bool(enabled))
-    from ..server import reload_lsp_servers
+    from ..server import spawn_reload, reload_lsp_servers
 
-    try:
-        await reload_lsp_servers()
-    except Exception as e:  # pragma: no cover - never fail the edit on reload error
-        log.error("Failed to reload LSP servers after update: %s", e)
+    spawn_reload(reload_lsp_servers())
     return {"ok": True}
 
 
@@ -63,12 +59,22 @@ async def update_lsp_server(server_id: str, body: dict):
 async def delete_lsp_server(server_id: str):
     """Delete an LSP server by ID."""
     from codeassist.session import LSPServer
-    from ..server import reload_lsp_servers
+    from ..server import spawn_reload, reload_lsp_servers
 
     server = LSPServer(server_id)
     await server.delete()
+    spawn_reload(reload_lsp_servers())
+    return {"ok": True}
+
+
+@reload_router.post("/reload")
+async def reload_lsp_connections():
+    """Manually re-sync live LSP connections with the DB+config server set."""
+    from ..server import reload_lsp_servers
+
     try:
         await reload_lsp_servers()
-    except Exception as e:  # pragma: no cover - never fail the edit on reload error
-        log.error("Failed to reload LSP servers after delete: %s", e)
+    except Exception as e:  # pragma: no cover - defensive; reload logs internally
+        log.error("Failed to reload LSP servers: %s", e)
+        raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
     return {"ok": True}

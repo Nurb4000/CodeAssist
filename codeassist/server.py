@@ -204,6 +204,32 @@ async def reload_lsp_servers() -> None:
     await lsp_client.reload(specs, cfg.workspace)
 
 
+# Background reconcile tasks, retained until they finish so the event loop
+# doesn't garbage-collect them mid-flight (which would raise "coroutine never
+# awaited"). Tasks remove themselves via the done callback.
+_reload_tasks: "set[asyncio.Task]" = set()
+
+
+def spawn_reload(coro):
+    """Schedule a reconcile coroutine to run off the request path.
+
+    The admin create/update/delete routes use this so editing many servers at
+    once doesn't hold the HTTP response open while connections reconnect. Any
+    error is logged inside the wrapper; callers get no return value.
+    """
+
+    async def _run():
+        try:
+            await coro
+        except Exception:  # pragma: no cover - reload_* helpers log internally
+            log.exception("Background MCP/LSP reload failed")
+
+    task = asyncio.create_task(_run())
+    _reload_tasks.add(task)
+    task.add_done_callback(_reload_tasks.discard)
+    return task
+
+
 async def _init_subsystems(cfg: Config):
     """Initialize all subsystems with the given config."""
     global mcp_client, skill_registry, plugin_registry, tools, trust_registry, lsp_client
