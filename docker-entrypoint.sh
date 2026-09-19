@@ -4,6 +4,15 @@
 CONFIG_FILE="/app/config.toml"
 DEFAULT_PORT=8090
 
+# Fail fast with a clear message when config.toml is missing. It's gitignored
+# and must be copied from config.docker.toml / config.example.toml; without it
+# the server starts, then later fails with a confusing mount/port error.
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: config file not found at $CONFIG_FILE" >&2
+    echo "Copy config.docker.toml (or config.example.toml) to config.toml, set your values, and restart." >&2
+    exit 1
+fi
+
 # Try to extract port from config.toml
 if [ -f "$CONFIG_FILE" ]; then
     # Look for port in [server] section
