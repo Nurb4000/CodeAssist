@@ -27,6 +27,7 @@
             </div>
             <div id="session-list">
                 <nav class="admin-nav">
+                    <a href="#health" class="kb-link">Health</a>
                     <a href="#skills" class="kb-link">Skills</a>
                     <a href="#mcp" class="kb-link">MCP servers</a>
                     <a href="#lsp" class="kb-link">LSP servers</a>
@@ -41,6 +42,14 @@
             </div>
         </aside>
         <main id="chat-area" style="overflow:auto;padding:20px;">
+            <h2 id="health">Health</h2>
+            <div class="admin-toolbar">
+                <button class="admin-btn" id="health-refresh">Refresh</button>
+            </div>
+            <table class="admin-table">
+                <tbody id="health-body"></tbody>
+            </table>
+
             <h2 id="skills">Skills</h2>
             <div class="admin-toolbar">
                 <button class="admin-btn" id="skills-reload">Reload skills from disk</button>

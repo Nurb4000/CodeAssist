@@ -13,6 +13,7 @@ import codeassist.server as server
 REST_ENDPOINTS_GET = [
     "/health",
     "/api/config",
+    "/api/status",
     "/api/todos",
     "/api/sessions",
     "/api/sessions/search/tags?tags=wip",
@@ -51,6 +52,31 @@ def test_health(live_client):
     r = live_client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+def test_api_status_shape(live_client):
+    r = live_client.get("/api/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert "codeassist" in body["db_path"] and body["db_path"].endswith(".db")
+    assert isinstance(body["db_size_bytes"], int) and body["db_size_bytes"] >= 0
+    assert body["db_size_human"]
+    assert isinstance(body["restart_needed"], bool)
+
+
+def test_api_status_restart_flag(live_client):
+    # No overrides yet -> nothing needs a restart.
+    assert live_client.get("/api/status").json()["restart_needed"] is False
+
+    # A restart-required override flips the flag on…
+    r = live_client.put("/api/settings", json={"server.port": 9101})
+    assert r.status_code == 200
+    assert live_client.get("/api/status").json()["restart_needed"] is True
+
+    # …and back off once it's removed.
+    r = live_client.delete("/api/settings/server.port")
+    assert r.status_code == 200
+    assert live_client.get("/api/status").json()["restart_needed"] is False
 
 
 def test_static_admin_page_served(live_client):
