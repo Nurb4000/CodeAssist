@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hmac
+import json
 import logging
 import logging.config
 from contextlib import asynccontextmanager
@@ -155,9 +156,43 @@ async def _init_subsystems(cfg: Config):
 async def init_agents():
     await agent_manager.initialize()
 
+async def _merged_mcp_servers(cfg: Config) -> dict:
+    """MCP server registry passed to the client at boot.
+
+    Combines ``[mcp].servers`` from config.toml with admin-managed servers
+    stored in the DB (enabled=1). config.toml takes precedence on a name
+    collision; a malformed DB config JSON is skipped with a warning rather
+    than failing startup.
+    """
+    merged: dict = {}
+    toml_servers = getattr(cfg.mcp, "servers", None) or {}
+    for name, srv in toml_servers.items():
+        merged[name] = srv
+
+    from codeassist.session import MCPServer
+
+    try:
+        db_rows = await MCPServer.list_all()
+    except Exception as e:  # pragma: no cover - DB unavailable at boot
+        log.warning("Could not read MCP servers from DB: %s", e)
+        db_rows = []
+
+    for row in db_rows:
+        name = row["name"]
+        if name in merged:
+            continue
+        try:
+            merged[name] = json.loads(row["config"])
+        except Exception as e:
+            log.warning("Skipping MCP server '%s': invalid config JSON (%s)", name, e)
+    return merged
+
+
 async def init_mcp():
-    if mcp_client and _config and _config.mcp.servers:
-        await mcp_client.initialize(_config.mcp.servers)
+    if mcp_client is None or _config is None:
+        return
+    servers = await _merged_mcp_servers(_config)
+    await mcp_client.initialize(servers)
 
 async def init_skills():
     if skill_registry:
