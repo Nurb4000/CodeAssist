@@ -15,7 +15,36 @@ CodeAssist is designed to run on your development machine, not a remote server. 
 
 > **Always specify your project folder.** CodeAssist operates on whatever directory you give it. Running it without `--workspace` defaults to the current directory, which may not be what you intended. Get in the habit of always pointing it at the project you want to work on.
 
-### With conda (recommended)
+### With Docker (recommended)
+
+Docker is the recommended way to run CodeAssist. It isolates the agent's shell, file edits, and tool
+execution inside a container, which is more secure and lowers the risk of impact on your local host.
+Your project directory is still mounted for full access.
+
+```bash
+# Copy the Docker example config
+cp config.docker.toml config.toml
+# Edit config.toml -- add your API key or llama.cpp server URL
+
+# Build and start -- always point WORKSPACE at your project
+WORKSPACE=~/Projects/myapp docker compose up --build
+```
+
+The server starts at `http://localhost:8090`. Session history persists across restarts via a Docker volume.
+
+**Port configuration:** The container reads the port from `config.toml` (default: 8090). This avoids conflicts with common tools like Portainer (which uses 8000). To use a different port, edit it in `config.toml` or override with environment variables:
+
+```bash
+HOST_PORT=9000 SERVER_PORT=9000 docker compose up --build
+```
+
+Environment variable overrides:
+
+- `CODEASSIST_WORKSPACE` -- override the workspace path inside the container
+- `HOST_PORT` -- host port to expose (default: 8090)
+- `SERVER_PORT` -- container port (must match config.toml)
+
+### With conda (local development)
 
 ```bash
 # Create environment
@@ -34,7 +63,7 @@ cp config.example.toml config.toml
 codeassist --workspace ~/Projects/myapp
 ```
 
-### With venv
+### With venv (local development)
 
 ```bash
 python -m venv .venv
@@ -55,35 +84,6 @@ codeassist --workspace ~/Projects/myapp
 python -m codeassist --workspace ~/Projects/myapp
 ```
 
-### With Docker
-
-Isolates the runtime in a container while mounting your project directory for full access.
-
-```bash
-# Copy the Docker example config
-cp config.docker.toml config.toml
-# Edit config.toml -- add your API key
-
-# Build and start -- always point WORKSPACE at your project
-WORKSPACE=~/Projects/myapp docker compose up --build
-```
-
-The server starts at `http://localhost:8090`. Session history persists across restarts via a Docker volume.
-
-**Port configuration:** The container reads the port from `config.toml` (default: 8090). This avoids conflicts with common tools like Portainer (which uses 8000).
-
-To use a different port:
-```bash
-# Option 1: Edit port in config.toml
-# Option 2: Use environment variables
-HOST_PORT=9000 SERVER_PORT=9000 docker compose up --build
-```
-
-Environment variable overrides:
-- `CODEASSIST_WORKSPACE` -- override the workspace path inside the container
-- `HOST_PORT` -- host port to expose (default: 8090)
-- `SERVER_PORT` -- container port (must match config.toml)
-
 ## Important: How CodeAssist Works
 
 CodeAssist is an **agentic** tool. Once you give it a prompt, it can:
@@ -97,7 +97,7 @@ It will ask for confirmation before making changes or running commands, but **yo
 - **Always use `--workspace`** to scope it to the project you are working on
 - **Never point it at your home directory** or any directory more broad than necessary
 - **Review the confirmation dialogs** before approving operations, especially shell commands
-- **Use Docker** if you want an additional isolation layer between the agent and your system
+- **Run in Docker** for a full isolation layer between the agent and your system (the recommended setup)
 
 ## Configuration
 
