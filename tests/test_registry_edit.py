@@ -185,3 +185,120 @@ class TestMergedMCPServers:
         merged = await server._merged_mcp_servers(cfg)
         assert "broken" not in merged  # skipped, startup did not raise
         assert merged == {}
+
+
+# --- Boot-time merge: LSP specs (config.toml + DB) --------------------------
+
+class TestMergedLSPSpecs:
+    @pytest.mark.asyncio
+    async def test_combines_toml_and_db_servers(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.lsp.servers = {"toml_srv": {"command": "toml-lsp", "args": ["--toml"], "languages": ["yaml"]}}
+        await LSPServer.create("db_srv", "db-lsp", ["--db"], ["python"])
+
+        specs = await server._merged_lsp_specs(cfg)
+        assert set(specs) == {"toml_srv", "db_srv"}
+        assert specs["db_srv"] == {"command": "db-lsp", "args": ["--db"], "languages": ["python"]}
+
+    @pytest.mark.asyncio
+    async def test_toml_wins_on_name_collision(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.lsp.servers = {"shared": {"command": "toml-lsp", "args": [], "languages": ["json"]}}
+        await LSPServer.create("shared", "db-lsp", [], ["py"])
+
+        specs = await server._merged_lsp_specs(cfg)
+        assert specs["shared"]["command"] == "toml-lsp"
+
+    @pytest.mark.asyncio
+    async def test_skips_malformed_db_args(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.lsp.servers = {}
+        await LSPServer.create("broken", "cmd", ["--ok"], ["py"])
+        import codeassist.session as session_mod
+
+        async with session_mod.get_db() as db:
+            await db.execute(
+                "UPDATE lsp_servers SET args = 'not-json' WHERE name = 'broken'",
+            )
+
+        specs = await server._merged_lsp_specs(cfg)
+        assert "broken" not in specs
+        assert specs == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_when_nothing_configured(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.lsp.servers = {}
+        specs = await server._merged_lsp_specs(cfg)
+        assert specs == {}
+
+
+class TestStartLSPServers:
+    @pytest.mark.asyncio
+    async def test_starts_toml_and_db_servers(self):
+        await init_db()
+        from codeassist.session import LSPServer
+
+        cfg = server.get_config()
+        cfg.lsp.enabled = True
+        cfg.lsp.servers = {"toml_srv": {"command": "toml-lsp", "args": [], "languages": ["yaml"]}}
+        await LSPServer.create("db_srv", "db-lsp", ["--db"], ["python"])
+
+        started = []
+
+        class FakeClient:
+            async def start_server(self, **kwargs):
+                started.append(kwargs)
+
+        await server._start_lsp_servers(cfg, FakeClient())
+        names = {s["name"] for s in started}
+        assert names == {"toml_srv", "db_srv"}
+        db_spec = next(s for s in started if s["name"] == "db_srv")
+        assert db_spec["command"] == "db-lsp" and db_spec["args"] == ["--db"]
+
+    @pytest.mark.asyncio
+    async def test_noop_when_disabled(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.lsp.enabled = False
+        started = []
+
+        class FakeClient:
+            async def start_server(self, **kwargs):
+                started.append(kwargs)
+
+        await server._start_lsp_servers(cfg, FakeClient())
+        assert started == []
+
+    @pytest.mark.asyncio
+    async def test_bad_server_does_not_abort_loop(self):
+        await init_db()
+        cfg = server.get_config()
+        cfg.lsp.enabled = True
+        cfg.lsp.servers = {"good": {"command": "ok", "args": [], "languages": []}}
+
+        class FailingClient:
+            async def start_server(self, **kwargs):
+                if kwargs["name"] == "bad":
+                    raise RuntimeError("boom")
+                # 'good' starts first (toml precedence order), then 'bad' fails
+
+        # Register a bad DB server so the loop hits the failing path.
+        from codeassist.session import LSPServer
+
+        await LSPServer.create("bad", "nope", ["x"], ["py"])
+        started = []
+
+        class RecordingClient:
+            async def start_server(self, **kwargs):
+                started.append(kwargs["name"])
+                if kwargs["name"] == "bad":
+                    raise RuntimeError("boom")
+
+        await server._start_lsp_servers(cfg, RecordingClient())
+        # 'good' was attempted before 'bad' raised; loop continued past the error.
+        assert "good" in started

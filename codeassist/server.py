@@ -126,6 +126,63 @@ lsp_client: "LSPClient | None" = None
 _active_websockets: set[WebSocket] = set()
 
 
+async def _merged_lsp_specs(cfg: Config) -> dict:
+    """LSP server specs (name -> {command, args, languages}) from config.toml
+    plus admin-managed DB servers (enabled=1). config.toml wins on a name
+    collision; a malformed DB row is skipped with a warning rather than
+    failing startup."""
+    specs: dict = {}
+    toml_servers = getattr(cfg.lsp, "servers", None) or {}
+    for name, scfg in toml_servers.items():
+        specs[name] = {
+            "command": scfg.get("command", ""),
+            "args": scfg.get("args", []),
+            "languages": scfg.get("languages", []),
+        }
+
+    from codeassist.session import LSPServer
+
+    try:
+        db_rows = await LSPServer.list_all()
+    except Exception as e:  # pragma: no cover - DB unavailable at boot
+        log.warning("Could not read LSP servers from DB: %s", e)
+        db_rows = []
+
+    for row in db_rows:
+        name = row["name"]
+        if name in specs:
+            continue
+        try:
+            args = json.loads(row["args"])
+            languages = json.loads(row["languages"])
+        except Exception as e:
+            log.warning("Skipping LSP server '%s': invalid args/languages JSON (%s)", name, e)
+            continue
+        specs[name] = {"command": row["command"], "args": args, "languages": languages}
+    return specs
+
+
+async def _start_lsp_servers(cfg: Config, lsp_client) -> None:
+    """Start config.toml LSP servers plus admin-managed DB servers (enabled=1).
+
+    Each start is guarded so a single bad DB row logs an error instead of
+    aborting boot. No-op when LSP is disabled.
+    """
+    if not cfg.lsp.enabled:
+        return
+    for name, spec in (await _merged_lsp_specs(cfg)).items():
+        try:
+            await lsp_client.start_server(
+                name=name,
+                command=spec["command"],
+                args=spec["args"],
+                languages=spec["languages"],
+                workspace=cfg.workspace,
+            )
+        except Exception as e:
+            log.error("Failed to start LSP server '%s': %s", name, e)
+
+
 async def _init_subsystems(cfg: Config):
     """Initialize all subsystems with the given config."""
     global mcp_client, skill_registry, plugin_registry, tools, trust_registry, lsp_client
@@ -140,15 +197,7 @@ async def _init_subsystems(cfg: Config):
     # Initialize LSP client
     from .lsp_client import LSPClient
     lsp_client = LSPClient()
-    if cfg.lsp.enabled and cfg.lsp.servers:
-        for server_name, server_cfg in cfg.lsp.servers.items():
-            await lsp_client.start_server(
-                name=server_name,
-                command=server_cfg.get("command", ""),
-                args=server_cfg.get("args", []),
-                languages=server_cfg.get("languages", []),
-                workspace=cfg.workspace,
-            )
+    await _start_lsp_servers(cfg, lsp_client)
 
     tools = create_registry(cfg.workspace, cfg.tools, mcp_client, skill_registry, plugin_registry, lsp_client)
 
