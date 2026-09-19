@@ -61,24 +61,27 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
       endpoints + inline edit modals on `admin.html`; `MCPServer`/`LSPServer` gained `update()` and
       `set_enabled()` in `session.py`, and `AgentManager.update_agent` persists in-memory + DB.
       Skills/plugins/custom-tools remain disk-registry-backed (see below).
-     - **GAP — DB MCP/LSP servers are not loaded into the running client.** PARTIALLY DONE (MCP).
-       The admin page stores servers in the DB (`mcp_servers` / `lsp_servers`, `session.py`) and the
+     - **GAP — DB MCP/LSP servers are not loaded into the running client.** BOOT-LOAD DONE; live
+       reload still open. The admin page stores servers in the DB (`mcp_servers` / `lsp_servers`,
+       `session.py`) and the
        edit endpoints persist there, but at boot `server.py::init_mcp()` only initialized
        `_config.mcp.servers` (the `[mcp].servers` block from `config.toml`) — it never read the DB
        rows into the live `mcp_client`.
-       - **Done (MCP):** `server.py::_merged_mcp_servers()` now unions config.toml servers with
-         admin-managed DB servers (`enabled=1`, `MCPServer.list_all()`) before
-         `mcp_client.initialize()`; config.toml wins on a name collision and a malformed DB config
-         JSON is skipped with a warning instead of failing startup. `init_mcp()` returns early when
-         MCP is disabled (`mcp_client is None`), so no DB read when unused. Verified in-container:
-         a seeded `db-srv` row logs `Connected to MCP server: db-srv`; an empty DB starts cleanly
-         with no merge errors. Tests: `tests/test_registry_edit.py::TestMergedMCPServers`.
-       - **Still open (LSP + live reload):** LSP still reads only `cfg.lsp.servers` at boot
-         (`_init_subsystems`), so admin-managed DB LSP servers remain inert — same fix needed via
-         `LSPServer.list_all()` → `lsp_client.start_server(...)`. And even for MCP, the `enabled`
-         toggle and edit endpoints only affect the DB today; a live reload that re-runs
-         `initialize()`/`start_server()` on an admin edit (so changes take effect without a server
-         restart) is not wired. Config.toml servers are unaffected throughout.
+     - **Done (boot-load, MCP + LSP):** admin-managed DB servers now load into the running client at
+       boot. `server.py::_merged_mcp_servers()` unions config.toml MCP servers with DB-enabled
+       servers (`enabled=1`, `MCPServer.list_all()`) before `mcp_client.initialize()`;
+       `_start_lsp_servers()` does the same for LSP via `_merged_lsp_specs()` +
+       `LSPServer.list_all()` → `lsp_client.start_server(...)`. config.toml wins on name collision;
+       malformed DB rows (bad JSON, or an LSP command that won't launch) are skipped/logged with the
+       per-server guard so one bad row can't abort boot. `init_mcp()` returns early when MCP is
+       disabled; `_start_lsp_servers()` no-ops when LSP is disabled — so no DB read when a subsystem
+       is off. Verified in-container: a seeded MCP `db-srv` logs `Connected to MCP server: db-srv`
+       and a seeded LSP `db-lsp` logs `Started LSP server: db-lsp`; empty DBs start cleanly. Tests:
+       `tests/test_registry_edit.py::TestMergedMCPServers`, `::TestMergedLSPSpecs`,
+       `::TestStartLSPServers`.
+     - **Still open (live reload):** the `enabled` toggle and edit endpoints only touch the DB today;
+       a live reload that re-runs `initialize()`/`start_server()` on an admin edit (so changes take
+       effect without a server restart) is not wired. Config.toml servers are unaffected throughout.
 
 - **Cosmetic — hide/show left menu toggle.** Both the chat sidebar (`index.html`) and the admin
   sidebar (`admin.html`) have a persistent left nav with no way to gain horizontal room. Add a
