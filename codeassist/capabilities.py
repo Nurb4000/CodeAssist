@@ -6,8 +6,10 @@ Probes the backend's /v1/models endpoint once per minute (fail-closed) for:
   - context window size (only when the backend exposes metadata)
 
 A manual override always wins; auto-detected values are only used when the
-override is unset.  Unknown/unreachable backends → fail-closed (no vision,
-no model auto-detect, default context window).
+override is unset.  Unreachable/unknown backends fail closed (no vision, no
+model auto-detect) but are retried on a short 5s window rather than cached
+for a full minute — so a backend that comes online after startup (or a
+base_url still loading at boot) self-heals instead of staying blind.
 """
 import logging
 import time
@@ -19,6 +21,10 @@ log = logging.getLogger(__name__)
 VISION_KEYS = ("vision", "multimodal", "image")
 
 CACHE_TTL = 60.0
+# Short window used when a backend *couldn't* be probed (base_url not yet
+# loaded at startup, transient network error). Lets detection self-heal once
+# the backend comes online instead of caching "no vision" for a full minute.
+RETRY_TTL = 5.0
 PROBE_TIMEOUT = 3.0
 
 
@@ -30,10 +36,23 @@ _cache: dict = {"expires": 0.0, "info": _default_info()}
 
 
 def _parse_vision(model_data: dict) -> bool:
-    """Return True if the model dict advertises vision support."""
-    caps = model_data.get("capabilities") or model_data.get("meta") or {}
-    if isinstance(caps, dict):
-        return any(caps.get(k) for k in VISION_KEYS)
+    """Return True if the model dict advertises vision support.
+
+    Handles several backend shapes:
+      - flat top-level flags (llama.cpp): ``{"vision": True}``
+      - nested ``capabilities``/``meta`` dicts (OpenAI-style):
+        ``{"capabilities": {"vision": True}}``
+      - a ``capabilities`` *list* of strings (FalconLLM / llama.cpp servers):
+        ``{"capabilities": ["completion", "multimodal"]}``
+    """
+    for src in (model_data.get("capabilities"), model_data.get("meta"), model_data):
+        if isinstance(src, dict):
+            if any(src.get(k) for k in VISION_KEYS):
+                return True
+        elif isinstance(src, list):
+            lowered = [str(c).lower() for c in src]
+            if any(k in lowered for k in VISION_KEYS):
+                return True
     return False
 
 
@@ -56,12 +75,18 @@ def _parse_ctx_len(model_data: dict, top_level: dict) -> int | None:
     return None
 
 
-async def _probe_backend(cfg) -> dict:
-    """Fetch /v1/models and extract vision, model name, context window."""
+async def _probe_backend(cfg) -> dict | None:
+    """Fetch /v1/models and extract vision, model name, context window.
+
+    Returns ``None`` when the backend could *not* be probed (no/invalid
+    base_url, network error, or unparseable response) so the caller can retry
+    soon instead of caching a misleading "no vision" result. A real response
+    always yields a dict (vision may legitimately be False).
+    """
     result = _default_info()
     base = (cfg.llm.base_url or "").strip().rstrip("/")
     if not base or not base.startswith(("http://", "https://")):
-        return result
+        return None
     try:
         headers = {}
         if cfg.llm.api_key:
@@ -72,26 +97,37 @@ async def _probe_backend(cfg) -> dict:
             data = resp.json()
     except Exception as exc:
         log.debug("Backend probe failed: %s", exc)
-        return result
+        return None
     if not isinstance(data, dict):
-        return result
+        return None
     top_level = data
-    models = [m for m in (data.get("data") or []) if isinstance(m, dict)]
-    if not models:
-        # Some servers put top-level vision/context flags directly.
-        result["vision"] = any(top_level.get(k) is True for k in VISION_KEYS)
-        result["context_window"] = _parse_ctx_len({}, top_level)
-        return result
+    # OpenAI-style servers expose models under ``data``; FalconLLM / some
+    # llama.cpp servers use a separate top-level ``models`` array whose items
+    # carry a ``capabilities`` *list* (e.g. ["completion", "multimodal"]).
+    data_models = [m for m in (data.get("data") or []) if isinstance(m, dict)]
+    native_models = [m for m in (data.get("models") or []) if isinstance(m, dict)]
+    candidate_models = data_models + native_models
+    if not candidate_models:
+        # No model entries in the response. Some servers put top-level
+        # vision/context flags directly; honor those as definitive. But an
+        # empty payload is usually a transient/warmup/error response from the
+        # backend — don't cache it as a definitive "no vision" (which would
+        # blind image uploads for a full minute). Return None to retry soon.
+        if any(top_level.get(k) is True for k in VISION_KEYS):
+            result["vision"] = True
+            return result
+        return None
     # Vision: any model with vision → whole endpoint is vision-capable.
-    result["vision"] = any(_parse_vision(m) for m in models)
-    # Model name: use the single model id if exactly one model is served,
-    # or fall back to the configured model (explicit config wins later).
-    if len(models) == 1:
-        mid = models[0].get("id", "")
+    result["vision"] = any(_parse_vision(m) for m in candidate_models)
+    # Model name: prefer the OpenAI-style ``data`` id, fall back to the native
+    # ``models`` name/model field; use it only when a single model is served.
+    primary = data_models or native_models
+    if len(primary) == 1:
+        mid = primary[0].get("id") or primary[0].get("name") or primary[0].get("model")
         if mid:
             result["model"] = mid
     # Context window: take the first available from any model.
-    for m in models:
+    for m in candidate_models:
         ctx = _parse_ctx_len(m, top_level)
         if ctx is not None:
             result["context_window"] = ctx
@@ -101,8 +137,15 @@ async def _probe_backend(cfg) -> dict:
 
 async def _refresh(cfg) -> dict:
     info = await _probe_backend(cfg)
+    if info is None:
+        # Couldn't probe the backend (e.g. base_url not loaded yet). Cache a
+        # neutral result with a short TTL so we retry soon rather than
+        # poisoning the cache with a definitive "no vision" for 60s.
+        info = _default_info()
+        _cache["expires"] = time.monotonic() + RETRY_TTL
+    else:
+        _cache["expires"] = time.monotonic() + CACHE_TTL
     _cache["info"] = info
-    _cache["expires"] = time.monotonic() + CACHE_TTL
     return info
 
 
