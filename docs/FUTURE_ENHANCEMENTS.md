@@ -56,11 +56,23 @@ plugins, custom tools, agents) with a sidebar nav of plain anchor links. Nice-to
     plugins, custom tools and their toggles need equivalent routes);
    - remove/disable for skills, plugins, and custom tools (with a delete confirmation), so admins
      aren't limited to "reload from disk" / read-only tables.
-   - **Edit/remove wiring status:** MCP (`PUT /api/mcp/servers/{id}`), LSP
-     (`PUT /api/lsp/servers/{id}`) and custom agents (`PATCH /api/agents/{id}`) now have edit
-     endpoints + inline edit modals on `admin.html`; `MCPServer`/`LSPServer` gained `update()` and
-     `set_enabled()` in `session.py`, and `AgentManager.update_agent` persists in-memory + DB.
-     Skills/plugins/custom-tools remain disk-registry-backed (see below).
+    - **Edit/remove wiring status:** MCP (`PUT /api/mcp/servers/{id}`), LSP
+      (`PUT /api/lsp/servers/{id}`) and custom agents (`PATCH /api/agents/{id}`) now have edit
+      endpoints + inline edit modals on `admin.html`; `MCPServer`/`LSPServer` gained `update()` and
+      `set_enabled()` in `session.py`, and `AgentManager.update_agent` persists in-memory + DB.
+      Skills/plugins/custom-tools remain disk-registry-backed (see below).
+    - **GAP — DB MCP/LSP servers are not loaded into the running client.** The admin page stores
+      MCP/LSP servers in the DB (`mcp_servers` / `lsp_servers` tables, `session.py`) and the edit
+      endpoints persist there, but at boot `server.py::init_mcp()` only initializes
+      `_config.mcp.servers` (the `[mcp].servers` block from `config.toml`) — it never reads the DB
+      rows into the live `mcp_client`. Same for LSP (`init_plugins`/`lsp_client` come from
+      `config.toml`). So servers created/edited through the admin are durable in the DB but have no
+      effect on a running instance until the server restarts *and* the DB is wired into init. To make
+      them live without a restart you'd need to (a) load DB servers at boot alongside the config
+      servers, and (b) call `mcp_client.initialize()` / rebuild the LSP client when an admin edit
+      adds or changes a server. The `enabled` toggle is therefore only a DB-level flag today — it
+      does not start/stop a live connection. (Config.toml servers are unaffected; this gap is
+      specific to the admin-managed DB registries.)
 
 - **Cosmetic — hide/show left menu toggle.** Both the chat sidebar (`index.html`) and the admin
   sidebar (`admin.html`) have a persistent left nav with no way to gain horizontal room. Add a
