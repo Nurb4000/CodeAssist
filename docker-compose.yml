@@ -17,6 +17,14 @@ services:
       # container recreation (not just in the container's writable layer)
       - CODEASSIST_DATA_DIR=/app/data
       - TZ=UTC
+    # /health returns 200 once the app is up. Targets the default port; set
+    # SERVER_PORT/config.toml [server] port to match if you override it.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
-volumes:
+    volumes:
   codeassist-data:

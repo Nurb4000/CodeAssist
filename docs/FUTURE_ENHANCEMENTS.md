@@ -275,25 +275,26 @@ above detection), plus any GUI-managed toggles to land with the in-app settings 
 
 ## MCP test server (dev tooling)
 
-- **Need a dummy/simple MCP server to exercise the MCP feature.** CodeAssist can manage MCP servers
-  (add/edit/delete/enabled toggle in the Admin page, `codeassist/routes/mcp.py`,
-  `codeassist/session.py::MCPServer`), but there is no trivial local server to test that path
-  against. Build a small one so the round-trip — Admin registers a server → CodeAssist connects over
-  stdio → agent calls its tools — can be verified without depending on a remote/third-party server.
-  - **Language: Python** (would be great), so it can grow into a more realistic demo later.
-  - **Surface:** a handful of stdio tools per the MCP spec (JSON-RPC 2.0 over `stdio`), e.g.
-    `echo`, `add`, and `current_time`; optionally one resource and one prompt to test those too.
-    Keep it dependency-light (stdlib only if possible) so it boots anywhere.
-  - **It is NOT part of the CodeAssist project.** Create it as its own standalone project (a sibling
-    directory or a separate repo) — don't add it under `codeassist/` — so it never bloats the main
-    codebase or ships in the image. It exists purely for local testing.
-  - **How it'll be used:** point CodeAssist's `[mcp] servers` config at it via a stdio command
-    (e.g. `python /path/to/mcp_test_server/main.py` with `args: ["--stdio"]`) and confirm the server
-    appears in Admin, toggles enabled/disabled, and its tools are callable in chat.
+- **Dummy MCP server for testing.** ✅ Implemented — see the sibling project
+  `Python-MCP-test-server` (outside the CodeAssist repo, so it never ships in the image). Stdlib-only
+  Python HTTP server speaking JSON-RPC 2.0; tools `echo`/`add`/`current_time` plus optional
+  `resources`/`prompts`, a `ping`, and `GET /health`. Run `python selftest.py` to verify the contract.
+  - **Transport is HTTP, not stdio.** CodeAssist's `MCPClient` (`codeassist/mcp_client.py`) connects
+    to servers via an HTTP `url` and POSTs JSON-RPC — there is no stdio path today. Configure it with
+    `[mcp.servers.test] url = "http://127.0.0.1:3001/mcp"`. (A stdio variant could be added later for
+    other MCP clients, but it isn't what CodeAssist talks to.)
+  - **Still open (future):** expand the tool set into a more realistic demo; verify the Admin page's
+    enabled/disabled toggle against this live server end to end.
 
 ## Docker / ops
 
-- Port `EXPOSE` already aligned to 8090; consider deriving `nginx`/reverse-proxy example.
-- Health-check in compose (`healthcheck:` calling `/health`).
-- `docker compose up` should fail with a clear message when `config.toml` is missing (it's now
-  correctly gitignored) instead of a confusing mount/port error.
+- Port `EXPOSE` already aligned to 8090; consider deriving `nginx`/reverse-proxy example. **[open]**
+- **Health-check in compose.** ✅ Done (`docker-compose.yml`): added a `healthcheck:` calling
+  `/health` (curl is in the slim image) with `interval 30s / retries 5 / start_period 15s`, so
+  `docker compose up` reports container health instead of silently waiting. Targets port 8090;
+  override `SERVER_PORT`/`[server] port` to match a custom port.
+- **Fail fast when `config.toml` is missing.** ✅ Done (`docker-entrypoint.sh`): the entrypoint now
+  prints a clear "config file not found … copy config.docker.toml" message and exits 1 instead of
+  starting uvicorn and later failing with a confusing mount/port error. Verified in-container
+  (exit 1 + message) and that the present-config path still extracts `[server] port` and proceeds.
+  Full suite green (459 passed); image builds.
