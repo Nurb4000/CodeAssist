@@ -13,3 +13,15 @@ config.toml~
 .pytest_cache/
 htmlcov/
 .codeassist/snapshot/
+
+# Internal-only planning / review / test-log docs. Kept on disk under .internal/
+# for local context but NEVER pushed to GitHub (contains internal refs, LAN IPs,
+# security context, and test counts). Functional docs stay in docs/.
+.internal/
+docs/FUTURE_ENHANCEMENTS.md
+docs/*_REVIEW*.md
+docs/DOCKER_TEST_LOG*.md
+docs/KB_REVIEW*.md
+
+# Local-only git tooling (guardrail hook); not shipped.
+hooks/
