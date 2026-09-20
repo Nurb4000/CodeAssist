@@ -352,6 +352,9 @@ async def kb_pii_scan():
 
     entries = await KnowledgeBase.search_knowledge(limit=10000)
     flagged = []
+    # entry_id -> set of PII types found, so we can flag the entry once and
+    # record every category detected (rather than overwriting per-type).
+    findings: dict[str, set[str]] = {}
 
     for entry in entries:
         content = entry.get("content", "") or ""
@@ -367,6 +370,13 @@ async def kb_pii_scan():
                     "matches": matches[:5],
                     "content_preview": content[:200],
                 })
+                findings.setdefault(entry_id, set()).add(pii_type)
+
+    # Close the loop between PII detection and the lifecycle state machine (F3):
+    # active entries containing PII/secrets become 'flagged', so they show up in
+    # the stats bar and are protected from automatic quality-pass archival.
+    if findings:
+        await KnowledgeBase.flag_entries_for_pii(findings)
 
     return {"flagged": flagged, "total_scanned": len(entries)}
 

@@ -952,6 +952,47 @@ class TestPII:
         assert "REDACTED EMAIL" in (entry.get("content") or "")
 
     @pytest.mark.asyncio
+    async def test_scan_flags_active_entry_and_protects_from_pass(self):
+        from codeassist.routes.kb_gui import kb_pii_scan
+
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="Contact alice@example.com for questions", confidence=0.9,
+        )
+
+        await kb_pii_scan()
+
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["status"] == "flagged"
+        # Detected PII categories are recorded in metadata (merged, not clobbered).
+        meta = json.loads(entry["metadata"])
+        assert "email" in meta.get("pii_found", [])
+
+        # A flagged entry must NOT be archived by the quality pass even though it
+        # runs; only 'active' rows are eligible for archival.
+        report = await KnowledgeBase.run_quality_pass(min_confidence=0.5, max_usage=0)
+        assert entry_id not in {c["id"] for c in report["candidates"]}
+
+    @pytest.mark.asyncio
+    async def test_flag_entries_for_pii_is_idempotent_and_merges(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="leak", confidence=0.9, metadata={"answer": "the reply"},
+        )
+
+        n1 = await KnowledgeBase.flag_entries_for_pii({entry_id: {"email"}})
+        n2 = await KnowledgeBase.flag_entries_for_pii({entry_id: {"ssn"}})
+        assert n1 == 1 and n2 == 0  # second scan is a no-op (already flagged)
+
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        meta = json.loads(entry["metadata"])
+        assert sorted(meta["pii_found"]) == ["email", "ssn"]
+        # Existing metadata (Q->A answer) is preserved, not clobbered.
+        assert meta["answer"] == "the reply"
+
+    @pytest.mark.asyncio
     async def test_redact_requires_entry_id(self):
         from codeassist.routes.kb_gui import kb_pii_redact
         resp = await kb_pii_redact({})

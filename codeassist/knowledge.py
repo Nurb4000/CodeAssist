@@ -431,6 +431,53 @@ class KnowledgeBase:
         return await KnowledgeBase.set_entry_status(entry_id, "flagged")
 
     @staticmethod
+    async def flag_entries_for_pii(findings: dict[str, set[str]]) -> int:
+        """Mark active entries that contain PII/secrets as ``flagged`` (F3 quality gate).
+
+        Closes the loop between PII detection and the lifecycle state machine:
+        flagged entries surface in the stats bar's "flagged" count and are
+        protected from automatic quality-pass archival (which only touches
+        ``active`` rows). Idempotent and status-guarded: only ``active`` entries
+        become ``flagged`` (never un-archives or disturbs review/archived rows),
+        and detected PII types are merged into metadata without clobbering
+        existing fields (e.g. Q->A answers). Returns the number of entries updated.
+        """
+        if not findings:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        updated = 0
+        async with get_db() as db:
+            for entry_id, pii_types in findings.items():
+                cursor = await db.execute(
+                    "SELECT metadata, status FROM knowledge_entries WHERE id = ?",
+                    (entry_id,),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    continue
+                meta = json.loads(row["metadata"]) if row["metadata"] else {}
+                existing = set(meta.get("pii_found", []))
+                new_types = pii_types - existing
+                status = row["status"]
+                # Flip active -> flagged; leave any other (review/archived) status
+                # untouched so we never un-archive or disturb a review in progress.
+                new_status = "flagged" if status == "active" else status
+                changed = bool(new_types) or new_status != status
+                if not changed:
+                    continue
+                if new_types:
+                    meta["pii_found"] = sorted(existing | new_types)
+                    meta["pii_flagged_at"] = now
+                await db.execute(
+                    "UPDATE knowledge_entries SET status=?, metadata=?, updated_at=? WHERE id=?",
+                    (new_status, json.dumps(meta), now, entry_id),
+                )
+                if new_status != status:
+                    updated += 1
+            await db.commit()
+        return updated
+
+    @staticmethod
     async def approve_entry(entry_id: str) -> bool:
         """Approve a reviewed entry, returning it to the active set."""
         return await KnowledgeBase.set_entry_status(entry_id, "active")
