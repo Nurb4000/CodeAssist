@@ -1,6 +1,6 @@
 FROM python:3.13-slim AS base
 
-# System dependencies
+# System dependencies. Minimal, non-recommends set for the app itself.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         gh \
@@ -8,6 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ripgrep \
         ca-certificates \
         curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Chromium powers the screenshot tool (headless Chrome via CDP). Installed with
+# recommends so every shared lib headless capture needs is present; the tool
+# launches it with --no-sandbox --disable-dev-shm-usage for root-in-container.
+RUN apt-get update && apt-get install -y \
+        chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies (installed separately for layer caching)
