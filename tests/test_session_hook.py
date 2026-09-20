@@ -445,6 +445,85 @@ class TestLLMSummary:
         summary = await KnowledgeBase.get_session_summary(session.id)
         assert summary is not None
 
+    @pytest.mark.asyncio
+    async def test_llm_missing_summary_key_still_creates_summary(self):
+        # LLM returns valid JSON but WITHOUT a "summary" key (F5). The session
+        # must still end up with a non-empty summary rather than KeyErrored.
+        mock_llm = MagicMock()
+
+        async def mock_stream(messages):
+            yield TextDelta(content='{"topics": ["python"], "goals": []}')
+
+        mock_llm.stream = mock_stream
+        hook = SessionHook(llm_client=mock_llm)
+        await init_db()
+        session = await Session.create("LLM Missing Summary")
+        await session.add_message("user", "Refactor the parser")
+
+        await hook.on_session_end(session)
+
+        summary = await KnowledgeBase.get_session_summary(session.id)
+        assert summary is not None
+        assert summary["summary"]  # normalized to a non-empty string
+
+    @pytest.mark.asyncio
+    async def test_llm_stream_raises_falls_back_to_simple(self):
+        # LLM stream raises mid-generation (F5). Must fall back to simple
+        # summary and still persist one.
+        mock_llm = MagicMock()
+
+        async def mock_stream(messages):
+            raise RuntimeError("llm exploded")
+
+        mock_llm.stream = mock_stream
+        hook = SessionHook(llm_client=mock_llm)
+        await init_db()
+        session = await Session.create("LLM Raised")
+        await session.add_message("user", "Fix the login bug")
+
+        # Must not raise.
+        await hook.on_session_end(session)
+
+        summary = await KnowledgeBase.get_session_summary(session.id)
+        assert summary is not None
+        assert summary["summary"]
+
+    @pytest.mark.asyncio
+    async def test_llm_empty_summary_fallback(self):
+        # LLM returns JSON with an empty/whitespace summary (F5).
+        mock_llm = MagicMock()
+
+        async def mock_stream(messages):
+            yield TextDelta(content='{"summary": "   ", "topics": [], "goals": []}')
+
+        mock_llm.stream = mock_stream
+        hook = SessionHook(llm_client=mock_llm)
+        await init_db()
+        session = await Session.create("LLM Empty Summary")
+        await session.add_message("user", "Quick question")
+
+        await hook.on_session_end(session)
+
+        summary = await KnowledgeBase.get_session_summary(session.id)
+        assert summary is not None
+        assert summary["summary"].strip()
+
+    def test_normalize_summary_data_various_inputs(self):
+        cases = [
+            None,
+            {},
+            {"summary": ""},
+            {"summary": "   "},
+            {"summary": 123, "topics": "nope"},
+            {"summary": "ok", "topics": ["a"], "goals": ["b"]},
+        ]
+        for i, case in enumerate(cases):
+            normalized = SessionHook._normalize_summary_data(case)
+            assert isinstance(normalized["summary"], str)
+            assert normalized["summary"].strip(), f"case {i} produced empty summary"
+            assert isinstance(normalized["topics"], list)
+            assert isinstance(normalized["goals"], list)
+
 
 class TestExtractorIsolation:
     @pytest.mark.asyncio

@@ -144,6 +144,10 @@ class SessionHook:
                     summary_data = await self._generate_llm_summary(session.id, messages, stats)
                 else:
                     summary_data = self._generate_simple_summary(messages, stats)
+
+                # Guarantee a valid, non-empty summary before storing (F5). The
+                # LLM can return JSON missing required keys or an empty summary.
+                summary_data = self._normalize_summary_data(summary_data)
                 
                 # Store session summary
                 await KnowledgeBase.create_session_summary(
@@ -282,7 +286,41 @@ class SessionHook:
             "tools_used": tools,
             "files_modified": files,
         }
-    
+
+    @staticmethod
+    def _normalize_summary_data(data: dict | None) -> dict:
+        """Coerce a summary payload into a guaranteed-valid shape (F5).
+
+        The LLM may return valid JSON that is missing ``summary`` (or has a
+        null/empty one). Callers must never KeyError or store an empty summary,
+        so fill in safe defaults here regardless of which path produced the
+        data (LLM or simple).
+        """
+        if not isinstance(data, dict):
+            data = {}
+        summary = data.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = "Session summary unavailable."
+        topics = data.get("topics")
+        if not isinstance(topics, list):
+            topics = []
+        goals = data.get("goals")
+        if not isinstance(goals, list):
+            goals = []
+        tools_used = data.get("tools_used")
+        if not isinstance(tools_used, list):
+            tools_used = []
+        files_modified = data.get("files_modified")
+        if not isinstance(files_modified, list):
+            files_modified = []
+        return {
+            "summary": summary[:1000],
+            "topics": list(topics),
+            "goals": list(goals),
+            "tools_used": list(tools_used),
+            "files_modified": list(files_modified),
+        }
+
     async def _generate_llm_summary(self, session_id: str, messages: list[dict], stats: dict) -> dict:
         """Generate summary using LLM."""
         try:
@@ -330,7 +368,13 @@ Provide a JSON response with:
             
         except Exception as e:
             log.warning("LLM summary generation failed, using simple summary: %s", e)
-            return self._generate_simple_summary(messages, stats)
+            try:
+                return self._generate_simple_summary(messages, stats)
+            except Exception:
+                # Recovery path itself failed; still guarantee a valid summary so
+                # the session never ends without one (F5).
+                log.exception("Simple-summary fallback also failed")
+                return {"summary": "Session summary unavailable.", "topics": [], "goals": []}
     
     def _calculate_quality_score(self, stats: dict) -> float:
         """Calculate a quality score for the session (0.0 - 1.0)."""

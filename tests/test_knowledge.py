@@ -351,6 +351,48 @@ class TestFullTextSearch:
         assert isinstance(results, list)
 
     @pytest.mark.asyncio
+    async def test_fts_triggers_keep_index_in_sync(self):
+        """FTS INSERT/UPDATE/DELETE triggers must keep knowledge_search in sync
+        with knowledge_entries (review: FTS trigger maintenance gap)."""
+        from codeassist.session import get_db
+
+        await init_db()
+
+        # Triggers exist after init.
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'knowledge_search_%'"
+            )
+            triggers = {r[0] for r in await cursor.fetchall()}
+        assert triggers == {"knowledge_search_ai", "knowledge_search_ad", "knowledge_search_au"}
+
+        # INSERT -> FTS gains exactly one row (via trigger, not populate).
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="trigger sync alpha"
+        )
+        async with get_db() as db:
+            cur = await db.execute("SELECT COUNT(*) FROM knowledge_search")
+            assert (await cur.fetchone())[0] == 1
+
+        # UPDATE -> FTS reflects the new content.
+        await KnowledgeBase.update_knowledge_entry(
+            entry_id, content="trigger sync beta omega"
+        )
+        async with get_db() as db:
+            cur = await db.execute(
+                "SELECT content FROM knowledge_search WHERE entry_id = ?", (entry_id,)
+            )
+            row = await cur.fetchone()
+        assert row is not None and "omega" in row["content"]
+
+        # DELETE -> FTS row removed.
+        await KnowledgeBase.delete_knowledge_entry(entry_id)
+        async with get_db() as db:
+            cur = await db.execute("SELECT COUNT(*) FROM knowledge_search")
+            assert (await cur.fetchone())[0] == 0
+
+    @pytest.mark.asyncio
     async def test_fulltext_search_by_type(self):
         await init_db()
         await KnowledgeBase.create_knowledge_entry(
