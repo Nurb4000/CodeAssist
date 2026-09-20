@@ -47,7 +47,13 @@ async def get_settings():
 async def update_settings(payload: dict):
     """Persist UI overrides. Restart-required keys are saved but not applied live."""
     from ..server import get_config
-    from ..settings import BY_KEY, coerce, settings_store
+    from ..settings import (
+        BY_KEY,
+        coerce,
+        settings_store,
+        validate_setting,
+        write_override,
+    )
 
     if not settings_store.is_loaded():
         await settings_store.load()
@@ -67,7 +73,14 @@ async def update_settings(payload: dict):
             coerced = coerce(value, spec["type"])
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail=f"Invalid value for {key}")
+        error = validate_setting(spec, coerced)
+        if error:
+            raise HTTPException(status_code=422, detail=error)
         await settings_store.set(key, coerced)
+        # Persist non-secret edits back to config.overrides.toml so they survive
+        # a data-dir reset. Secrets stay DB-only (never written to disk).
+        if not spec.get("secret"):
+            write_override(cfg, key, coerced)
         if spec.get("restart_required"):
             restart_required.append(key)
         else:
@@ -81,14 +94,32 @@ async def update_settings(payload: dict):
 async def delete_setting(key: str):
     """Remove a UI override, reverting to the config.toml (or default) value."""
     from ..server import get_config
-    from ..settings import BY_KEY, clear_override, settings_store
+    from ..settings import BY_KEY, clear_override, remove_override, settings_store
 
     if BY_KEY.get(key) is None:
         raise HTTPException(status_code=404, detail=f"Unknown setting: {key}")
     if not settings_store.is_loaded():
         await settings_store.load()
-    await clear_override(key, get_config())
+    cfg = get_config()
+    # Remove from the overrides file first so a fresh Config.load() inside
+    # clear_override doesn't re-merge the value we're deleting.
+    remove_override(cfg, key)
+    await clear_override(key, cfg)
     return {"ok": True, "key": key}
+
+
+@router.post("/api/settings/restart")
+async def request_restart():
+    """Re-initialize config-driven subsystems from the on-disk config.
+
+    Applies restart-required feature toggles (MCP/skills/plugins/LSP/git) live.
+    Server bind changes (host/port/password) still need a container/process
+    restart and are reported by the caller via ``/api/status``.
+    """
+    from ..server import reload_configured_subsystems
+
+    await reload_configured_subsystems()
+    return {"ok": True}
 
 
 @router.post("/api/config/test-connection")

@@ -314,6 +314,39 @@ async def reload_all_tools():
     log.info("Tools reloaded successfully")
 
 
+async def reload_configured_subsystems() -> None:
+    """Re-read config from disk and re-initialize config-driven subsystems.
+
+    Lets admin edits to restart-required *feature* toggles (MCP, skills,
+    plugins, LSP, git) take effect without a full process restart. Server bind
+    changes (host/port/password) still require a container/process restart, so
+    the caller reports those separately.
+    """
+    global mcp_client, skill_registry, plugin_registry, tools, trust_registry, lsp_client
+    cfg = get_config()
+    from .settings import apply_settings_overrides
+
+    await apply_settings_overrides(cfg)
+
+    # Release existing handles so ports/sockets are freed before re-binding.
+    try:
+        if lsp_client is not None:
+            await lsp_client.shutdown()
+    except Exception:  # pragma: no cover - defensive
+        log.exception("Error shutting down LSP client during reload")
+    try:
+        if mcp_client is not None:
+            await mcp_client.close()
+    except Exception:  # pragma: no cover - defensive
+        log.exception("Error closing MCP client during reload")
+
+    await _init_subsystems(cfg)
+    await init_skills()
+    await init_plugins()
+    await init_mcp()
+    log.info("Configured subsystems reloaded from updated config")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_config()

@@ -33,6 +33,26 @@ def clean_database(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_overrides_file():
+    """Remove config.overrides.toml from cwd around each test.
+
+    Settings edits write a sibling overrides file next to the loaded config.
+    Tests run from the repo root, so scrub it before/after every test to keep
+    UI edits from leaking across tests (and to never leave it in the tree).
+    """
+    overrides = Path.cwd() / "config.overrides.toml"
+    try:
+        overrides.unlink(missing_ok=True)
+    except OSError:
+        pass
+    yield
+    try:
+        overrides.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _reset_settings_store():
     """SettingsStore caches state across tests; reset before each run."""
     from codeassist import settings as settings_mod

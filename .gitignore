@@ -4,6 +4,7 @@ data/
 *.db
 .env
 config.toml
+config.overrides.toml
 *.toml~
 config.toml~
 *.egg-info/

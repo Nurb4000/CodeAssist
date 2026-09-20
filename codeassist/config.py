@@ -1,8 +1,11 @@
 import os
+import logging
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -112,6 +115,16 @@ class CompactionConfig:
     tool_result_max_tokens: int = 4000
 
 
+def _deep_merge(base: dict, override: Any) -> dict:
+    """Recursively merge ``override`` into ``base`` (mutates and returns base)."""
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 @dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -129,6 +142,14 @@ class Config:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
+    @property
+    def overrides_path(self) -> Path:
+        """Sibling ``config.overrides.toml`` holding UI-synced file-managed edits."""
+        src = getattr(self, "_source", None)
+        if src is None:
+            src = Path("config.toml").resolve()
+        return Path(src).parent / "config.overrides.toml"
+
     @classmethod
     def load(cls, path: str | Path = "config.toml") -> "Config":
         path = Path(path)
@@ -137,6 +158,18 @@ class Config:
 
         with open(path, "rb") as f:
             raw = tomllib.load(f)
+
+        # Merge UI-managed overrides (config.overrides.toml) on top of the base
+        # config. This file is written back by the settings API so edits survive
+        # a data-dir reset even when config.toml itself is mounted read-only
+        # (e.g. in Docker). A missing/invalid overrides file is non-fatal.
+        overrides_path = Path(path).resolve().parent / "config.overrides.toml"
+        if overrides_path.exists():
+            try:
+                with open(overrides_path, "rb") as of:
+                    raw = _deep_merge(raw, tomllib.load(of))
+            except Exception as e:  # pragma: no cover - malformed overrides file
+                log.warning("Ignoring unreadable overrides file %s: %s", overrides_path, e)
 
         llm_raw = raw.get("llm", {})
         params = llm_raw.pop("parameters", {})
@@ -229,6 +262,7 @@ class Config:
             config.server.host = os.environ["CODEASSIST_HOST"]
         if os.environ.get("CODEASSIST_PORT"):
             config.server.port = int(os.environ["CODEASSIST_PORT"])
+        config._source = Path(path).resolve()
         return config
 
 
