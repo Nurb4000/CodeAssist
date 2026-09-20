@@ -2,6 +2,7 @@
 Custom Tools Loader - Dynamic loading and management of custom tools.
 """
 
+import ast
 import importlib.util
 import json
 import logging
@@ -122,6 +123,80 @@ class CustomToolRegistry:
     
     def list_tools(self) -> list[dict]:
         return [tool.schema() for tool in self._tools.values()]
+
+    def _find_tool_file(self, name: str) -> "Path | None":
+        """Return the source file defining a custom tool by name, without
+        executing it.
+
+        Scans each ``*.py`` file with :mod:`ast` and matches ``name`` against the
+        keys of its top-level ``TOOLS`` dict. This lets admins remove tool files
+        even while they are still pending trust approval (i.e. not yet loaded).
+        """
+        if not self.tools_dir.exists():
+            return None
+        for tool_file in sorted(self.tools_dir.glob("*.py")):
+            if tool_file.name.startswith("_"):
+                continue
+            try:
+                tree = ast.parse(tool_file.read_text(encoding="utf-8"),
+                                 filename=str(tool_file))
+            except SyntaxError:
+                continue
+            for key in self._tool_names_from_tree(tree):
+                if key == name:
+                    return tool_file
+        return None
+
+    @staticmethod
+    def _tool_names_from_tree(tree: ast.AST) -> set[str]:
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "TOOLS":
+                        value = node.value
+                        if isinstance(value, ast.Dict):
+                            for k in value.keys:
+                                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                                    names.add(k.value)
+        return names
+
+    def remove_tool(self, name: str) -> "Path | None":
+        """Delete a custom tool's source file from the custom_tools directory.
+
+        Returns the removed file path, or None if the tool is unknown or its
+        source escapes the managed custom tools directory (path-traversal guard).
+        Trust-independent: locates the file via an AST scan so pending/untrusted
+        tools can still be removed.
+        """
+        candidate = self._find_tool_file(name)
+        if candidate is None:
+            return None
+        resolved = candidate.resolve()
+        root = self.tools_dir.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            return None
+        if not resolved.is_file():
+            return None
+        resolved.unlink()
+        # Drop from live in-memory registry too.
+        self._tools.pop(name, None)
+        self._modules.pop(f"custom_tool_{resolved.stem}", None)
+        return resolved
+        root = self.tools_dir.resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        if not candidate.is_file():
+            return None
+        candidate.unlink()
+        # Drop from live in-memory registry too.
+        self._tools.pop(name, None)
+        self._modules.pop(f"custom_tool_{candidate.stem}", None)
+        return candidate
     
     def reload(self):
         """Reload all custom tools."""

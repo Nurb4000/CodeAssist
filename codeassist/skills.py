@@ -160,6 +160,62 @@ class SkillRegistry:
         """Get a skill by slash command."""
         return self._slash_commands.get(command)
 
+    # --- disk edit / remove (admin-managed skills) ------------------------- #
+
+    def _resolve_skill_path(self, name: str) -> Path | None:
+        """Return the on-disk source path for a discovered skill, scoped to the
+        workspace. Returns None if the skill is unknown or its source escapes
+        the workspace (guards against path traversal via a crafted `source`)."""
+        import os
+
+        skill = self._skills.get(name)
+        if not skill or not skill.source:
+            return None
+        candidate = (self.workspace / skill.source).resolve()
+        workspace_root = self.workspace.resolve()
+        try:
+            candidate.relative_to(workspace_root)
+        except ValueError:
+            return None
+        if not candidate.is_file():
+            return None
+        return candidate
+
+    @staticmethod
+    def format_skill_file(name: str, description: str, content: str,
+                          slash_command: str | None = None) -> str:
+        """Render a skill markdown file (frontmatter + body) matching the
+        parser used by ``_parse_skill_file``."""
+        lines = ["---", f"name: {name}"]
+        if description:
+            # Quote to survive the simple ``key: value`` frontmatter parser.
+            lines.append(f'description: "{description.replace(chr(34), chr(92) + chr(34))}"')
+        if slash_command:
+            lines.append(f"slash: {slash_command}")
+        lines.append("---")
+        body = content.strip("\n")
+        return "\n".join(lines) + ("\n" if not body else "\n\n" + body) + "\n"
+
+    def update_skill(self, name: str, description: str = "", content: str = "",
+                     slash_command: str | None = None) -> Path | None:
+        """Rewrite a discovered skill's file in place. Returns the path, or None
+        if the skill is not backed by a discoverable workspace file."""
+        path = self._resolve_skill_path(name)
+        if path is None:
+            return None
+        path.write_text(self.format_skill_file(name, description, content, slash_command),
+                        encoding="utf-8")
+        return path
+
+    def remove_skill(self, name: str) -> Path | None:
+        """Delete a discovered skill's file. Returns the path, or None if not
+        backed by a discoverable workspace file."""
+        path = self._resolve_skill_path(name)
+        if path is None:
+            return None
+        path.unlink()
+        return path
+
     def list_skills(self) -> list[dict]:
         """List all available skills."""
         return [skill.to_dict() for skill in self._skills.values()]

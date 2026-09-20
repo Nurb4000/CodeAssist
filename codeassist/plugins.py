@@ -125,6 +125,34 @@ class PluginRegistry:
         """List all loaded plugins."""
         return [plugin.to_dict() for plugin in self._plugins.values()]
 
+    def remove_plugin(self, name: str) -> "Path | None":
+        """Delete a plugin's directory from disk (admin-managed removal).
+
+        Returns the removed directory path, or None if the plugin is unknown or
+        not backed by a discoverable workspace directory. The source file's
+        module ``__file__`` points inside the plugin directory, which we scope
+        to the workspace to avoid deleting arbitrary paths.
+        """
+        import shutil
+
+        plugin = self._plugins.get(name)
+        if plugin is None:
+            return None
+        module = getattr(plugin, "_module", None)
+        module_path = getattr(module, "__file__", None) if module else None
+        if not module_path:
+            return None
+        candidate = Path(str(module_path)).parent.resolve()
+        root = self.workspace.resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        if not candidate.is_dir():
+            return None
+        shutil.rmtree(candidate)
+        return candidate
+
     def get_all_tools(self) -> list:
         """Get all tools from all plugins."""
         tools = []

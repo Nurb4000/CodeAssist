@@ -184,11 +184,25 @@ async function loadSkills() {
     const tbody = document.getElementById('skills-body');
     tbody.innerHTML = '';
     for (const s of data.skills || []) {
-        tbody.appendChild(row(
+        const tr = row(
             `<td class="cell-em">${escapeHtml(s.name || '')}</td>` +
             `<td>${escapeHtml(s.description || '')}</td>` +
             `<td>${escapeHtml(s.slash_command || '')}</td>` +
-            `<td>${escapeHtml(s.source || '')}</td>`));
+            `<td>${escapeHtml(s.source || '')}</td>`);
+        const actions = tr.lastElementChild;
+        actions.appendChild(editButton('Edit', () =>
+            openEditModal(`Skill: ${s.name}`, [
+                { key: 'description', label: 'Description', type: 'textarea', value: s.description || '' },
+                { key: 'slash_command', label: 'Slash command', type: 'text', value: s.slash_command || '' },
+            ], async (p) => {
+                await api('PUT', `/api/skills/${encodeURIComponent(s.name)}`, {
+                    description: p.description,
+                    slash_command: p.slash_command || null,
+                });
+            })));
+        actions.appendChild(delButton(s.name, 'skill', (name) =>
+            api('DELETE', `/api/skills/${encodeURIComponent(name)}`)));
+        tbody.appendChild(tr);
     }
 }
 
@@ -252,10 +266,14 @@ async function loadPlugins() {
     const tbody = document.getElementById('plugins-body');
     tbody.innerHTML = '';
     for (const p of data.plugins || []) {
-        tbody.appendChild(row(
+        const tr = row(
             `<td class="cell-em">${escapeHtml(p.name || '')}</td>` +
             `<td>${escapeHtml(p.version || '')}</td>` +
-            `<td>${p.enabled !== false ? 'yes' : 'no'}</td>`));
+            `<td>${p.enabled !== false ? 'yes' : 'no'}</td>`);
+        const actions = tr.lastElementChild;
+        actions.appendChild(delButton(p.name, 'plugin', (name) =>
+            api('DELETE', `/api/plugins/${encodeURIComponent(name)}`)));
+        tbody.appendChild(tr);
     }
 }
 
@@ -264,9 +282,13 @@ async function loadCustomTools() {
     const tbody = document.getElementById('custom-body');
     tbody.innerHTML = '';
     for (const t of data.tools || []) {
-        tbody.appendChild(row(
+        const tr = row(
             `<td class="cell-em">${escapeHtml(t.name || '')}</td>` +
-            `<td>${escapeHtml(t.description || '')}</td>`));
+            `<td>${escapeHtml(t.description || '')}</td>`);
+        const actions = tr.lastElementChild;
+        actions.appendChild(delButton(t.name, 'custom tool', (name) =>
+            api('DELETE', `/api/custom-tools/${encodeURIComponent(name)}`)));
+        tbody.appendChild(tr);
     }
 }
 
