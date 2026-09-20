@@ -166,6 +166,45 @@ class TestKnowledgeEntries:
         assert len(results) >= 1
 
     @pytest.mark.asyncio
+    async def test_search_by_tag_escapes_like_wildcards(self):
+        # G4: a tag containing _ / % / \\ must match literally, not as a LIKE
+        # pattern. Searching "a_b" must NOT match a stored tag "axb".
+        await init_db()
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="underscored tag", tags=["a_b"],
+        )
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="different tag", tags=["axb"],
+        )
+
+        # Exact underscore tag matches only its own entry.
+        res = await KnowledgeBase.search_knowledge(tags=["a_b"], min_confidence=0.0)
+        assert len(res) == 1
+        assert "underscored" in res[0]["content"]
+
+        # A near-miss tag (same shape, different char) matches nothing.
+        res = await KnowledgeBase.search_knowledge(tags=["axb"], min_confidence=0.0)
+        assert len(res) == 1
+        assert "different" in res[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_search_by_tag_with_percent_is_literal(self):
+        await init_db()
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="percent tag", tags=["100%off"],
+        )
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="unrelated", tags=["sale"],
+        )
+        res = await KnowledgeBase.search_knowledge(tags=["100%off"], min_confidence=0.0)
+        assert len(res) == 1
+        assert "percent" in res[0]["content"]
+
+    @pytest.mark.asyncio
     async def test_search_with_no_filters(self):
         await init_db()
         await KnowledgeBase.create_knowledge_entry(

@@ -222,10 +222,16 @@ class KnowledgeBase:
             conditions.append("status = ?")
             params.append(status)
         if tags:
-            # Simple JSON array contains check
+            # JSON-array "contains" check. Escape LIKE wildcards so a tag name
+            # containing %, _, or \\ is matched literally instead of acting as a
+            # pattern (G4): searching "a_b" must not match stored "axb".
             for tag in tags:
-                conditions.append("tags LIKE ?")
-                params.append(f'%"{tag}"%')
+                escaped = (
+                    tag.replace("\\", "\\\\").replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                conditions.append("tags LIKE ? ESCAPE '\\'")
+                params.append(f'%"{escaped}"%')
 
         where_clause = " AND ".join(conditions)
         params.append(limit)
