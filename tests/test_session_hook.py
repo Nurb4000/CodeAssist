@@ -609,3 +609,67 @@ class TestNearDuplicateMerge:
         )
         assert len(entries) == 2
 
+
+class TestQAPairExtraction:
+    @pytest.mark.asyncio
+    async def test_captures_question_and_answer(self, session_hook):
+        await init_db()
+        messages = [
+            {"role": "user", "content": "How do I paginate a large SQL result set efficiently?"},
+            {"role": "assistant", "content": "Use keyset pagination with WHERE id > last ORDER BY id LIMIT n."},
+        ]
+        result = await session_hook._extract_from_user_questions("s-qa", messages)
+
+        assert len(result) == 1
+        meta = result[0]["metadata"]
+        assert "paginate" in meta["question"].lower()
+        assert "keyset" in meta["answer"].lower()
+        assert meta["has_answer"] is True
+        assert "qa_pair" in result[0]["tags"]
+
+    @pytest.mark.asyncio
+    async def test_captures_tools_and_files_from_reply(self, session_hook):
+        await init_db()
+        messages = [
+            {"role": "user", "content": "Can you refactor the auth module to use tokens?"},
+            {
+                "role": "assistant",
+                "content": "Switching auth.py to JWT token validation.",
+                "tool_calls": [
+                    {"function": {"name": "read", "arguments": '{"file_path": "src/auth.py"}'}}
+                ],
+            },
+        ]
+        result = await session_hook._extract_from_user_questions("s-qa2", messages)
+
+        meta = result[0]["metadata"]
+        assert "read" in meta["tools_used"]
+        assert any("auth.py" in f for f in meta["file_references"])
+
+    @pytest.mark.asyncio
+    async def test_no_answer_marked(self, session_hook):
+        await init_db()
+        messages = [
+            {"role": "user", "content": "What is the best way to structure a Python project?"},
+        ]
+        result = await session_hook._extract_from_user_questions("s-qa3", messages)
+
+        assert len(result) == 1
+        meta = result[0]["metadata"]
+        assert meta["has_answer"] is False
+        assert result[0]["confidence"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_persists_to_kb_with_answer(self, session_hook):
+        await init_db()
+        messages = [
+            {"role": "user", "content": "How do I reset a forgotten admin password in the app?"},
+            {"role": "assistant", "content": "Run the management command to force-set it."},
+        ]
+        await session_hook._extract_knowledge("s-qa4", messages, {})
+
+        entries = await KnowledgeBase.search_knowledge(tags=["qa_pair"], min_confidence=0.0)
+        assert len(entries) >= 1
+        meta = json.loads(entries[0]["metadata"])
+        assert "management command" in meta["answer"].lower()
+

@@ -723,16 +723,24 @@ Provide a JSON response with:
         return None
     
     async def _extract_from_user_questions(self, session_id: str, messages: list[dict]) -> list[dict]:
-        """Extract knowledge from user questions and requests."""
+        """Extract Q->A pairs from user questions and their assistant replies.
+
+        Previously only the question was captured ("User request pattern"), so
+        the KB recorded *what was asked* but not *what the answer/outcome was*.
+        We now pair each question with the following assistant reply (text plus
+        tool usage) and store it in the entry metadata, so search can surface
+        both sides of an exchange (FUTURE_ENHANCEMENTS: Knowledge base).
+        """
         extracted = []
-        
-        user_msgs = [m for m in messages if m["role"] == "user" and m.get("content")]
-        
-        for msg in user_msgs:
+
+        user_msgs = [(i, m) for i, m in enumerate(messages)
+                     if m.get("role") == "user" and m.get("content")]
+
+        for idx, msg in user_msgs:
             content = msg.get("content", "") or ""
             if len(content) < 20:
                 continue
-            
+
             # Extract from questions and requests
             is_question = (
                 content.strip().endswith("?")
@@ -745,22 +753,80 @@ Provide a JSON response with:
                     "tell me", "describe", "analyze",
                 ])
             )
-            
-            if is_question:
-                topic = self._extract_topic_from_question(content)
-                if topic:
-                    knowledge = {
-                        "entry_type": "pattern",
-                        "scope": "project",
-                        "content": f"User request pattern: {content[:300]}",
-                        "tags": ["user_request", topic],
-                        "confidence": 0.5,
-                        "source_session_id": session_id,
-                    }
-                    await self._create_knowledge_if_new(**knowledge)
-                    extracted.append(knowledge)
-        
+
+            if not is_question:
+                continue
+
+            topic = self._extract_topic_from_question(content)
+            if not topic:
+                continue
+
+            reply = self._extract_reply_after(messages, idx)
+            answer_text = reply["text"]
+            confidence = 0.55 if answer_text else 0.5
+
+            knowledge = {
+                "entry_type": "pattern",
+                "scope": "project",
+                "content": f"User request: {content[:300]}",
+                "tags": ["user_request", topic, "qa_pair"],
+                "confidence": confidence,
+                "source_session_id": session_id,
+                "metadata": {
+                    "question": content[:2000],
+                    "answer": answer_text[:4000],
+                    "tools_used": reply["tools"],
+                    "file_references": reply["files"],
+                    "has_answer": bool(answer_text),
+                },
+            }
+            await self._create_knowledge_if_new(**knowledge)
+            extracted.append(knowledge)
+
         return extracted
+
+    def _extract_reply_after(self, messages: list[dict], user_idx: int) -> dict:
+        """Collect the assistant reply following the user message at ``user_idx``.
+
+        Stops at the next user message. Returns the concatenated assistant text,
+        tool names invoked, and file paths referenced in the reply.
+        """
+        parts = []
+        tools = []
+        files = set()
+
+        for msg in messages[user_idx + 1:]:
+            role = msg.get("role")
+            if role == "user":
+                break
+            if role == "assistant":
+                text = (msg.get("content") or "").strip()
+                if text:
+                    parts.append(text)
+                for tc in msg.get("tool_calls") or []:
+                    fn = tc.get("function", {}) or {}
+                    name = fn.get("name")
+                    if name:
+                        tools.append(name)
+                    args = fn.get("arguments")
+                    if isinstance(args, str):
+                        files.update(self._extract_file_paths(args))
+                    elif isinstance(args, dict):
+                        for v in args.values():
+                            if isinstance(v, str):
+                                files.update(self._extract_file_paths(v))
+            elif role == "tool":
+                result = msg.get("content")
+                if isinstance(result, str) and result.strip():
+                    parts.append(result[:500])
+                    files.update(self._extract_file_paths(result))
+
+        answer_text = " ".join(p for p in parts if p)
+        return {
+            "text": answer_text[:4000],
+            "tools": list(dict.fromkeys(tools)),
+            "files": sorted(files),
+        }
     
     def _extract_topic_from_question(self, question: str) -> str | None:
         """Extract main topic from a question."""
@@ -987,6 +1053,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
         tags: list[str] = None,
         confidence: float = 0.7,
         scope_identifier: str = None,
+        metadata: dict = None,
     ):
         """Create a knowledge entry if similar content doesn't exist."""
         try:
@@ -1044,6 +1111,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
                 source_session_id=source_session_id,
                 confidence=confidence,
                 tags=tags,
+                metadata=metadata,
             )
             
             # Generate embedding in background (non-blocking, throttled)
