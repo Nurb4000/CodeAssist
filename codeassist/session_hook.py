@@ -27,6 +27,29 @@ log = logging.getLogger(__name__)
 # of an existing (embedded) entry and merged into it instead of inserted (G2).
 NEAR_DUP_COSINE_THRESHOLD = 0.95
 
+# A knowledge entry is only worth storing durably if it carries a real technical
+# signal (code token, file extension, tool/domain keyword). Entries that lack
+# one are treated as one-off session trivia and filtered out by
+# SessionHook._has_substance (extraction audit / garbage control).
+_SUBSTANCE_TOKENS = (
+    r"\b(def|class|import|from|return|lambda|function|const|let|var|"
+    r"sql|sqlite|api|http|docker|git|pytest|test|unittest|jest|bug|fix|"
+    r"error|exception|config|database|query|async|await|npm|pip|cargo|"
+    r"python|javascript|java|golang|rust|shell|bash|workflow|pattern|"
+    r"convention|refactor|optimize|performance|feature|token|login|"
+    r"auth|session|middleware|handler|controller|model|route|endpoint)\b"
+    r"|\.[a-z0-9]{1,4}\b"  # file extensions, e.g. .py .js .toml
+)
+_SUBSTANCE_RE = re.compile(_SUBSTANCE_TOKENS, re.IGNORECASE)
+
+# Recognisable low-value templates that should never become durable knowledge on
+# their own (e.g. the "File type: py - write operation performed" noise).
+_LOW_VALUE_PREFIXES = (
+    "file type:",
+    "operation performed",
+    "user request pattern",
+)
+
 # File extensions to track
 TRACKED_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte",
@@ -1044,6 +1067,25 @@ This workflow is now available as a skill. The agent will use this pattern when 
         except Exception as e:
             log.warning("Failed to suggest skill creation: %s", e)
     
+    @staticmethod
+    def _has_substance(content: str) -> bool:
+        """Return True if ``content`` is substantive enough to store durably.
+
+        Filters one-off session trivia so the KB isn't cluttered with low-value
+        entries (extraction audit / garbage control). An entry has substance if
+        it carries a technical signal (code token, file extension, tool/domain
+        keyword) or is not a recognised low-value template. Genuine prose
+        conventions/decisions/patterns pass; template noise like
+        "File type: py - write operation performed" does not.
+        """
+        if _SUBSTANCE_RE.search(content):
+            return True
+        low = content.strip().lower()
+        if any(low.startswith(p) for p in _LOW_VALUE_PREFIXES):
+            return False
+        # Short, signal-free text (greetings/filler) is trivia, not knowledge.
+        return len(content.split()) >= 4
+
     async def _create_knowledge_if_new(
         self,
         entry_type: str,
@@ -1057,6 +1099,11 @@ This workflow is now available as a skill. The agent will use this pattern when 
     ):
         """Create a knowledge entry if similar content doesn't exist."""
         try:
+            # Garbage control: skip entries that carry no durable signal.
+            if not self._has_substance(content):
+                log.debug("Skipping low-substance knowledge entry: %r", content[:80])
+                return
+
             # In-memory dedup for same session
             content_hash = hashlib.md5(content.lower()[:200].encode()).hexdigest()
             if content_hash in self._session_content_hashes:

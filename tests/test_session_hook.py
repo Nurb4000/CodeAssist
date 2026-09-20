@@ -199,6 +199,51 @@ class TestContentOverlap:
         assert session_hook._content_overlap("", "") == 0.0
 
 
+class TestSubstanceGate:
+    """Extraction garbage control: trivial/template entries must not become
+    durable knowledge (FUTURE_ENHANCEMENTS: Knowledge base audit)."""
+
+    def test_template_judge_filtered(self, session_hook):
+        assert session_hook._has_substance("File type: py - write operation performed") is False
+
+    def test_trivial_content_filtered(self, session_hook):
+        assert session_hook._has_substance("hi") is False
+        assert session_hook._has_substance("thanks") is False
+
+    def test_technical_signal_passes(self, session_hook):
+        assert session_hook._has_substance("Test command pattern: pytest tests/ -v") is True
+        assert session_hook._has_substance("def fetch_data(): return await db.query(sql)") is True
+
+    def test_substantive_prose_passes(self, session_hook):
+        assert session_hook._has_substance(
+            "Implement login feature with JWT tokens and refresh handler now"
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_low_value_template_not_persisted(self, session_hook):
+        await init_db()
+        before = await KnowledgeBase.search_knowledge(min_confidence=0.0)
+        await session_hook._create_knowledge_if_new(
+            entry_type="convention", scope="file",
+            content="File type: py - write operation performed",
+            source_session_id="s-gate", tags=["file_type"], confidence=0.6,
+        )
+        after = await KnowledgeBase.search_knowledge(min_confidence=0.0)
+        assert len(after) == len(before)  # nothing persisted
+
+    @pytest.mark.asyncio
+    async def test_substantive_entry_persisted(self, session_hook):
+        await init_db()
+        before = await KnowledgeBase.search_knowledge(min_confidence=0.0)
+        await session_hook._create_knowledge_if_new(
+            entry_type="pattern", scope="project",
+            content="Implement JWT token login feature in auth.py",
+            source_session_id="s-gate2", tags=["auth"], confidence=0.7,
+        )
+        after = await KnowledgeBase.search_knowledge(min_confidence=0.0)
+        assert len(after) == len(before) + 1
+
+
 class TestExtractSnippetAroundMatch:
     @pytest.mark.asyncio
     async def test_extracts_snippet(self, session_hook):
