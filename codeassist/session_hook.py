@@ -118,9 +118,10 @@ CODE_PATTERNS = {
 # Indicators for knowledge extraction
 KNOWLEDGE_INDICATORS = {
     "pattern": [
-        "pattern", "convention", "standard", "approach", "method",
-        "typically", "usually", "generally", "commonly", "should",
-        "recommend", "best practice", "approach", "way to",
+        # Kept specific enough to avoid matching near-universal advisory words
+        # ("should", "method", "typically", ...) that turn any sentence into a
+        # low-value "pattern" entry. See _has_substance for the trivia filter.
+        "pattern", "convention", "best practice", "way to", "recommend",
     ],
     "decision": [
         "decided", "chose", "selected", "will use", "going with",
