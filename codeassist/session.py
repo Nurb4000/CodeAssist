@@ -358,9 +358,19 @@ async def _add_v4_tables(db):
             metadata TEXT,
             embedding TEXT,
             created_at TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            status TEXT DEFAULT 'active'
         )
     """)
+    
+    # Ensure the `status` column exists on DBs created before the quality/retention
+    # pass was added (G3). CREATE TABLE above only applies to fresh databases.
+    cursor = await db.execute("PRAGMA table_info(knowledge_entries)")
+    _cols = [r[1] for r in await cursor.fetchall()]
+    if "status" not in _cols:
+        await db.execute(
+            "ALTER TABLE knowledge_entries ADD COLUMN status TEXT DEFAULT 'active'"
+        )
     
     # 3. Tool executions
     await db.execute("""
@@ -421,25 +431,7 @@ async def _add_v4_tables(db):
         )
     """)
     
-    # 7. Q&A pairs
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS qa_pairs (
-            id TEXT PRIMARY KEY,
-            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-            question TEXT NOT NULL,
-            answer_summary TEXT,
-            context TEXT,
-            tools_used TEXT,
-            success INTEGER DEFAULT 1,
-            quality_score REAL,
-            quality_notes TEXT,
-            tags TEXT,
-            metadata TEXT,
-            created_at TEXT
-        )
-    """)
-    
-    # 8. Create indexes
+    # Create indexes
     indexes = [
         "CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id)",
         "CREATE INDEX IF NOT EXISTS idx_session_summaries_quality ON session_summaries(quality_score)",
@@ -459,9 +451,6 @@ async def _add_v4_tables(db):
         "CREATE INDEX IF NOT EXISTS idx_file_snapshots_session ON file_snapshots(session_id)",
         "CREATE INDEX IF NOT EXISTS idx_file_snapshots_path ON file_snapshots(file_path)",
         "CREATE INDEX IF NOT EXISTS idx_file_snapshots_action ON file_snapshots(action)",
-        "CREATE INDEX IF NOT EXISTS idx_qa_pairs_session ON qa_pairs(session_id)",
-        "CREATE INDEX IF NOT EXISTS idx_qa_pairs_quality ON qa_pairs(quality_score)",
-        "CREATE INDEX IF NOT EXISTS idx_qa_pairs_success ON qa_pairs(success)",
     ]
     
     for idx in indexes:

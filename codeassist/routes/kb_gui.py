@@ -1,12 +1,15 @@
 """Knowledge Base GUI dashboard API routes."""
 from datetime import datetime
 import json
+import logging
 import csv
 import io
 import re
 from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kb", tags=["kb_gui"])
 
@@ -39,7 +42,7 @@ async def kb_stats():
         stats["total_llm_calls"] = (await cursor.fetchone())[0]
 
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM knowledge_entries WHERE created_at >= datetime('now', '-7 days')"
+            "SELECT COUNT(*) FROM knowledge_entries WHERE datetime(created_at) >= datetime('now', '-7 days')"
         )
         stats["recent_entries_7d"] = (await cursor.fetchone())[0]
 
@@ -48,6 +51,34 @@ async def kb_stats():
         )
         avg_quality = (await cursor.fetchone())[0]
         stats["avg_quality_score"] = round(avg_quality, 2) if avg_quality else 0
+
+        cursor = await db.execute(
+            """SELECT
+                    SUM(CASE WHEN usage_count = 0 THEN 1 ELSE 0 END) as unused,
+                    SUM(CASE WHEN usage_count BETWEEN 1 AND 2 THEN 1 ELSE 0 END) as low_use,
+                    SUM(CASE WHEN usage_count >= 3 THEN 1 ELSE 0 END) as high_use
+                FROM knowledge_entries"""
+        )
+        row = await cursor.fetchone()
+        stats["usage_distribution"] = {
+            "unused": row["unused"] or 0,
+            "low_use": row["low_use"] or 0,
+            "high_use": row["high_use"] or 0,
+        }
+
+    # Lifecycle breakdown (F3)
+    status_counts = await KnowledgeBase.entry_status_counts()
+    stats["status_breakdown"] = status_counts
+    stats["entries_in_review"] = status_counts.get("review", 0)
+    stats["entries_flagged"] = status_counts.get("flagged", 0)
+    stats["entries_archived"] = status_counts.get("archived", 0)
+    stats["orphan_entries"] = await KnowledgeBase.orphan_entry_count()
+
+    # Frequently-used active entries (F2): candidates for promotion, computed
+    # read-only so hitting /stats never archives anything.
+    stats["high_usage_count"] = len(
+        await KnowledgeBase.high_usage_entries(min_usage=3)
+    )
 
     return stats
 
@@ -80,6 +111,15 @@ async def kb_list_entries(
     return {"entries": entries, "count": len(entries)}
 
 
+@router.get("/high-usage")
+async def kb_high_usage(limit: int = 20):
+    """List active entries with the highest usage counts (F2 promotion candidates)."""
+    from codeassist.knowledge import KnowledgeBase
+
+    entries = await KnowledgeBase.high_usage_entries(min_usage=1, limit=limit)
+    return {"entries": entries, "count": len(entries)}
+
+
 @router.get("/entries/{entry_id}")
 async def kb_get_entry(entry_id: str):
     """Get a single knowledge entry by ID."""
@@ -87,6 +127,15 @@ async def kb_get_entry(entry_id: str):
     entry = await KnowledgeBase.get_knowledge_entry(entry_id)
     if not entry:
         return JSONResponse(status_code=404, content={"error": "Entry not found"})
+
+    # Record the view as usage so usage_count is a live signal for the
+    # quality/retention pass and future promotion logic (F2). Best-effort: a
+    # failed increment must never break viewing an entry.
+    try:
+        await KnowledgeBase.increment_usage(entry_id)
+    except Exception as e:
+        log.debug("Failed to record entry usage for %s: %s", entry_id, e)
+
     return entry
 
 
@@ -118,6 +167,21 @@ async def kb_delete_entry(entry_id: str):
     if not success:
         return JSONResponse(status_code=404, content={"error": "Entry not found"})
     return {"message": "Entry deleted", "entry_id": entry_id}
+
+
+@router.post("/entries/{entry_id}/status")
+async def kb_set_entry_status(entry_id: str, body: dict):
+    """Transition an entry's lifecycle status (review / flagged / archived)."""
+    from codeassist.knowledge import KnowledgeBase
+
+    status = body.get("status")
+    if not status:
+        return JSONResponse(status_code=400, content={"error": "status required"})
+
+    success = await KnowledgeBase.set_entry_status(entry_id, status)
+    if not success:
+        return JSONResponse(status_code=404, content={"error": "Entry not found"})
+    return {"message": f"Entry set to {status}", "entry_id": entry_id, "status": status}
 
 
 @router.post("/entries/bulk-delete")
@@ -174,9 +238,19 @@ async def kb_search(
         try:
             from codeassist.embeddings import get_embedding_manager
             manager = get_embedding_manager()
-            results = await manager.search_by_embedding(q, limit=limit)
-            return {"results": results, "type": "semantic"}
-        except Exception as e:
+            # search_by_embedding silently falls back to text search when no
+            # embedding model is configured or the query cannot be embedded.
+            # Report the path that actually ran so clients aren't misled (F4).
+            if manager._get_client() is not None:
+                results = await manager.search_by_embedding(q, limit=limit)
+                used_vector = any("similarity" in r for r in results) or not results
+                if used_vector:
+                    return {"results": results, "type": "semantic"}
+            results = await KnowledgeBase.fulltext_search_knowledge(
+                q, entry_type=entry_type, limit=limit
+            )
+            return {"results": results, "type": "text"}
+        except Exception:
             pass
 
     results = await KnowledgeBase.fulltext_search_knowledge(q, entry_type=entry_type, limit=limit)
@@ -445,7 +519,6 @@ async def kb_clear(body: dict):
     async with get_db() as db:
         await db.execute("DELETE FROM session_tags")
         await db.execute("DELETE FROM file_snapshots")
-        await db.execute("DELETE FROM qa_pairs")
         await db.execute("DELETE FROM tool_executions")
         await db.execute("DELETE FROM llm_usage")
         await db.execute("DELETE FROM knowledge_entries")

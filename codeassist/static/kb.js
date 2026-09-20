@@ -4,6 +4,8 @@ const API = {
     stats: '/api/kb/stats',
     entries: '/api/kb/entries',
     entry: (id) => `/api/kb/entries/${id}`,
+    setEntryStatus: (id) => `/api/kb/entries/${id}/status`,
+    highUsage: '/api/kb/high-usage',
     search: '/api/kb/search',
     sessions: '/api/kb/sessions',
     session: (id) => `/api/kb/sessions/${id}`,
@@ -12,6 +14,7 @@ const API = {
     piiScan: '/api/kb/pii/scan',
     piiRedact: '/api/kb/pii/redact',
     settings: '/api/kb/settings',
+    generateEmbeddings: '/api/knowledge/embeddings/generate',
     export: '/api/kb/export',
     import: '/api/kb/import',
     clear: '/api/kb/clear',
@@ -98,7 +101,39 @@ async function loadDashboard() {
         activityContainer.innerHTML = `
             <p>Last 7 days: <strong>${stats.recent_entries_7d || 0}</strong> new entries</p>
         `;
-        
+
+        // Lifecycle & health (F3)
+        const sb = stats.status_breakdown || {};
+        document.getElementById('stat-active').textContent = sb.active || 0;
+        document.getElementById('stat-review').textContent = sb.review || 0;
+        document.getElementById('stat-flagged').textContent = sb.flagged || 0;
+        document.getElementById('stat-archived').textContent = sb.archived || 0;
+
+        const ud = stats.usage_distribution || {};
+        document.getElementById('health-details').innerHTML = `
+            <p>Orphan entries (session deleted): <strong>${stats.orphan_entries || 0}</strong></p>
+            <p>Usage — unused: <strong>${ud.unused || 0}</strong>, low (1-2): <strong>${ud.low_use || 0}</strong>, high (3+): <strong>${ud.high_use || 0}</strong></p>
+        `;
+
+        // Frequently-used entries worth promoting (F2).
+        try {
+            const res = await fetch(API.highUsage);
+            const data = await res.json();
+            const list = document.getElementById('high-usage-list');
+            if (data.count === 0) {
+                list.innerHTML = '<p class="empty-state">No frequently-used entries yet.</p>';
+            } else {
+                list.innerHTML = '<ul class="high-usage-items">' + data.entries.map(e =>
+                    `<li>
+                        <span class="type-badge ${e.entry_type}">${e.entry_type}</span>
+                        <span class="high-usage-uses">${e.usage_count} uses</span>
+                        <span class="high-usage-content">${escapeHtml(e.content || '').substring(0, 80)}</span>
+                    </li>`).join('') + '</ul>';
+            }
+        } catch (err) {
+            console.error('Failed to load high-usage entries:', err);
+        }
+
     } catch (err) {
         console.error('Failed to load dashboard:', err);
     }
@@ -128,21 +163,35 @@ async function loadEntries() {
             return;
         }
         
-        tbody.innerHTML = data.entries.map(entry => `
+        tbody.innerHTML = data.entries.map(entry => {
+            const status = entry.status || 'active';
+            let lifecycle;
+            if (status === 'archived') {
+                lifecycle = `<button onclick="setEntryStatus('${entry.id}','active')">Restore</button>`;
+            } else {
+                lifecycle =
+                    `<button onclick="setEntryStatus('${entry.id}','review')">Review</button>` +
+                    `<button onclick="setEntryStatus('${entry.id}','flagged')">Flag</button>` +
+                    `<button onclick="setEntryStatus('${entry.id}','archived')">Archive</button>`;
+            }
+            return `
             <tr>
                 <td><input type="checkbox" class="entry-checkbox" data-id="${entry.id}"></td>
                 <td><span class="type-badge ${entry.entry_type}">${entry.entry_type}</span></td>
+                <td><span class="status-badge status-${status}">${status}</span></td>
                 <td class="entry-preview">${escapeHtml(entry.content || '').substring(0, 100)}</td>
                 <td>${entry.scope || '-'}</td>
                 <td>${(entry.confidence || 0).toFixed(2)}</td>
                 <td>${formatDate(entry.created_at)}</td>
                 <td>
+                    ${lifecycle}
                     <button onclick="viewEntry('${entry.id}')">View</button>
                     <button onclick="editEntry('${entry.id}')">Edit</button>
                     <button onclick="deleteEntry('${entry.id}')" class="btn-danger">Delete</button>
                 </td>
             </tr>
-        `).join('');
+            `;
+        }).join('');
         
         // Pagination
         renderPagination(data.count);
@@ -225,6 +274,23 @@ async function deleteEntry(id) {
     }
 }
 
+async function setEntryStatus(id, status) {
+    try {
+        const res = await fetch(API.setEntryStatus(id), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+        });
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.error || `Failed to set status ${status}`);
+        }
+        loadEntries();
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
 // Edit form submission
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -281,6 +347,40 @@ document.getElementById('btn-search').addEventListener('click', async () => {
         alert('Search failed');
     }
 });
+
+// Generate embeddings for existing entries (loops the batch endpoint until done)
+async function generateEmbeddings() {
+    const btn = document.getElementById('btn-generate-embeddings');
+    const status = document.getElementById('embeddings-status');
+    const progress = document.getElementById('embeddings-progress');
+    btn.disabled = true;
+    progress.style.display = 'block';
+    status.textContent = 'Generating embeddings...';
+
+    let total = 0;
+    try {
+        while (true) {
+            const res = await fetch(API.generateEmbeddings, { method: 'POST' });
+            const data = await res.json();
+            const generated = data.generated || 0;
+            if (generated === 0) break;
+            total += generated;
+            status.textContent = `Generated ${generated} embedding(s) so far: ${total}`;
+        }
+    } catch (err) {
+        status.textContent = 'Embedding generation failed: ' + err;
+    } finally {
+        btn.disabled = false;
+        progress.style.display = 'none';
+        if (total === 0) {
+            status.textContent = 'No embeddings were generated. An embedding model may not be configured.';
+        } else {
+            status.textContent = `Done. ${total} embedding(s) generated. Semantic search is now available.`;
+        }
+    }
+}
+
+document.getElementById('btn-generate-embeddings').addEventListener('click', generateEmbeddings);
 
 // Sessions
 async function loadSessions() {

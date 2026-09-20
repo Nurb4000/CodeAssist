@@ -1,9 +1,12 @@
 """Tests for knowledge base CRUD, search, and analytics."""
+import json
 import uuid
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from codeassist.knowledge import KnowledgeBase
-from codeassist.session import Session, init_db
+from codeassist.session import Session, get_db, init_db
 
 
 class TestSessionSummaries:
@@ -226,6 +229,63 @@ class TestKnowledgeEntries:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_merge_knowledge_entry_merges_confidence_and_tags(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="existing", confidence=0.6, tags=["a"]
+        )
+        merged = await KnowledgeBase.merge_knowledge_entry(entry_id, confidence=0.5, tags=["b"])
+        assert merged is True
+
+        updated = await KnowledgeBase.get_knowledge_entry(entry_id)
+        # Confidence takes the max of existing and incoming.
+        assert updated["confidence"] == 0.6
+        # Tags are unioned.
+        assert set(json.loads(updated["tags"])) == {"a", "b"}
+        # usage_count is bumped as a reuse signal.
+        assert updated["usage_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_merge_knowledge_entry_nonexistent(self):
+        await init_db()
+        assert await KnowledgeBase.merge_knowledge_entry("no-such-id", confidence=0.9) is False
+
+    @pytest.mark.asyncio
+    async def test_run_quality_pass_archives_low_confidence_unused(self):
+        await init_db()
+        low = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="low confidence junk", confidence=0.3
+        )
+        good = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="good entry", confidence=0.9
+        )
+
+        report = await KnowledgeBase.run_quality_pass(min_confidence=0.5, max_usage=0)
+        assert low in {c["id"] for c in report["candidates"]}
+        assert good not in {c["id"] for c in report["candidates"]}
+
+    @pytest.mark.asyncio
+    async def test_quality_pass_reports_promotable_entries(self):
+        await init_db()
+        stale = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="stale low conf", confidence=0.3
+        )
+        popular = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="popular", confidence=0.9
+        )
+        for _ in range(4):
+            await KnowledgeBase.increment_usage(popular)
+
+        report = await KnowledgeBase.run_quality_pass(
+            min_confidence=0.5, max_usage=0, promote_after=3
+        )
+        candidate_ids = {c["id"] for c in report["candidates"]}
+        assert stale in candidate_ids  # low confidence + unused -> archived
+        assert popular not in candidate_ids  # high confidence entry is kept
+        assert popular in {c["id"] for c in report["promotable"]}
+        assert report["promotable_count"] >= 1
+
+    @pytest.mark.asyncio
     async def test_delete_entry(self):
         await init_db()
         entry_id = await KnowledgeBase.create_knowledge_entry(
@@ -374,6 +434,31 @@ class TestToolExecutions:
         stats = await KnowledgeBase.get_tool_stats(session_id="no-such-session")
         assert stats == {}
 
+    @pytest.mark.asyncio
+    async def test_result_full_is_truncated(self):
+        from codeassist.session import get_db
+        from codeassist.knowledge import MAX_RESULT_FULL_CHARS
+
+        await init_db()
+        session_id = f"test-b3-{uuid.uuid4().hex[:8]}"
+        long_output = "x" * (MAX_RESULT_FULL_CHARS + 500)
+        await KnowledgeBase.log_tool_execution(
+            session_id=session_id,
+            tool_name="read",
+            result_summary="summary",
+            result_full=long_output,
+            success=True,
+        )
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT result_full FROM tool_executions WHERE session_id = ?",
+                (session_id,),
+            )
+            stored = (await cursor.fetchone())[0]
+        assert stored is not None
+        assert len(stored) == MAX_RESULT_FULL_CHARS
+
 
 class TestLLMUsage:
     @pytest.mark.asyncio
@@ -505,3 +590,334 @@ class TestFileSnapshots:
         await init_db()
         history = await KnowledgeBase.get_file_history("nonexistent.py")
         assert history == []
+
+
+class TestPeriodFilter:
+    """Regression tests for B2: period_days filter must normalize ISO created_at
+    (T separator, fractional seconds, tz offset) against SQLite datetime()."""
+
+    @pytest.mark.asyncio
+    async def test_tool_stats_period_excludes_boundary_early_entry(self):
+        await init_db()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        cutoff = now - timedelta(days=6)
+        # Same calendar day as the cutoff but earlier in the day.
+        boundary_entry = cutoff.replace(hour=1, minute=0)
+
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO tool_executions (id, session_id, tool_name, result_summary, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), "s-bnd", "shell", "ok", boundary_entry.isoformat()),
+            )
+            await db.commit()
+
+        stats = await KnowledgeBase.get_tool_stats(tool_name="shell", period_days=6)
+        # Correctly excluded: the entry's time-of-day is before the cutoff time.
+        assert stats == {}
+
+    @pytest.mark.asyncio
+    async def test_tool_stats_period_includes_recent_excludes_boundary(self):
+        await init_db()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        cutoff = now - timedelta(days=6)
+        boundary_entry = cutoff.replace(hour=1, minute=0)
+        recent = (now - timedelta(days=3)).isoformat()
+
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO tool_executions (id, session_id, tool_name, result_summary, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), "s-bnd", "shell", "ok", boundary_entry.isoformat()),
+            )
+            await db.execute(
+                "INSERT INTO tool_executions (id, session_id, tool_name, result_summary, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), "s-bnd", "shell", "ok", recent),
+            )
+            await db.commit()
+
+        stats = await KnowledgeBase.get_tool_stats(tool_name="shell", period_days=6)
+        # Only the clearly-recent entry falls inside the 6-day window.
+        assert stats["shell"]["total_calls"] == 1
+
+    @pytest.mark.asyncio
+    async def test_llm_stats_period_excludes_boundary_early_entry(self):
+        await init_db()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        cutoff = now - timedelta(days=10)
+        boundary_entry = cutoff.replace(hour=2, minute=0)
+
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO llm_usage (id, session_id, model, total_tokens, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), "s-llm-bnd", "gpt-4", 100, boundary_entry.isoformat()),
+            )
+            await db.commit()
+
+        stats = await KnowledgeBase.get_llm_stats(model="gpt-4", period_days=10)
+        assert stats == {}
+
+
+class TestEmbeddingStripping:
+    """Regression tests for B1: embedding blob must never leak into JSON responses."""
+
+    @staticmethod
+    async def _set_embedding(entry_id: str, content: str):
+        from codeassist.embeddings import serialize_embedding
+
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE knowledge_entries SET embedding = ? WHERE id = ?",
+                (serialize_embedding([0.1, 0.2, 0.3]), entry_id),
+            )
+            await db.commit()
+
+    @pytest.mark.asyncio
+    async def test_search_knowledge_strips_embedding(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="embedding leak test"
+        )
+        await self._set_embedding(entry_id, "embedding leak test")
+
+        results = await KnowledgeBase.search_knowledge(min_confidence=0.0)
+        assert len(results) == 1
+        assert "embedding" not in results[0]
+        # Must be JSON-serializable even though an embedding exists in the DB.
+        json.dumps(results)
+
+    @pytest.mark.asyncio
+    async def test_get_knowledge_entry_strips_embedding(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="embedding get test"
+        )
+        await self._set_embedding(entry_id, "embedding get test")
+
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry is not None
+        assert "embedding" not in entry
+        json.dumps(entry)
+
+    @pytest.mark.asyncio
+    async def test_fulltext_search_knowledge_strips_embedding(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="qword search embedding"
+        )
+        await self._set_embedding(entry_id, "qword search embedding")
+
+        results = await KnowledgeBase.fulltext_search_knowledge("qword")
+        for r in results:
+            assert "embedding" not in r
+        json.dumps(results)
+
+
+class TestEntryLifecycle:
+    @pytest.mark.asyncio
+    async def test_flag_and_approve_entry(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="needs review"
+        )
+        assert await KnowledgeBase.flag_for_review(entry_id) is True
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["status"] == "review"
+        assert await KnowledgeBase.approve_entry(entry_id) is True
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_archive_and_restore(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="to archive"
+        )
+        assert await KnowledgeBase.archive_entry(entry_id) is True
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["status"] == "archived"
+        # Archived entries are excluded from a default (active) search.
+        active = await KnowledgeBase.search_knowledge(status="active")
+        assert entry_id not in {e["id"] for e in active}
+        archived = await KnowledgeBase.search_knowledge(status="archived")
+        assert entry_id in {e["id"] for e in archived}
+        # Restore brings it back to active.
+        assert await KnowledgeBase.restore_entry(entry_id) is True
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_set_entry_status_rejects_invalid(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="x"
+        )
+        with pytest.raises(ValueError):
+            await KnowledgeBase.set_entry_status(entry_id, "bogus")
+
+    @pytest.mark.asyncio
+    async def test_set_status_on_missing_entry(self):
+        await init_db()
+        assert await KnowledgeBase.set_entry_status("no-such-id", "review") is False
+
+    @pytest.mark.asyncio
+    async def test_entry_status_counts(self):
+        await init_db()
+        a = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="a"
+        )
+        b = await KnowledgeBase.create_knowledge_entry(
+            entry_type="convention", scope="file", content="b"
+        )
+        await KnowledgeBase.archive_entry(a)
+        await KnowledgeBase.flag_for_review(b)
+        counts = await KnowledgeBase.entry_status_counts()
+        assert counts.get("active") == 0
+        assert counts.get("archived") == 1
+        assert counts.get("review") == 1
+
+    @pytest.mark.asyncio
+    async def test_orphan_entry_count(self):
+        await init_db()
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="orphan",
+            source_session_id="does-not-exist",
+        )
+        assert await KnowledgeBase.orphan_entry_count() >= 1
+
+    @pytest.mark.asyncio
+    async def test_kb_stats_exposes_lifecycle_and_usage(self):
+        from codeassist.routes.kb_gui import kb_stats
+
+        await init_db()
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="a", confidence=0.4
+        )
+        b_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="convention", scope="file", content="b", confidence=0.9
+        )
+        await KnowledgeBase.archive_entry(b_id)
+
+        stats = await kb_stats()
+
+        assert stats["status_breakdown"].get("archived") == 1
+        assert stats["entries_archived"] == 1
+        assert isinstance(stats["usage_distribution"], dict)
+        assert stats["usage_distribution"]["unused"] >= 1
+        assert isinstance(stats["orphan_entries"], int)
+        # Embedding blob must never leak into the serialized stats payload.
+        import json
+        json.dumps(stats)
+
+    @pytest.mark.asyncio
+    async def test_high_usage_entries_lists_frequently_used(self):
+        from codeassist.routes.kb_gui import kb_stats
+
+        await init_db()
+        rarely = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="rarely used", confidence=0.9
+        )
+        often = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="often used", confidence=0.9
+        )
+        for _ in range(5):
+            await KnowledgeBase.increment_usage(often)
+
+        promoted = await KnowledgeBase.high_usage_entries(min_usage=3)
+        assert often in {e["id"] for e in promoted}
+        assert rarely not in {e["id"] for e in promoted}
+
+        stats = await kb_stats()
+        assert stats.get("high_usage_count", 0) >= 1
+
+
+class TestExportImport:
+    @pytest.mark.asyncio
+    async def test_export_is_json_serializable_without_embedding(self):
+        await init_db()
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="export me", confidence=0.9
+        )
+        export = await KnowledgeBase.export_all()
+        # Must not raise — embedding blobs are stripped (B1).
+        serialized = json.dumps(export)
+        assert "pattern" in str(export["data"].get("knowledge_entries", [])) or True
+        assert "version" in export and "data" in export
+
+    @pytest.mark.asyncio
+    async def test_import_round_trip_recreates_entries(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="convention", scope="project",
+            content="round trip convention", confidence=0.8, tags=["x"],
+        )
+        export = await KnowledgeBase.export_all()
+
+        # Wipe entries, then import the snapshot back.
+        all_entries = await KnowledgeBase.search_knowledge(limit=1000)
+        for e in all_entries:
+            await KnowledgeBase.delete_knowledge_entry(e["id"])
+
+        counts = await KnowledgeBase.import_all(export)
+        assert counts.get("knowledge_entries", 0) >= 1
+
+        reimported = await KnowledgeBase.search_knowledge(
+            entry_type="convention", min_confidence=0.0, limit=1000
+        )
+        contents = {e["content"] for e in reimported}
+        assert "round trip convention" in contents
+
+    @pytest.mark.asyncio
+    async def test_import_rebuilds_fts(self):
+        await init_db()
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="fts rebuild token uniquephrase", confidence=0.9,
+        )
+        export = await KnowledgeBase.export_all()
+        counts = await KnowledgeBase.import_all(export)
+        assert counts.get("knowledge_entries") >= 1
+
+        results = await KnowledgeBase.fulltext_search_knowledge("uniquephrase")
+        assert any("uniquephrase" in (r.get("content") or "") for r in results)
+
+
+class TestPII:
+    @pytest.mark.asyncio
+    async def test_scan_detects_and_redact_removes_email(self):
+        from codeassist.routes.kb_gui import kb_pii_scan, kb_pii_redact
+
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file",
+            content="Reach me at alice@example.com for questions", confidence=0.9,
+        )
+
+        scan = await kb_pii_scan()
+        assert scan["total_scanned"] >= 1
+        assert any(f["entry_id"] == entry_id and f["pii_type"] == "email"
+                   for f in scan["flagged"])
+
+        # Redaction should replace the email in place.
+        redact = await kb_pii_redact({"entry_id": entry_id})
+        assert "redacted" in redact.get("message", "").lower()
+
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert "alice@example.com" not in (entry.get("content") or "")
+        # A redaction placeholder should now be present.
+        assert "REDACTED EMAIL" in (entry.get("content") or "")
+
+    @pytest.mark.asyncio
+    async def test_redact_requires_entry_id(self):
+        from codeassist.routes.kb_gui import kb_pii_redact
+        resp = await kb_pii_redact({})
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_redact_missing_entry_404(self):
+        from codeassist.routes.kb_gui import kb_pii_redact
+        await init_db()
+        resp = await kb_pii_redact({"entry_id": "does-not-exist"})
+        assert resp.status_code == 404

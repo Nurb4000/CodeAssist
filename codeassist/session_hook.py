@@ -23,6 +23,10 @@ from .knowledge import KnowledgeBase
 
 log = logging.getLogger(__name__)
 
+# Cosine-similarity threshold above which a new entry is treated as a near-duplicate
+# of an existing (embedded) entry and merged into it instead of inserted (G2).
+NEAR_DUP_COSINE_THRESHOLD = 0.95
+
 # File extensions to track
 TRACKED_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte",
@@ -367,38 +371,31 @@ Provide a JSON response with:
         return min(score, 1.0)
     
     async def _extract_knowledge(self, session_id: str, messages: list[dict], summary_data: dict):
-        """Extract knowledge entries from session messages."""
-        try:
-            extracted = []
-            
-            # 1. Extract from tool calls
-            tool_knowledge = await self._extract_from_tool_calls(session_id, messages)
-            extracted.extend(tool_knowledge)
-            
-            # 2. Extract from code patterns in assistant messages
-            code_knowledge = await self._extract_from_code_patterns(session_id, messages)
-            extracted.extend(code_knowledge)
-            
-            # 3. Extract from user questions (what people ask about)
-            question_knowledge = await self._extract_from_user_questions(session_id, messages)
-            extracted.extend(question_knowledge)
-            
-            # 4. Extract error handling patterns
-            error_knowledge = await self._extract_from_errors(session_id, messages)
-            extracted.extend(error_knowledge)
-            
-            # 5. Extract file structure knowledge
-            file_knowledge = await self._extract_from_file_operations(session_id, messages)
-            extracted.extend(file_knowledge)
-            
-            # 6. Detect repetitive patterns for auto-creation
-            pattern_knowledge = await self._detect_repetitive_patterns(session_id, messages)
-            extracted.extend(pattern_knowledge)
-            
+        """Extract knowledge entries from session messages.
+
+        Each extractor runs independently: a failure in one must not prevent the
+        others from running (G5).
+        """
+        extractors = (
+            self._extract_from_tool_calls,
+            self._extract_from_code_patterns,
+            self._extract_from_user_questions,
+            self._extract_from_errors,
+            self._extract_from_file_operations,
+            self._detect_repetitive_patterns,
+        )
+
+        extracted = []
+        for extractor in extractors:
+            try:
+                results = await extractor(session_id, messages)
+                if results:
+                    extracted.extend(results)
+            except Exception:
+                log.exception("Extractor %s failed for session %s", extractor.__name__, session_id)
+
+        if extracted:
             log.info("Knowledge extraction completed for session %s: %d entries extracted", session_id, len(extracted))
-            
-        except Exception as e:
-            log.exception("Error extracting knowledge from session %s", session_id)
     
     async def _extract_from_tool_calls(self, session_id: str, messages: list[dict]) -> list[dict]:
         """Extract knowledge from tool call patterns."""
@@ -967,10 +964,33 @@ This workflow is now available as a skill. The agent will use this pattern when 
             content_lower = content.lower()[:200]
             for entry in existing:
                 existing_content = (entry.get("content", "") or "").lower()[:200]
-                # If >80% overlap, skip
+                # If >80% overlap, merge into the existing entry rather than duplicating.
                 if self._content_overlap(content_lower, existing_content) > 0.8:
+                    await KnowledgeBase.merge_knowledge_entry(
+                        entry["id"], confidence=confidence, tags=tags
+                    )
                     return
-            
+
+            # Embedding-based near-duplicate detection (G2). Only run when an
+            # embedding model is configured so we never make network calls otherwise.
+            try:
+                from codeassist.config import load_config
+                cfg = load_config()
+                if getattr(cfg.llm, "embedding_model", ""):
+                    from codeassist.embeddings import get_embedding_manager
+                    manager = get_embedding_manager()
+                    near = await manager.search_by_embedding(
+                        content, limit=5, min_confidence=0.5
+                    )
+                    for cand in near:
+                        if cand.get("similarity", 0.0) >= NEAR_DUP_COSINE_THRESHOLD:
+                            await KnowledgeBase.merge_knowledge_entry(
+                                cand["id"], confidence=confidence, tags=tags
+                            )
+                            return
+            except Exception as e:
+                log.debug("Embedding near-dup check skipped: %s", e)
+
             # Create the knowledge entry
             entry_id = await KnowledgeBase.create_knowledge_entry(
                 entry_type=entry_type,

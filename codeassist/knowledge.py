@@ -19,6 +19,27 @@ from .session import get_db
 
 log = logging.getLogger(__name__)
 
+# result_summary is capped at 1000 chars; keep result_full bounded too so a
+# single large tool output (big file read, long shell dump) cannot bloat the
+# SQLite DB or blow up /api/kb/sessions/{id} which returns tool_calls.
+MAX_RESULT_FULL_CHARS = 100_000
+
+
+def _strip_embeddings(rows: list[dict]) -> list[dict]:
+    """Remove the raw binary embedding column so rows stay JSON-serializable.
+
+    The `embedding` column stores a struct.pack blob (bytes), which is not
+    JSON-serializable and would cause 500s on search/list endpoints once any
+    entry has an embedding. Mirrors the stripping done in export_all/import_all.
+    """
+    if not rows:
+        return rows
+    cleaned = []
+    for r in rows:
+        r.pop("embedding", None)
+        cleaned.append(r)
+    return cleaned
+
 
 class KnowledgeBase:
     """Manages knowledge base operations for CodeAssist."""
@@ -168,7 +189,11 @@ class KnowledgeBase:
                 (entry_id,),
             )
             row = await cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            row_dict = dict(row)
+            row_dict.pop("embedding", None)
+            return row_dict
 
     @staticmethod
     async def search_knowledge(
@@ -178,6 +203,7 @@ class KnowledgeBase:
         tags: list[str] | None = None,
         min_confidence: float = 0.0,
         limit: int = 50,
+        status: str | None = None,
     ) -> list[dict]:
         """Search knowledge entries with filters."""
         conditions = ["confidence >= ?"]
@@ -192,6 +218,9 @@ class KnowledgeBase:
         if scope_identifier:
             conditions.append("scope_identifier = ?")
             params.append(scope_identifier)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
         if tags:
             # Simple JSON array contains check
             for tag in tags:
@@ -210,7 +239,7 @@ class KnowledgeBase:
                 params,
             )
             rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+            return _strip_embeddings([dict(r) for r in rows])
 
     @staticmethod
     async def update_knowledge_entry(entry_id: str, **kwargs) -> bool:
@@ -247,6 +276,49 @@ class KnowledgeBase:
             return cursor.rowcount > 0
 
     @staticmethod
+    async def merge_knowledge_entry(
+        entry_id: str,
+        confidence: float | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """Merge a near-duplicate into an existing entry instead of inserting a new one.
+
+        Bumps usage_count (a signal for later promotion/retention), takes the max
+        confidence, and unions tags. Returns True if the entry existed and was updated.
+        """
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT confidence, tags FROM knowledge_entries WHERE id = ?",
+                (entry_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return False
+
+            existing_conf = row["confidence"] or 0.0
+            new_conf = confidence if confidence is not None else existing_conf
+            final_conf = max(existing_conf, new_conf)
+
+            existing_tags = json.loads(row["tags"]) if row["tags"] else []
+            incoming_tags = tags or []
+            all_tags = list(dict.fromkeys([*existing_tags, *incoming_tags]))
+
+            await db.execute(
+                """UPDATE knowledge_entries
+                   SET confidence = ?, tags = ?, usage_count = usage_count + 1,
+                       updated_at = ?
+                   WHERE id = ?""",
+                (
+                    final_conf,
+                    json.dumps(all_tags) if all_tags else None,
+                    datetime.now(timezone.utc).isoformat(),
+                    entry_id,
+                ),
+            )
+            await db.commit()
+            return True
+
+    @staticmethod
     async def increment_usage(entry_id: str) -> bool:
         """Increment usage count for a knowledge entry."""
         async with get_db() as db:
@@ -256,6 +328,146 @@ class KnowledgeBase:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    @staticmethod
+    async def run_quality_pass(
+        min_confidence: float = 0.5,
+        max_usage: int = 0,
+        promote_after: int = 3,
+    ) -> dict:
+        """Run the periodic quality/retention pass (G3/F2).
+
+        Soft-deletes (archives) active entries whose confidence is below
+        ``min_confidence`` and which have been used ``max_usage`` times or fewer.
+        Rows are archived, not deleted, so their content stays recoverable. Also
+        returns ``promotable``: active entries whose ``usage_count`` meets
+        ``promote_after`` (a live signal that frequently-used entries are worth
+        promoting, e.g. to a skill). Returns a report.
+        """
+        async with get_db() as db:
+            cursor = await db.execute(
+                """SELECT id, entry_type, scope, scope_identifier, confidence, usage_count,
+                          metadata
+                   FROM knowledge_entries
+                   WHERE status = 'active'
+                     AND confidence < ?
+                     AND usage_count <= ?""",
+                (min_confidence, max_usage),
+            )
+            candidates = [dict(r) for r in await cursor.fetchall()]
+
+            now = datetime.now(timezone.utc).isoformat()
+            for c in candidates:
+                metadata = json.loads(c["metadata"]) if c["metadata"] else {}
+                metadata["archived_reason"] = "low_confidence_unused"
+                metadata["archived_at"] = now
+                await db.execute(
+                    """UPDATE knowledge_entries
+                       SET status = 'archived', metadata = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (json.dumps(metadata), now, c["id"]),
+                )
+            await db.commit()
+
+            cursor = await db.execute(
+                """SELECT id, entry_type, scope, confidence, usage_count
+                   FROM knowledge_entries
+                   WHERE status = 'active' AND usage_count >= ?
+                   ORDER BY usage_count DESC""",
+                (promote_after,),
+            )
+            promotable = [dict(r) for r in await cursor.fetchall()]
+
+        return {
+            "scanned": len(candidates),
+            "archived": len(candidates),
+            "candidates": candidates,
+            "promotable": promotable,
+            "promotable_count": len(promotable),
+        }
+
+    @staticmethod
+    async def high_usage_entries(min_usage: int = 3, limit: int = 50) -> list[dict]:
+        """Return active entries used at least ``min_usage`` times (F2 promotion candidates).
+
+        Read-only: this never archives or mutates anything. Results are ordered by
+        usage descending so the most-referenced entries surface first.
+        """
+        async with get_db() as db:
+            cursor = await db.execute(
+                """SELECT id, entry_type, scope, scope_identifier, confidence, usage_count
+                   FROM knowledge_entries
+                   WHERE status = 'active' AND usage_count >= ?
+                   ORDER BY usage_count DESC LIMIT ?""",
+                (min_usage, limit),
+            )
+            return [dict(r) for r in await cursor.fetchall()]
+
+    # ── Lifecycle state machine (F3) ───────────────────────────────────
+
+    VALID_STATUSES = {"active", "review", "flagged", "archived"}
+
+    @staticmethod
+    async def set_entry_status(entry_id: str, status: str) -> bool:
+        """Transition an entry's lifecycle status. Returns True if a row changed."""
+        if status not in KnowledgeBase.VALID_STATUSES:
+            raise ValueError(f"invalid status {status!r}")
+        async with get_db() as db:
+            cursor = await db.execute(
+                "UPDATE knowledge_entries SET status = ?, updated_at = ? WHERE id = ?",
+                (status, datetime.now(timezone.utc).isoformat(), entry_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    async def flag_for_review(entry_id: str) -> bool:
+        """Flag an entry for human review."""
+        return await KnowledgeBase.set_entry_status(entry_id, "review")
+
+    @staticmethod
+    async def flag_entry(entry_id: str) -> bool:
+        """Flag an entry as questionable (e.g. suspected PII/secrets)."""
+        return await KnowledgeBase.set_entry_status(entry_id, "flagged")
+
+    @staticmethod
+    async def approve_entry(entry_id: str) -> bool:
+        """Approve a reviewed entry, returning it to the active set."""
+        return await KnowledgeBase.set_entry_status(entry_id, "active")
+
+    @staticmethod
+    async def archive_entry(entry_id: str) -> bool:
+        """Soft-archive an entry (content preserved, excluded from default search)."""
+        return await KnowledgeBase.set_entry_status(entry_id, "archived")
+
+    @staticmethod
+    async def restore_entry(entry_id: str) -> bool:
+        """Restore an archived entry back to active."""
+        return await KnowledgeBase.set_entry_status(entry_id, "active")
+
+    @staticmethod
+    async def entry_status_counts() -> dict:
+        """Count entries by lifecycle status (for the stats bar)."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT status, COUNT(*) as count FROM knowledge_entries GROUP BY status"
+            )
+            rows = await cursor.fetchall()
+        counts = {status: 0 for status in KnowledgeBase.VALID_STATUSES}
+        for r in rows:
+            counts[r["status"]] = r["count"]
+        return counts
+
+    @staticmethod
+    async def orphan_entry_count() -> int:
+        """Count entries referencing a session_id that no longer exists."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                """SELECT COUNT(*) as c FROM knowledge_entries ke
+                   WHERE ke.source_session_id IS NOT NULL
+                     AND ke.source_session_id NOT IN (SELECT id FROM sessions)"""
+            )
+            return (await cursor.fetchone())["c"]
 
     @staticmethod
     async def delete_knowledge_entry(entry_id: str) -> bool:
@@ -301,7 +513,7 @@ class KnowledgeBase:
                         (query, limit),
                     )
                 rows = await cursor.fetchall()
-                return [dict(r) for r in rows]
+                return _strip_embeddings([dict(r) for r in rows])
         except Exception as e:
             log.warning("FTS5 search failed, falling back to LIKE search: %s", e)
             # Fallback to LIKE search
@@ -362,7 +574,7 @@ class KnowledgeBase:
                     tool_name,
                     json.dumps(arguments) if arguments else None,
                     result_summary[:1000] if result_summary else None,
-                    result_full,
+                    (result_full[:MAX_RESULT_FULL_CHARS] if result_full else None),
                     duration_ms,
                     1 if success else 0,
                     error_message,
@@ -391,7 +603,7 @@ class KnowledgeBase:
             conditions.append("tool_name = ?")
             params.append(tool_name)
         if period_days:
-            conditions.append("created_at >= datetime('now', ?)")
+            conditions.append("datetime(created_at) >= datetime('now', ?)")
             params.append(f"-{period_days} days")
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
@@ -471,7 +683,7 @@ class KnowledgeBase:
             conditions.append("model = ?")
             params.append(model)
         if period_days:
-            conditions.append("created_at >= datetime('now', ?)")
+            conditions.append("datetime(created_at) >= datetime('now', ?)")
             params.append(f"-{period_days} days")
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
@@ -631,7 +843,7 @@ class KnowledgeBase:
 
     EXPORT_TABLES = [
         "session_summaries", "knowledge_entries", "tool_executions",
-        "llm_usage", "session_tags", "file_snapshots", "qa_pairs",
+        "llm_usage", "session_tags", "file_snapshots",
     ]
 
     @staticmethod
@@ -699,7 +911,7 @@ class KnowledgeBase:
     @staticmethod
     async def _rebuild_fts():
         """Rebuild FTS5 virtual tables after import."""
-        from .session import get_db, _ensure_fts_populated
+        from .session import get_db
         try:
             async with get_db() as db:
                 await _ensure_fts_populated(db)

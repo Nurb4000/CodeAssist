@@ -54,6 +54,30 @@
                 
                 <h3>Recent Activity</h3>
                 <div id="recent-activity"></div>
+                
+                <h3>Lifecycle & Health</h3>
+                <div id="lifecycle-grid" class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-active">-</div>
+                        <div class="stat-label">Active</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-review">-</div>
+                        <div class="stat-label">In Review</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-flagged">-</div>
+                        <div class="stat-label">Flagged</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-archived">-</div>
+                        <div class="stat-label">Archived</div>
+                    </div>
+                </div>
+                <div id="health-details" class="health-details"></div>
+                
+                <h3>Frequently-Used (Promotion Candidates)</h3>
+                <div id="high-usage-list" class="high-usage-list"></div>
             </div>
             
             <!-- Entries Page -->
@@ -87,6 +111,7 @@
                             <tr>
                                 <th><input type="checkbox" id="select-all"></th>
                                 <th>Type</th>
+                                <th>Status</th>
                                 <th>Content</th>
                                 <th>Scope</th>
                                 <th>Confidence</th>
@@ -112,6 +137,17 @@
                     <button id="btn-search">Search</button>
                 </div>
                 <div id="search-results"></div>
+                
+                <!-- Embeddings Section -->
+                <div class="embeddings-section">
+                    <h3>Semantic Embeddings</h3>
+                    <p>Semantic search relies on per-entry embeddings. CodeAssist creates them automatically once an embedding model is configured; use this to embed existing entries.</p>
+                    <button id="btn-generate-embeddings">Generate embeddings</button>
+                    <div id="embeddings-progress" class="embeddings-progress" style="display:none">
+                        <div id="embeddings-bar" class="embeddings-bar"></div>
+                    </div>
+                    <p id="embeddings-status"></p>
+                </div>
             </div>
             
             <!-- Sessions Page -->

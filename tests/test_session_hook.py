@@ -445,3 +445,88 @@ class TestLLMSummary:
         summary = await KnowledgeBase.get_session_summary(session.id)
         assert summary is not None
 
+
+class TestExtractorIsolation:
+    @pytest.mark.asyncio
+    async def test_one_extractor_failure_does_not_skip_rest(self, session_hook):
+        await init_db()
+        session = await Session.create("G5 Isolation Session")
+
+        called = []
+
+        async def raising_tool_calls(session_id, messages):
+            called.append("_extract_from_tool_calls")
+            raise RuntimeError("boom")
+
+        async def recording(name):
+            async def _inner(session_id, messages):
+                called.append(name)
+                return []
+            return _inner
+
+        session_hook._extract_from_tool_calls = raising_tool_calls
+        for name in (
+            "_extract_from_code_patterns",
+            "_extract_from_user_questions",
+            "_extract_from_errors",
+            "_extract_from_file_operations",
+            "_detect_repetitive_patterns",
+        ):
+            setattr(session_hook, name, await recording(name))
+
+        await session_hook._extract_knowledge(session.id, [], {})
+
+        # The raising extractor still ran, and every other extractor ran too.
+        assert "_extract_from_tool_calls" in called
+        for name in (
+            "_extract_from_code_patterns",
+            "_extract_from_user_questions",
+            "_extract_from_errors",
+            "_extract_from_file_operations",
+            "_detect_repetitive_patterns",
+        ):
+            assert name in called
+
+
+class TestNearDuplicateMerge:
+    @pytest.mark.asyncio
+    async def test_similar_content_merges_not_duplicates(self, session_hook):
+        await init_db()
+        await session_hook._create_knowledge_if_new(
+            entry_type="pattern", scope="file",
+            content="Implement login feature with JWT tokens and refresh handler",
+            source_session_id="s-merge-a", confidence=0.7, tags=["auth"],
+        )
+        # Nearly identical (one extra word) -> should merge into the first entry.
+        await session_hook._create_knowledge_if_new(
+            entry_type="pattern", scope="file",
+            content="Implement login feature with JWT tokens and refresh handler now",
+            source_session_id="s-merge-b", confidence=0.9, tags=["security"],
+        )
+
+        entries = await KnowledgeBase.search_knowledge(
+            entry_type="pattern", scope="file", min_confidence=0.0
+        )
+        assert len(entries) == 1
+        entry = entries[0]
+        assert json.loads(entry["tags"]) == sorted(["auth", "security"])
+
+    @pytest.mark.asyncio
+    async def test_distinct_content_creates_separate_entry(self, session_hook):
+        await init_db()
+        await session_hook._create_knowledge_if_new(
+            entry_type="pattern", scope="file",
+            content="Implement login feature with JWT tokens",
+            source_session_id="s-dist-a", confidence=0.7, tags=["auth"],
+        )
+        await session_hook._create_knowledge_if_new(
+            entry_type="pattern", scope="file",
+            content="Refactor the database migration script for postgres",
+            source_session_id="s-dist-b", confidence=0.7, tags=["db"],
+        )
+
+        entries = await KnowledgeBase.search_knowledge(
+            entry_type="pattern", scope="file", min_confidence=0.0
+        )
+        assert len(entries) == 2
+

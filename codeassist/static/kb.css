@@ -489,6 +489,41 @@ button:hover {
     color: #90a4ae;
 }
 
+/* Frequently-Used / Promotion Candidates */
+.high-usage-list {
+    margin-top: 12px;
+}
+.high-usage-items {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.high-usage-items li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.high-usage-items .type-badge {
+    flex: 0 0 auto;
+}
+.high-usage-uses {
+    flex: 0 0 auto;
+    min-width: 74px;
+    font-size: 12px;
+    color: #64ffda;
+    font-weight: 600;
+}
+.high-usage-content {
+    flex: 1 1 auto;
+    color: #b0bec5;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Entry Content Preview */
 .entry-preview {
     max-width: 300px;
@@ -513,3 +548,17 @@ button:hover {
 .type-badge.optimization { background: #4a148c; color: #ea80fc; }
 .type-badge.skill_created { background: #006064; color: #84ffff; }
 .type-badge.tool_created { background: #827717; color: #fff59d; }
+
+.status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.status-badge.status-active { background: #1b5e20; color: #b9f6ca; }
+.status-badge.status-review { background: #4a148c; color: #ea80fc; }
+.status-badge.status-flagged { background: #e65100; color: #ffcc80; }
+.status-badge.status-archived { background: #424242; color: #e0e0e0; }
