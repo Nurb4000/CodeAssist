@@ -134,6 +134,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from tools.git_snapshot import GitSnapshotTool
     from tools.docker_tool import DockerTool
     from tools.image_analyze import ImageAnalyzeTool
+    from tools.screenshot import ScreenshotTool
     from codeassist.skills import SkillTool
     from codeassist.session_manager import SessionTool
 
@@ -226,6 +227,11 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     # Register Image Analyze tool
     registry.register(ImageAnalyzeTool())
 
+    # Register Screenshot tool
+    screenshot_tool = ScreenshotTool()
+    screenshot_tool.workspace = workspace
+    registry.register(screenshot_tool)
+
     # Register Skill tool (if skill registry exists)
     if skill_registry:
         registry.register(SkillTool(skill_registry))
@@ -283,7 +289,8 @@ def get_tools(config=None) -> dict:
     from tools.git_snapshot import GitSnapshotTool
     from tools.docker_tool import DockerTool
     from tools.image_analyze import ImageAnalyzeTool
-    
+    from tools.screenshot import ScreenshotTool
+
     tools = {}
     workspace = Path(".")
     
@@ -293,8 +300,9 @@ def get_tools(config=None) -> dict:
         WebFetchTool, TodoTool, GitTool, FossilTool, ApplyPatchTool,
         DirectoryTool, ProcessTool, HTTPTool, DatabaseTool, DocumentationTool,
         WebSearchTool, QuestionTool, CreateTool, CreateSkill, DiffPreviewTool,
-        TestRunnerTool, SymbolSearchTool, PackageManagerTool,
+        TestRunnerTool,         SymbolSearchTool, PackageManagerTool,
         GitSnapshotTool, DockerTool, ImageAnalyzeTool,
+        ScreenshotTool,
     ]
     
     for tool_cls in tool_classes:
