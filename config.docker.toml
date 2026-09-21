@@ -2,8 +2,13 @@
 #   cp config.docker.toml config.toml
 
 [llm]
+# Provider is a required enum; "openai" also works for OpenAI-compatible
+# backends (llama.cpp, vLLM) via base_url below.
 provider = "openai"
-model = "gpt-4o"
+
+# Model is intentionally left blank: LLM identity is configured in the UI
+# (Settings > LLM) and persisted between sessions. Leave empty until set.
+model = ""
 api_key = ""
 base_url = ""
 

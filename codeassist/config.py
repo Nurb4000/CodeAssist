@@ -10,8 +10,14 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class LLMConfig:
+    # Provider is a required enum; "openai" is the neutral default and works for
+    # both OpenAI and OpenAI-compatible backends (llama.cpp, vLLM) via base_url.
     provider: str = "openai"
-    model: str = "gpt-4o"
+    # No baked-in model default: LLM identity is configured in the UI (Settings
+    # > LLM) and persisted in the DB between sessions. An empty model simply
+    # means "not configured yet" — the app boots fine and chat prompts the user
+    # to set one. base_url/api_key follow the same pattern (empty until set).
+    model: str = ""
     api_key: str = ""
     base_url: str = ""
     temperature: float = 0.0
