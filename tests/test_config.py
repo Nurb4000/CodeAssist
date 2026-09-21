@@ -16,7 +16,7 @@ class TestConfig:
         config = Config.load("/nonexistent/config.toml")
         
         assert config.llm.provider == "openai"
-        assert config.llm.model == "gpt-4o"
+        assert config.llm.model == ""  # no baked-in model default; UI-configured
         assert config.server.host == "127.0.0.1"
         assert config.server.port == 8090
         assert config.agent.max_iterations == 30

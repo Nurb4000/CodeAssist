@@ -65,7 +65,7 @@ async def test_clear_restores_file_value():
     cfg.llm.model = "ui-model"
     await clear_override("llm.model", cfg)
     assert settings_store.get("llm.model") is None
-    assert cfg.llm.model == "gpt-4o"  # back to dataclass default
+    assert cfg.llm.model == ""  # back to dataclass default (no baked-in model)
 
 
 def test_coerce_types():
@@ -144,7 +144,7 @@ def test_delete_setting_resets(live_client):
 
     res = live_client.delete("/api/settings/llm.model")
     assert res.status_code == 200
-    assert server.get_config().llm.model == "gpt-4o"
+    assert server.get_config().llm.model == ""  # resets to no-default dataclass value
 
     res = live_client.delete("/api/settings/does.not.exist")
     assert res.status_code == 404
