@@ -47,6 +47,31 @@ async def search_knowledge(q: str, entry_type: str = None, limit: int = 20):
     )
 
 
+# ── Export / Import ────────────────────────────────────────────────
+
+@router.get("/export")
+async def export_knowledge():
+    """Export all knowledge base data (entries, summaries, embeddings)."""
+    from codeassist.knowledge import KnowledgeBase
+    return await KnowledgeBase.export_all()
+
+
+@router.post("/import")
+async def import_knowledge(body: dict):
+    """Import knowledge base data. Body must contain 'data' (JSON object or string)."""
+    from codeassist.knowledge import KnowledgeBase
+    data = body.get("data")
+    if not data:
+        raise HTTPException(status_code=400, detail="data is required")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON data")
+    counts = await KnowledgeBase.import_all(data)
+    return counts
+
+
 @router.post("")
 async def create_knowledge(body: dict):
     """Create a new knowledge entry. Body must contain 'entry_type', 'scope', and 'content'."""
@@ -133,32 +158,6 @@ async def file_history(file_path: str, limit: int = 50):
     """Get modification history for a specific file across sessions."""
     from codeassist.knowledge import KnowledgeBase
     return await KnowledgeBase.get_file_history(file_path, limit=limit)
-
-
-# ── Export / Import ────────────────────────────────────────────────
-
-@router.get("/export")
-async def export_knowledge():
-    """Export all knowledge base data (entries, summaries, embeddings)."""
-    from codeassist.knowledge import KnowledgeBase
-    return await KnowledgeBase.export_all()
-
-
-@router.post("/import")
-async def import_knowledge(body: dict):
-    """Import knowledge base data. Body must contain 'data' (JSON object or string)."""
-    from codeassist.knowledge import KnowledgeBase
-    data = body.get("data")
-    if not data:
-        raise HTTPException(status_code=400, detail="data is required")
-    import json
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON data")
-    counts = await KnowledgeBase.import_all(data)
-    return counts
 
 
 # ── Auto-Creation Status ────────────────────────────────────────
