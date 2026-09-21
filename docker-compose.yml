@@ -13,12 +13,11 @@ services:
       # Project root as the workspace (shipped skills/tools resolve under
       # <workspace>/codeassist/... and runtime/ content is written here).
       - ${WORKSPACE}:/workspace
-      # Optional host config override. Mounted at a *separate* path on purpose:
-      # if ./config.toml is missing, Docker would otherwise create an empty
-      # directory that clobbers the app's /app/config.toml and breaks boot. The
-      # entrypoint only uses this when it is a real file (see docker-entrypoint.sh).
-      - ./config.toml:/app/override.config.toml:ro
       # Persist the SQLite DB + session history across container recreation.
+      # Config itself is NOT host-mounted on purpose: it comes from the baked-in
+      # config.docker.toml default, env vars (WORKSPACE/SERVER_PORT), and UI
+      # settings persisted in the DB. This avoids Docker's bind-mount trap of
+      # creating an empty ./config.toml directory when the file is absent.
       - ${DATA_VOLUME}:/app/data
     environment:
       - CODEASSIST_WORKSPACE=/workspace
