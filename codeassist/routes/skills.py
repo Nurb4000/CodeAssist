@@ -1,7 +1,5 @@
 """Skills API routes."""
-import json
-
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -134,14 +132,9 @@ async def delete_skill(name: str):
 
 @router.get("/export")
 async def export_skills():
-    """Download a portable JSON manifest of all skills (base + custom)."""
+    """Export all skills (base + custom) as a portable JSON manifest."""
     registry = _discover_registry()
-    manifest = registry.export_skills()
-    return Response(
-        content=json.dumps(manifest, indent=2),
-        media_type="application/json",
-        headers={"Content-Disposition": 'attachment; filename="codeassist-skills.json"'},
-    )
+    return registry.export_skills()
 
 
 @router.post("/import")

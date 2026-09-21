@@ -41,7 +41,8 @@ def test_skill_export_categorizes_base_and_custom(tmp_path):
     manifest = reg.export_skills()
 
     assert manifest["format"] == "codeassist-skills-bundle"
-    by_name = {s["name"]: s for s in manifest["skills"]}
+    assert manifest["version"] == 1 and manifest["exported_at"]
+    by_name = {s["name"]: s for s in manifest["data"]["skills"]}
     assert by_name["baseone"]["category"] == "base"
     assert by_name["custone"]["category"] == "custom"
 
@@ -54,10 +55,12 @@ def test_skill_import_writes_to_category_dir(tmp_path):
     reg.discover()
     result = reg.import_skills({
         "format": "codeassist-skills-bundle",
-        "skills": [
-            {"name": "impbase", "description": "d", "slash": None, "body": "body", "category": "base"},
-            {"name": "impcust", "description": "d", "slash": "ic", "body": "body", "category": "custom"},
-        ],
+        "data": {
+            "skills": [
+                {"name": "impbase", "description": "d", "slash": None, "body": "body", "category": "base"},
+                {"name": "impcust", "description": "d", "slash": "ic", "body": "body", "category": "custom"},
+            ]
+        },
     })
 
     assert result["imported"] == ["codeassist/skills/impbase.md", "runtime/skills/impcust.md"]
@@ -130,7 +133,8 @@ def test_custom_tool_export_import_roundtrip(tmp_path):
 
     manifest = reg.export_tools()
     assert manifest["format"] == "codeassist-tools-bundle"
-    assert manifest["tools"][0]["filename"] == "sample.py"
+    assert manifest["version"] == 1 and manifest["exported_at"]
+    assert manifest["data"]["tools"][0]["filename"] == "sample.py"
 
     # wipe the source and re-import from the manifest
     (tools_dir / "sample.py").unlink()
@@ -146,6 +150,20 @@ def test_custom_tool_import_rejects_wrong_bundle(tmp_path):
     reg = CustomToolRegistry(tmp_path, trust_registry=None)
     with pytest.raises(ValueError):
         reg.import_tools({"format": "wrong"})
+
+
+def test_export_base_tools_captures_package_source():
+    from codeassist.tools import export_base_tools
+
+    payload = export_base_tools()
+    assert payload["format"] == "codeassist-base-tools-bundle"
+    assert payload["version"] == 1 and payload["exported_at"]
+    files = {b["file"] for b in payload["data"]["base_tools"]}
+    # a couple of known shipped tool modules should be present, verbatim source
+    assert "read.py" in files and "write.py" in files
+    read_src = next(b["source"] for b in payload["data"]["base_tools"]
+                    if b["file"] == "read.py")
+    assert "class ReadTool" in read_src
 
 
 # --------------------------------------------------------------------------- #
@@ -185,8 +203,8 @@ def test_skill_export_import_route(client):
     # remove the skill, then import it back via the route
     (ws / "runtime/skills/routeone.md").unlink()
     body = {"format": "codeassist-skills-bundle",
-            "skills": [{"name": "routeone", "description": "d", "slash": "ro",
-                        "body": "body", "category": "custom"}]}
+            "data": {"skills": [{"name": "routeone", "description": "d", "slash": "ro",
+                        "body": "body", "category": "custom"}]}}
     r = client.post("/api/skills/import", json=body)
     assert r.status_code == 200, r.text
     assert (ws / "runtime/skills/routeone.md").exists()
@@ -214,12 +232,22 @@ def test_custom_tool_export_import_route(client):
     r = client.get("/api/custom-tools/export")
     assert r.status_code == 200
     manifest = r.json()
-    assert manifest["tools"][0]["filename"] == "sample.py"
+    assert manifest["data"]["tools"][0]["filename"] == "sample.py"
 
     (tools_dir / "sample.py").unlink()
     body = {"format": "codeassist-tools-bundle",
-            "tools": [{"filename": "sample.py", "source": TOOL_SOURCE,
-                       "tools": ["sample"], "category": "custom"}]}
+            "data": {"tools": [{"filename": "sample.py", "source": TOOL_SOURCE,
+                       "tools": ["sample"], "category": "custom"}]}}
     r2 = client.post("/api/custom-tools/import", json=body)
     assert r2.status_code == 200, r2.text
     assert (tools_dir / "sample.py").exists()
+
+
+def test_base_tool_export_route(client):
+    client, ws = client
+    r = client.get("/api/tools/export")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["format"] == "codeassist-base-tools-bundle"
+    files = {b["file"] for b in payload["data"]["base_tools"]}
+    assert "read.py" in files

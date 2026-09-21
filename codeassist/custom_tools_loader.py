@@ -7,6 +7,7 @@ import importlib.util
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -211,10 +212,16 @@ class CustomToolRegistry:
     def export_tools(self) -> dict:
         """Return a portable JSON manifest of every custom tool.
 
+        Mirrors the KB export envelope (``version`` / ``exported_at`` / ``data``).
         Each entry preserves the tool's source verbatim so it can be shared and
         re-imported on another instance without modification.
         """
-        manifest = {"format": self.TOOLS_BUNDLE, "version": 1, "tools": []}
+        manifest = {
+            "format": self.TOOLS_BUNDLE,
+            "version": 1,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "data": {"tools": []},
+        }
         if not self.tools_dir.exists():
             return manifest
         for tool_file in sorted(self.tools_dir.glob("*.py")):
@@ -225,7 +232,7 @@ class CustomToolRegistry:
                 names = sorted(self._tool_names_from_tree(ast.parse(source)))
             except SyntaxError:
                 names = [tool_file.stem]
-            manifest["tools"].append({
+            manifest["data"]["tools"].append({
                 "filename": tool_file.name,
                 "source": source,
                 "tools": names or [tool_file.stem],
@@ -244,7 +251,7 @@ class CustomToolRegistry:
 
         self.tools_dir.mkdir(parents=True, exist_ok=True)
         imported = []
-        for entry in manifest.get("tools", []):
+        for entry in manifest.get("data", {}).get("tools", []):
             target = self.tools_dir / entry["filename"]
             target.write_text(entry["source"], encoding="utf-8")
             imported.append(target.relative_to(self.workspace).as_posix())

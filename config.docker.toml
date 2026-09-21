@@ -38,7 +38,7 @@ enabled = false
 
 [skills]
 enabled = true
-directories = ["codeassist/skills"]
+directories = ["codeassist/skills", "runtime/skills"]
 
 [plugins]
 enabled = false

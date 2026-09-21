@@ -27,6 +27,17 @@ async def list_tools():
     return {"tools": [name for name in tools.list_names()]}
 
 
+@router.get("/export")
+async def export_base_tools():
+    """Export the source of every shipped (base) tool as a portable JSON manifest.
+
+    Base tools are package code, so this is a read-only shareable snapshot;
+    re-importing would require registering the tool in the package.
+    """
+    from ..tools import export_base_tools
+    return export_base_tools()
+
+
 # ── Tool Management GUI ────────────────────────────────────────
 
 @router.get("/manage/list")

@@ -321,3 +321,33 @@ def reload_tools(workspace: Path, registry: ToolRegistry) -> int:
     
     loader = DynamicToolLoader(workspace)
     return loader.reload_registry(registry)
+
+
+# --- export / import (portability) ----------------------------------------- #
+
+BASE_TOOLS_BUNDLE = "codeassist-base-tools-bundle"
+
+
+def export_base_tools() -> dict:
+    """Return the source of every shipped (base) tool module.
+
+    Mirrors the KB export envelope (``version`` / ``exported_at`` / ``data``).
+    Base tools are package code, so this is a read-only shareable snapshot;
+    re-importing would require registering the tool in this package.
+    """
+    from datetime import datetime, timezone
+
+    payload = {
+        "format": BASE_TOOLS_BUNDLE,
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "data": {"base_tools": []},
+    }
+    for py in sorted(Path(__file__).parent.glob("*.py")):
+        if py.name.startswith("_") or py.name == "__init__.py":
+            continue
+        payload["data"]["base_tools"].append({
+            "file": py.name,
+            "source": py.read_text(encoding="utf-8"),
+        })
+    return payload

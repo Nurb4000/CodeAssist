@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -232,6 +233,7 @@ class SkillRegistry:
     def export_skills(self) -> dict:
         """Return a portable JSON manifest of every discovered skill.
 
+        Mirrors the KB export envelope (``version`` / ``exported_at`` / ``data``).
         Each entry records the rendered body plus the category (``base`` for
         shipped skills under ``codeassist/skills``, ``custom`` for everything
         else) so it can be round-tripped and promoted.
@@ -239,14 +241,15 @@ class SkillRegistry:
         manifest = {
             "format": self.SKILLS_BUNDLE,
             "version": 1,
-            "skills": [],
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "data": {"skills": []},
         }
         for skill in self.discover():
             path = self._resolve_skill_path(skill.name)
             if path is None:
                 continue
             rel = path.relative_to(self.workspace).as_posix()
-            manifest["skills"].append({
+            manifest["data"]["skills"].append({
                 "name": skill.name,
                 "description": skill.description,
                 "slash": skill.slash_command,
@@ -266,7 +269,7 @@ class SkillRegistry:
             raise ValueError("not a CodeAssist skill bundle")
 
         imported = []
-        for entry in manifest.get("skills", []):
+        for entry in manifest.get("data", {}).get("skills", []):
             name = entry["name"]
             target_dir = self.workspace / (self.BASE_DIR
                                           if entry.get("category") == "base"

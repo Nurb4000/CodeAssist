@@ -93,7 +93,7 @@ enabled = false
 enabled = true
 
 # Directories to search for skills (relative to workspace)
-directories = ["codeassist/skills"]
+directories = ["codeassist/skills", "runtime/skills"]
 
 [plugins]
 # Enable plugin system

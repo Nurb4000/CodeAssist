@@ -2,7 +2,6 @@
 import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/custom-tools", tags=["custom_tools"])
 
@@ -64,16 +63,12 @@ async def delete_custom_tool(name: str):
 
 @router.get("/export")
 async def export_custom_tools():
-    """Download a portable JSON manifest of all custom tools."""
+    """Export all custom tools as a portable JSON manifest."""
     from codeassist.custom_tools_loader import get_custom_tool_registry
     from ..server import get_config, get_trust_registry
 
     registry = get_custom_tool_registry(get_config().workspace, trust_registry=get_trust_registry())
-    manifest = registry.export_tools()
-    return JSONResponse(
-        content=manifest,
-        headers={"Content-Disposition": 'attachment; filename="codeassist-tools.json"'},
-    )
+    return registry.export_tools()
 
 
 @router.post("/import")
