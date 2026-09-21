@@ -548,7 +548,10 @@ async function loadSettings() {
         const tbody = document.createElement('tbody');
         for (const spec of items) {
             const sourceClass = spec.source === 'ui' ? 'src-ui' : 'src-file';
-            const sourceLabel = spec.source === 'ui' ? 'overridden' : 'from config.toml';
+            // Values now come from the baked/dataclass/env default, not a host
+            // config.toml (LLM settings are UI-managed and fileless), so label
+            // the non-overridden state as "default" rather than a file source.
+            const sourceLabel = spec.source === 'ui' ? 'overridden' : 'default';
             const restartNote = spec.restart_required ? ' · restart required' : '';
             const resetBtn = spec.source === 'ui'
                 ? `<button class="admin-btn admin-btn-danger settings-reset" data-key="${spec.key}">Reset</button>`
