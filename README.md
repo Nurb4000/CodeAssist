@@ -328,7 +328,11 @@ async def execute(input: str) -> ToolResult:
 
 - **API**: `GET /api/auto-creation/status` - View auto-creation stats
 - **API**: `POST /api/skills/reload` - Reload skills from disk
-- **API**: `POST /api/custom-tools/reload` - Reload custom tools
+- **API**: `GET /api/skills/export` - Download a portable JSON manifest of all skills (base + custom)
+- **API**: `POST /api/skills/import` - Import skills from a manifest (`base` entries land in `codeassist/skills`, `custom` in `runtime/skills`)
+- **API**: `POST /api/skills/{name}/promote` - Promote a custom skill into the shipped base directory
+- **API**: `GET /api/custom-tools/export` - Download a portable JSON manifest of all custom tools
+- **API**: `POST /api/custom-tools/import` - Import custom tools from a manifest (re-enters the trust flow as untrusted)
 - **GUI**: `/static/kb.html` - Knowledge Base dashboard
 
 See `docs/knowledge-base-quickref.md` for full API reference.

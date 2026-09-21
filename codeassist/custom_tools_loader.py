@@ -203,6 +203,54 @@ class CustomToolRegistry:
         self._tools.clear()
         self._modules.clear()
         self.discover()
+
+    # --- export / import (portability) ------------------------------------- #
+
+    TOOLS_BUNDLE = "codeassist-tools-bundle"
+
+    def export_tools(self) -> dict:
+        """Return a portable JSON manifest of every custom tool.
+
+        Each entry preserves the tool's source verbatim so it can be shared and
+        re-imported on another instance without modification.
+        """
+        manifest = {"format": self.TOOLS_BUNDLE, "version": 1, "tools": []}
+        if not self.tools_dir.exists():
+            return manifest
+        for tool_file in sorted(self.tools_dir.glob("*.py")):
+            if tool_file.name.startswith("_"):
+                continue
+            source = tool_file.read_text(encoding="utf-8")
+            try:
+                names = sorted(self._tool_names_from_tree(ast.parse(source)))
+            except SyntaxError:
+                names = [tool_file.stem]
+            manifest["tools"].append({
+                "filename": tool_file.name,
+                "source": source,
+                "tools": names or [tool_file.stem],
+                "category": "custom",
+            })
+        return manifest
+
+    def import_tools(self, manifest: dict) -> dict:
+        """Write custom tools from an :meth:`export_tools` manifest to disk.
+
+        Files are written verbatim into ``runtime/custom_tools`` and the registry
+        is reloaded; freshly imported tools re-enter the trust flow as untrusted.
+        """
+        if manifest.get("format") != self.TOOLS_BUNDLE:
+            raise ValueError("not a CodeAssist tool bundle")
+
+        self.tools_dir.mkdir(parents=True, exist_ok=True)
+        imported = []
+        for entry in manifest.get("tools", []):
+            target = self.tools_dir / entry["filename"]
+            target.write_text(entry["source"], encoding="utf-8")
+            imported.append(target.relative_to(self.workspace).as_posix())
+
+        self.reload()
+        return {"imported": imported}
     
     async def execute_tool(self, name: str, **kwargs) -> str:
         """Execute a custom tool with confirmation if not trusted."""

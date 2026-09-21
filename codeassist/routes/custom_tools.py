@@ -1,4 +1,5 @@
 """Custom tools management API routes."""
+import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -59,3 +60,35 @@ async def delete_custom_tool(name: str):
     # Refresh the in-memory registry so the removed tool no longer appears.
     registry.reload()
     return {"ok": True, "deleted": str(path)}
+
+
+@router.get("/export")
+async def export_custom_tools():
+    """Download a portable JSON manifest of all custom tools."""
+    from codeassist.custom_tools_loader import get_custom_tool_registry
+    from ..server import get_config, get_trust_registry
+
+    registry = get_custom_tool_registry(get_config().workspace, trust_registry=get_trust_registry())
+    manifest = registry.export_tools()
+    return JSONResponse(
+        content=manifest,
+        headers={"Content-Disposition": 'attachment; filename="codeassist-tools.json"'},
+    )
+
+
+@router.post("/import")
+async def import_custom_tools(manifest: dict):
+    """Import custom tools from a manifest produced by :func:`export_custom_tools`.
+
+    Files are written verbatim into ``runtime/custom_tools`` and re-enter the
+    trust flow as untrusted until approved.
+    """
+    from codeassist.custom_tools_loader import get_custom_tool_registry
+    from ..server import get_config, get_trust_registry
+
+    registry = get_custom_tool_registry(get_config().workspace, trust_registry=get_trust_registry())
+    try:
+        result = registry.import_tools(manifest)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, **result}

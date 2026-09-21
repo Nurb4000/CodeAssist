@@ -1,5 +1,7 @@
 """Skills API routes."""
-from fastapi import APIRouter, HTTPException
+import json
+
+from fastapi import APIRouter, HTTPException, Response
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -128,3 +130,63 @@ async def delete_skill(name: str):
         global_registry._slash_commands.clear()
         global_registry.discover()
     return {"ok": True, "deleted": str(path)}
+
+
+@router.get("/export")
+async def export_skills():
+    """Download a portable JSON manifest of all skills (base + custom)."""
+    registry = _discover_registry()
+    manifest = registry.export_skills()
+    return Response(
+        content=json.dumps(manifest, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="codeassist-skills.json"'},
+    )
+
+
+@router.post("/import")
+async def import_skills(manifest: dict):
+    """Import skills from a manifest produced by :func:`export_skills`.
+
+    ``base`` entries are written to the shipped directory and ``custom`` entries
+    to the runtime directory; the live registry is reloaded so imports take effect.
+    """
+    from ..server import skill_registry as global_registry
+    from codeassist.skills import SkillRegistry
+
+    registry = _discover_registry()
+    try:
+        result = registry.import_skills(manifest)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Refresh the live registry so subsequent sessions/tools see the imports.
+    if isinstance(global_registry, SkillRegistry):
+        global_registry._skills.clear()
+        global_registry._slash_commands.clear()
+        global_registry.discover()
+    return {"ok": True, **result}
+
+
+@router.post("/{name}/promote")
+async def promote_skill(name: str):
+    """Promote a custom skill into the shipped base directory."""
+    from ..server import skill_registry as global_registry
+    from codeassist.skills import SkillRegistry
+
+    registry = _discover_registry()
+    target = registry.promote_skill(name)
+    if target is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Skill '{name}' could not be promoted: it is not a discoverable "
+                "custom skill, or a base skill with the same name already exists."
+            ),
+        )
+
+    if isinstance(global_registry, SkillRegistry):
+        global_registry._skills.clear()
+        global_registry._slash_commands.clear()
+        global_registry.discover()
+    return {"ok": True, "path": target}

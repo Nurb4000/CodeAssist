@@ -220,6 +220,94 @@ class SkillRegistry:
         """List all available skills."""
         return [skill.to_dict() for skill in self._skills.values()]
 
+    # --- export / import / promote (portability) --------------------------- #
+
+    SKILLS_BUNDLE = "codeassist-skills-bundle"
+    BASE_DIR = "codeassist/skills"
+    CUSTOM_DIR = "runtime/skills"
+
+    def _category_for(self, rel_posix: str) -> str:
+        return "base" if rel_posix.startswith(self.BASE_DIR + "/") else "custom"
+
+    def export_skills(self) -> dict:
+        """Return a portable JSON manifest of every discovered skill.
+
+        Each entry records the rendered body plus the category (``base`` for
+        shipped skills under ``codeassist/skills``, ``custom`` for everything
+        else) so it can be round-tripped and promoted.
+        """
+        manifest = {
+            "format": self.SKILLS_BUNDLE,
+            "version": 1,
+            "skills": [],
+        }
+        for skill in self.discover():
+            path = self._resolve_skill_path(skill.name)
+            if path is None:
+                continue
+            rel = path.relative_to(self.workspace).as_posix()
+            manifest["skills"].append({
+                "name": skill.name,
+                "description": skill.description,
+                "slash": skill.slash_command,
+                "body": skill.content,
+                "category": self._category_for(rel),
+                "path": rel,
+            })
+        return manifest
+
+    def import_skills(self, manifest: dict) -> dict:
+        """Write skills from an :meth:`export_skills` manifest to disk.
+
+        ``base`` entries land in ``codeassist/skills`` and ``custom`` entries in
+        ``runtime/skills``; the registry is reloaded so imports take effect.
+        """
+        if manifest.get("format") != self.SKILLS_BUNDLE:
+            raise ValueError("not a CodeAssist skill bundle")
+
+        imported = []
+        for entry in manifest.get("skills", []):
+            name = entry["name"]
+            target_dir = self.workspace / (self.BASE_DIR
+                                          if entry.get("category") == "base"
+                                          else self.CUSTOM_DIR)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / f"{name}.md"
+            target.write_text(
+                self.format_skill_file(
+                    name,
+                    entry.get("description", ""),
+                    entry.get("body", ""),
+                    entry.get("slash"),
+                ),
+                encoding="utf-8",
+            )
+            imported.append(target.relative_to(self.workspace).as_posix())
+
+        self.reload()
+        return {"imported": imported}
+
+    def promote_skill(self, name: str) -> str | None:
+        """Move a custom skill into the shipped base directory.
+
+        Returns the new relative path, or ``None`` if the skill is not backed by
+        a discoverable workspace file (or already lives under the base dir).
+        """
+        path = self._resolve_skill_path(name)
+        if path is None:
+            return None
+        rel = path.relative_to(self.workspace).as_posix()
+        if rel.startswith(self.BASE_DIR + "/"):
+            return None  # already a base skill
+        target_dir = self.workspace / self.BASE_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"{name}.md"
+        if target.exists():
+            return None  # a base skill with the same name already exists
+        path.rename(target)
+        self.reload()
+        return target.relative_to(self.workspace).as_posix()
+
     def get_instructions(self) -> str:
         """Get instructions for all skills to include in system prompt."""
         if not self._skills:
