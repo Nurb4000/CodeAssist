@@ -8,6 +8,7 @@ from typing import AsyncIterator
 
 import openai
 
+from .capabilities import effective_context_window
 from .config import Config
 from .cost_tracker import CostTracker, BudgetConfig
 from .knowledge import KnowledgeBase
@@ -281,7 +282,7 @@ class Agent:
 
                 # Check context limits and compact if needed
                 ctx = check_context_limit(
-                    messages, self.config.llm.model, self.config.llm.context_window,
+                    messages, self.config.llm.model, await effective_context_window(self.config),
                     tool_schemas=tool_schemas,
                 )
                 yield AgentEvent("context", {

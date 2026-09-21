@@ -18,7 +18,7 @@ def _human_size(num: int) -> str:
 async def api_config():
     """Get current server configuration (model, workspace, enabled features)."""
     from ..server import get_config
-    from ..capabilities import get_backend_info, model_vision_capable
+    from ..capabilities import effective_context_window, get_backend_info, model_vision_capable
     cfg = get_config()
     vision = await model_vision_capable(cfg)
     backend = await get_backend_info(cfg)
@@ -29,7 +29,7 @@ async def api_config():
     external = (not base) or "api.openai.com" in base
     detected = backend.get("model")
     effective = detected if (not external and detected and backend.get("source") == "backend") else cfg.llm.model
-    window = backend.get("context_window") if (not external and backend.get("context_window")) else cfg.llm.context_window
+    window = await effective_context_window(cfg)
     return {
         "model": cfg.llm.model,
         "detected_model": detected,

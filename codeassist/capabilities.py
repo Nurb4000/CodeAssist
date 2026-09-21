@@ -57,13 +57,22 @@ def _parse_vision(model_data: dict) -> bool:
 
 
 def _parse_ctx_len(model_data: dict, top_level: dict) -> int | None:
-    """Best-effort context window from model metadata or top-level response."""
+    """Best-effort context window from model metadata or top-level response.
+
+    OpenAI-style backends expose ``context_length``/``ctx_len``; llama.cpp puts
+    the runtime window under ``meta.n_ctx`` and the training window under
+    ``meta.n_ctx_train``. Prefer the runtime ``n_ctx`` for budgeting since it is
+    what the server actually accepts.
+    """
     for source in (model_data, top_level):
+        meta = source.get("meta") or {}
         ctx = (
             source.get("context_length")
             or source.get("ctx_len")
-            or (source.get("meta") or {}).get("ctx_len")
-            or (source.get("meta") or {}).get("context_length")
+            or meta.get("ctx_len")
+            or meta.get("context_length")
+            or meta.get("n_ctx")
+            or meta.get("n_ctx_train")
         )
         if ctx is not None:
             try:
@@ -179,3 +188,17 @@ async def get_backend_info(cfg) -> dict:
         "context_window": info.get("context_window"),
         "source": "backend" if (info.get("model") or info.get("context_window")) else None,
     }
+
+
+async def effective_context_window(cfg) -> int:
+    """Context window used for token budgeting.
+
+    Local/self-hosted backends (a non-OpenAI ``base_url``) advertise their real
+    window via auto-detection, which we prefer so budgeting matches the model
+    (e.g. a 1M-context llama.cpp build instead of the 128k default). External
+    OpenAI keepers fall back to the configured value.
+    """
+    base = (cfg.llm.base_url or "").strip().lower()
+    external = (not base) or "api.openai.com" in base
+    detected = (await get_backend_info(cfg)).get("context_window")
+    return detected if (not external and detected) else cfg.llm.context_window
