@@ -631,6 +631,16 @@ function bindSettingsActions() {
                 } else if (!models.length) {
                     msg += ' · backend listed no models';
                 }
+                // Adopt the detected context window for local backends (e.g.
+                // llama.cpp's real n_ctx) instead of leaving the 128k default.
+                // Retype to override; only populated when the backend advertises one.
+                if (res.context_window) {
+                    const ctxInput = document.getElementById('set-llm.context_window');
+                    if (ctxInput) {
+                        ctxInput.value = res.context_window;
+                        msg += ` · context window set to ${res.context_window}`;
+                    }
+                }
                 setStatus(msg);
             } else {
                 setStatus(`Connection failed: ${res.error || 'unknown error'}`, true);

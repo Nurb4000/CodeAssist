@@ -124,9 +124,15 @@ async def request_restart():
 
 @router.post("/api/config/test-connection")
 async def test_connection(payload: dict | None = None):
-    """Ping the LLM backend and list available models (optionally with proposed overrides)."""
+    """Ping the LLM backend, list models, and surface the detected context window.
+
+    The context window is echoed back so the Settings UI can adopt it (a local
+    llama.cpp server advertises its real window via meta.n_ctx, which beats the
+    128k default for budgeting).
+    """
     import httpx
 
+    from ..capabilities import context_window_from_body
     from ..server import get_config
     from ..settings import BY_KEY, coerce
 
@@ -146,9 +152,14 @@ async def test_connection(payload: dict | None = None):
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     if response.status_code != 200:
         return {"ok": False, "error": f"HTTP {response.status_code}", "endpoint": endpoint}
+    context_window = None
     try:
         body = response.json()
         models = [m.get("id") for m in body.get("data", []) if m.get("id")]
+        context_window = context_window_from_body(body)
     except Exception:
         models = []
-    return {"ok": True, "endpoint": endpoint, "models": models[:25]}
+    result = {"ok": True, "endpoint": endpoint, "models": models[:25]}
+    if context_window is not None:
+        result["context_window"] = context_window
+    return result

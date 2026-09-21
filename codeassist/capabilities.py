@@ -84,6 +84,25 @@ def _parse_ctx_len(model_data: dict, top_level: dict) -> int | None:
     return None
 
 
+def context_window_from_body(body: dict) -> int | None:
+    """Detect the context window from a ``/v1/models`` response body.
+
+    Iterates both OpenAI-style (``data[]``) and llama.cpp-style (``models[]``)
+    entries and returns the first positive window, or ``None`` when the backend
+    exposes none. Shared by the live probe and the settings test-connection so
+    both surface the same detected value.
+    """
+    if not isinstance(body, dict):
+        return None
+    candidates = [m for m in (body.get("data") or []) if isinstance(m, dict)]
+    candidates += [m for m in (body.get("models") or []) if isinstance(m, dict)]
+    for model in candidates:
+        ctx = _parse_ctx_len(model, body)
+        if ctx is not None:
+            return ctx
+    return None
+
+
 async def _probe_backend(cfg) -> dict | None:
     """Fetch /v1/models and extract vision, model name, context window.
 
@@ -136,11 +155,7 @@ async def _probe_backend(cfg) -> dict | None:
         if mid:
             result["model"] = mid
     # Context window: take the first available from any model.
-    for m in candidate_models:
-        ctx = _parse_ctx_len(m, top_level)
-        if ctx is not None:
-            result["context_window"] = ctx
-            break
+    result["context_window"] = context_window_from_body(top_level)
     return result
 
 
