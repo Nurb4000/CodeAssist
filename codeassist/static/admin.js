@@ -614,7 +614,21 @@ function bindSettingsActions() {
                 api_key: (keyInput && keyInput.value.trim()) || undefined,
             });
             if (res.ok) {
-                setStatus(`Connected: ${(res.models || []).length} model(s) — ${res.endpoint}`);
+                const models = res.models || [];
+                const modelInput = document.getElementById('set-llm.model');
+                let msg = `Connected: ${models.length} model(s) — ${res.endpoint}`;
+                // Reflect what the backend actually serves in the Model field
+                // instead of leaving a stale default (e.g. "gpt-4o"). The user
+                // explicitly probed, so adopting the detected model is expected;
+                // they can retype to override. This also prevents the
+                // "Model cannot be empty" save error when the field was cleared.
+                if (models.length && modelInput) {
+                    modelInput.value = models[0];
+                    msg += ` · model set to "${models[0]}"`;
+                } else if (!models.length) {
+                    msg += ' · backend listed no models';
+                }
+                setStatus(msg);
             } else {
                 setStatus(`Connection failed: ${res.error || 'unknown error'}`, true);
             }
