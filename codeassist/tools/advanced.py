@@ -430,7 +430,7 @@ class TaskTool(Tool):
                         self._tools_registry,
                         depth=0,
                     )
-                except Exception as e:
+                except Exception:
                     log.exception("Background subagent %s failed", task.id)
 
             asyncio.create_task(_run_background())

@@ -42,7 +42,7 @@ class ShellTool(Tool):
         except WorkspaceViolationError as e:
             log.warning("Path validation failed for shell workdir: %s", e)
             return ToolResult(output=f"Error: {e}", error=True)
-        except Exception as e:
+        except Exception:
             return ToolResult(output=f"Error: workdir does not exist: {cwd_str}", error=True)
 
         shell = shutil.which("bash") or shutil.which("sh") or "sh"

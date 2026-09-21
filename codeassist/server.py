@@ -822,7 +822,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await hook.on_session_end(session, agent)
         except Exception as e:
             log.warning("Failed to generate session summary: %s", e)
-    except Exception as e:
+    except Exception:
         log.exception("WebSocket error")
         unregister_websocket(websocket)
         if agent_task and not agent_task.done():

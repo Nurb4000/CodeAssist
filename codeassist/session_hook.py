@@ -193,7 +193,7 @@ class SessionHook:
                 # Extract knowledge entries
                 await self._extract_knowledge(session.id, messages, summary_data)
                 
-            except Exception as e:
+            except Exception:
                 log.exception("Error generating session summary for %s", session.id)
     
     def _calculate_stats(self, messages: list[dict]) -> dict:

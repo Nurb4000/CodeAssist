@@ -379,7 +379,6 @@ class Agent:
             accumulated_text = ""
             accumulated_reasoning = ""
             tool_calls: list[ToolCall] = []
-            stream_timed_out = False
 
             stream_start = time.monotonic()
             stream_timeout = 120.0  # seconds
@@ -393,7 +392,6 @@ class Agent:
                 if time.monotonic() - stream_start > stream_timeout:
                     log.warning("LLM stream timed out after %.0fs", stream_timeout)
                     yield AgentEvent("error", {"message": f"LLM stream timed out after {stream_timeout:.0f}s"})
-                    stream_timed_out = True
                     break
                 if isinstance(event, TextDelta):
                     accumulated_text += event.content

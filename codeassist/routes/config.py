@@ -6,7 +6,6 @@ router = APIRouter(tags=["config"])
 
 def _human_size(num: int) -> str:
     """Format a byte count as a human-readable string (B/KB/MB/GB)."""
-    unit = "B"
     value = float(num)
     for u in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024 or u == "TB":
