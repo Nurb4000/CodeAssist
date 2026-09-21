@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from pathlib import Path
 
-from tools.apply_patch import ApplyPatchTool
+from codeassist.tools.apply_patch import ApplyPatchTool
 
 
 class TestApplyPatchTool:

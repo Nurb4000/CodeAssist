@@ -18,9 +18,8 @@ from .mcp_client import MCPClient
 from .skills import SkillRegistry
 from .plugins import PluginRegistry
 from .trust_registry import TrustRegistry
-from .snapshot import get_snapshot_manager
 from .instruction_discovery import get_instruction_discoverer
-from tools import ToolRegistry, create_registry
+from .tools import ToolRegistry, create_registry
 from .agents import agent_manager
 
 log = logging.getLogger(__name__)
@@ -361,12 +360,6 @@ async def lifespan(app: FastAPI):
     await init_skills()
     await init_plugins()
     log.info("CodeAssist starting | model=%s workspace=%s", cfg.llm.model, cfg.workspace)
-
-    # Initialize snapshot manager
-    from codeassist.snapshot import get_snapshot_manager
-    sm = get_snapshot_manager(cfg.workspace, enabled=True)
-    await sm.initialize()
-    await sm.load_snapshots()
 
     yield
     if mcp_client:

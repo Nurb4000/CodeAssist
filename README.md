@@ -301,11 +301,11 @@ min_confidence = 0.7           # Threshold for auto-creation
 
 ### Custom Tools
 
-You can create custom Python tools in `.codeassist/custom_tools/`:
+You can create custom Python tools in `runtime/custom_tools/`:
 
 ```python
-# .codeassist/custom_tools/my_tool.py
-from tools import ToolResult
+# runtime/custom_tools/my_tool.py
+from codeassist.tools import ToolResult
 
 TOOLS = {
     "my_tool": {

@@ -19,7 +19,7 @@ from codeassist.system_context import (
     get_context_manager,
 )
 from codeassist.session_manager import SessionManager, SessionTool
-from tools.apply_patch import is_gpt_model
+from codeassist.tools.apply_patch import is_gpt_model
 
 
 class TestInstructionDiscovery:

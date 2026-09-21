@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from tools.http import HTTPTool
+from codeassist.tools.http import HTTPTool
 
 
 class TestHTTPTool:

@@ -14,7 +14,7 @@ from .knowledge import KnowledgeBase
 from .llm import LLMClient, TextDelta, ReasoningDelta, ToolCall, Finish, LLMEvent
 from .prompts import build_system_prompt, build_openai_messages
 from .session import Session
-from tools import ToolRegistry
+from .tools import ToolRegistry
 from .tokens import compact_messages, check_context_limit, truncate_tool_result, llm_compact_messages, strip_media_from_messages
 from .tool_output_store import get_tool_output_store
 from .permissions import permission_manager, PermissionRuleset
@@ -192,38 +192,11 @@ class Agent:
         if question_tool and hasattr(question_tool, "set_answer"):
             question_tool.set_answer(question_id, answer)
 
-    async def _create_turn_snapshot(self, phase: str) -> dict | None:
-        """Create a workspace snapshot at turn boundaries. Returns snapshot info or None."""
-        try:
-            from codeassist.snapshot import get_snapshot_manager
-            sm = get_snapshot_manager(self.config.workspace, enabled=True)
-            if sm and sm.enabled:
-                messages = await self.session.get_messages()
-                user_msgs = [m for m in messages if m["role"] == "user"]
-                turn_number = len(user_msgs)
-
-                record = await sm.create_snapshot(self.session.id, turn_number)
-                if record:
-                    return {
-                        "id": record.id,
-                        "phase": phase,
-                        "turn": turn_number,
-                        "files_changed": len(record.files_changed),
-                    }
-        except Exception as e:
-            log.debug("Snapshot creation failed: %s", e)
-        return None
-
     async def run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
         # Reset compaction state for new user turn
         self._compaction_summary = ""
         self._compaction_count = 0
-
-        # Create snapshot before turn starts
-        snap_before = await self._create_turn_snapshot("before")
-        if snap_before:
-            yield AgentEvent("snapshot", snap_before)
 
         await self.session.add_message("user", user_message, attachments=attachments)
 
@@ -259,11 +232,6 @@ class Agent:
             log.exception(msg)
             yield AgentEvent("error", {"message": msg})
             yield AgentEvent("done")
-
-        # Create snapshot after turn completes
-        snap_after = await self._create_turn_snapshot("after")
-        if snap_after:
-            yield AgentEvent("snapshot", snap_after)
 
         # Periodic cleanup of old tool output files
         try:

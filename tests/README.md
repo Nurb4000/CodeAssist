@@ -115,7 +115,7 @@ Tests use these shared fixtures from `conftest.py`:
 ```python
 # tests/test_tools/test_my_tool.py
 import pytest
-from tools.my_tool import MyTool
+from codeassist.tools.my_tool import MyTool
 
 class TestMyTool:
     def test_schema(self):

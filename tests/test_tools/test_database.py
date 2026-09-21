@@ -4,7 +4,7 @@ import pytest
 import aiosqlite
 from pathlib import Path
 
-from tools.database import DatabaseTool
+from codeassist.tools.database import DatabaseTool
 
 
 class TestDatabaseTool:

@@ -93,14 +93,14 @@ enabled = false
 enabled = true
 
 # Directories to search for skills (relative to workspace)
-directories = [".codeassist/skills"]
+directories = ["codeassist/skills"]
 
 [plugins]
 # Enable plugin system
 enabled = false
 
 # Directories to search for plugins (relative to workspace)
-directories = [".codeassist/plugins"]
+directories = ["codeassist/plugins"]
 
 [lsp]
 # Enable LSP (Language Server Protocol) integration

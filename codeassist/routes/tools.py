@@ -33,7 +33,7 @@ async def list_tools():
 async def list_all_tools():
     """List all tools (built-in + custom) with usage stats and trust status."""
     from ..server import get_config, get_trust_registry
-    from tools import get_tools
+    from ..tools import get_tools
     from codeassist.custom_tools_loader import get_custom_tool_registry
     from codeassist.knowledge import KnowledgeBase
 
@@ -99,7 +99,7 @@ async def get_tool_usage_stats(period_days: int = 30):
 async def get_tool_details(tool_name: str):
     """Get detailed information about a specific tool including its schema and source code."""
     from ..server import get_config, get_trust_registry
-    from tools import get_tools
+    from ..tools import get_tools
     from codeassist.custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
@@ -214,7 +214,7 @@ async def scan_custom_tools():
     results = []
 
     for tool in custom_registry.list_tools():
-        tool_path = Path(workspace) / ".codeassist" / "custom_tools" / f"{tool['name']}.py"
+        tool_path = Path(workspace) / "runtime" / "custom_tools" / f"{tool['name']}.py"
         if not tool_path.exists():
             continue
 

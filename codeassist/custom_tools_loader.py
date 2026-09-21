@@ -43,7 +43,7 @@ class CustomToolRegistry:
     
     def __init__(self, workspace: Path, trust_registry: Optional[TrustRegistry] = None):
         self.workspace = workspace
-        self.tools_dir = workspace / ".codeassist" / "custom_tools"
+        self.tools_dir = workspace / "runtime" / "custom_tools"
         self.trust_registry = trust_registry
         self._tools: dict[str, CustomTool] = {}
         self._modules: dict[str, Any] = {}

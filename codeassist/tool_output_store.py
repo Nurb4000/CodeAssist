@@ -24,7 +24,7 @@ class ToolOutputStore:
         retention_days: int = 7,
     ):
         self.workspace = Path(workspace).resolve()
-        self.output_dir = self.workspace / ".codeassist" / "tool-output"
+        self.output_dir = self.workspace / "runtime" / "tool-output"
         self.max_lines = max_lines
         self.max_bytes = max_bytes
         self.retention_days = retention_days

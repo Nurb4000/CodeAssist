@@ -112,7 +112,7 @@ url = "http://localhost:3001/sse"
         config_file.write_text("""
 [skills]
 enabled = true
-directories = [".codeassist/skills", "custom/skills"]
+directories = ["codeassist/skills", "custom/skills"]
 """)
         
         config = Config.load(config_file)

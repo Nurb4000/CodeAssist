@@ -3,7 +3,7 @@ import pytest
 from pathlib import Path
 
 from codeassist.dynamic_tools import DynamicToolLoader, create_dynamic_registry
-from tools import ToolRegistry
+from codeassist.tools import ToolRegistry
 
 
 class TestDynamicToolLoader:
@@ -21,7 +21,7 @@ class TestDynamicToolLoader:
 
     def test_discover_tools_with_valid_tool(self, loader, tmp_path):
         """Test discovering a valid tool class."""
-        from tools import Tool
+        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -29,7 +29,7 @@ class TestDynamicToolLoader:
         
         test_tool_file = tools_dir / "test_dynamic.py"
         test_tool_file.write_text('''
-from tools import Tool
+from codeassist.tools import Tool
 
 class TestDynamicTool(Tool):
     name = "test_dynamic"
@@ -64,7 +64,7 @@ class TestDynamicTool(Tool):
         # Create a private tool file (should be skipped)
         private_file = tools_dir / "_private_tool.py"
         private_file.write_text('''
-from tools import Tool
+from codeassist.tools import Tool
 
 class PrivateTool(Tool):
     name = "private"
@@ -80,7 +80,7 @@ class PrivateTool(Tool):
 
     def test_reload_registry(self, loader, tmp_path):
         """Test reloading tools into a registry."""
-        from tools import Tool
+        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -88,7 +88,7 @@ class PrivateTool(Tool):
         
         test_tool_file = tools_dir / "test_reload.py"
         test_tool_file.write_text('''
-from tools import Tool
+from codeassist.tools import Tool
 
 class TestReloadTool(Tool):
     name = "test_reload"
@@ -107,7 +107,7 @@ class TestReloadTool(Tool):
 
     def test_get_available_tools(self, loader, tmp_path):
         """Test getting list of available tool classes."""
-        from tools import Tool
+        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -115,7 +115,7 @@ class TestReloadTool(Tool):
         
         test_tool_file = tools_dir / "test_available.py"
         test_tool_file.write_text('''
-from tools import Tool
+from codeassist.tools import Tool
 
 class TestAvailableTool(Tool):
     name = "test_available"
@@ -138,7 +138,7 @@ class TestCreateDynamicRegistry:
 
     def test_create_dynamic_registry(self, tmp_path):
         """Test creating a registry with dynamic loading."""
-        from tools import Tool
+        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -146,7 +146,7 @@ class TestCreateDynamicRegistry:
         
         test_tool_file = tools_dir / "test_dyn_reg.py"
         test_tool_file.write_text('''
-from tools import Tool
+from codeassist.tools import Tool
 
 class TestDynRegTool(Tool):
     name = "test_dyn_reg"

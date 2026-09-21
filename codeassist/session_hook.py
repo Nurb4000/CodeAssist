@@ -1056,7 +1056,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
 """
             
             # Create the skill
-            from tools.create_skill import execute as create_skill_execute
+            from .tools.create_skill import execute as create_skill_execute
             await create_skill_execute(
                 name=skill_name,
                 description=skill_description,

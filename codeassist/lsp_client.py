@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from tools import Tool, ToolResult
+from .tools import Tool, ToolResult
 
 log = logging.getLogger(__name__)
 
@@ -572,7 +572,7 @@ class LSPTool(Tool):
         query: str | None = None,
         new_name: str | None = None,
     ) -> ToolResult:
-        from tools.security import validate_path
+        from .tools.security import validate_path
 
         try:
             # Check if any LSP server is available

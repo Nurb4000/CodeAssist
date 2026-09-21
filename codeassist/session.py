@@ -460,7 +460,7 @@ async def _add_v4_tables(db):
 
 
 async def _add_v5_tables(db):
-    """Add tables for Phase A features: questions, snapshots, todos, permission_saves."""
+    """Add tables for Phase A features: questions, todos, permission_saves."""
 
     # Question persistence for structured questions
     await db.execute("""
@@ -472,17 +472,6 @@ async def _add_v5_tables(db):
             questions TEXT,
             answers TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT
-        )
-    """)
-
-    # Snapshot tracking for revert system
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id TEXT PRIMARY KEY,
-            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-            turn_number INTEGER,
-            git_hash TEXT,
             created_at TEXT
         )
     """)

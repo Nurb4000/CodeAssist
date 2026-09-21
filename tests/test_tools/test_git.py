@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from pathlib import Path
 
-from tools.git import GitTool
+from codeassist.tools.git import GitTool
 
 
 class TestGitTool:

@@ -2,7 +2,7 @@
 import asyncio
 import pytest
 
-from tools.process import ProcessTool
+from codeassist.tools.process import ProcessTool
 
 
 class TestProcessTool:

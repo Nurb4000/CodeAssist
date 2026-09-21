@@ -2,7 +2,7 @@
 import pytest
 from pathlib import Path
 
-from tools.documentation import DocumentationTool
+from codeassist.tools.documentation import DocumentationTool
 
 
 class TestDocumentationTool:

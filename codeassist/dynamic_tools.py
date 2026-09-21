@@ -8,10 +8,11 @@ import importlib
 import inspect
 import logging
 import pkgutil
+import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from tools import Tool, ToolRegistry
+from .tools import Tool, ToolRegistry
 from .trust_registry import TrustRegistry, TrustStatus
 
 log = logging.getLogger(__name__)
@@ -51,14 +52,27 @@ class DynamicToolLoader:
                         continue
                 
                 try:
-                    # Import the module
+                    # Import the module. User tool files may still do
+                    # `from tools import Tool`, so expose the shipped package
+                    # under the legacy top-level name for the duration of exec.
+                    _prev_tools = sys.modules.get("tools")
+                    if _prev_tools is None:
+                        sys.modules["tools"] = importlib.import_module(
+                            "codeassist.tools"
+                        )
                     spec = importlib.util.spec_from_file_location(
-                        f"tools.{module_name}",
+                        f"codeassist.tools.userdynamic.{module_name}",
                         str(item)
                     )
                     if spec and spec.loader:
                         module = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(module)
+                        sys.modules[spec.name] = module
+                        try:
+                            spec.loader.exec_module(module)
+                        finally:
+                            sys.modules.pop(spec.name, None)
+                            if _prev_tools is None:
+                                sys.modules.pop("tools", None)
                         
                         # Find all Tool subclasses in the module
                         for name, obj in inspect.getmembers(module, inspect.isclass):

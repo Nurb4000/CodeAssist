@@ -126,12 +126,7 @@ async def test_ws_confirm_flow_grants_per_tool_session_trust(tmp_path, monkeypat
     from unittest.mock import AsyncMock, MagicMock
 
     import codeassist.llm as llm_mod
-    from codeassist.agent import SESSION_TOOL_TRUST, Agent as AgentCls
-
-    async def _no_snapshot(self, phase):
-        return None
-
-    monkeypatch.setattr(AgentCls, "_create_turn_snapshot", _no_snapshot)
+    from codeassist.agent import SESSION_TOOL_TRUST
 
     state = {"stream_calls": 0}
 
@@ -190,12 +185,6 @@ async def test_ws_confirm_flow_remember_saves_permanent_allow(tmp_path, monkeypa
     from unittest.mock import AsyncMock, MagicMock
 
     import codeassist.llm as llm_mod
-    from codeassist.agent import Agent as AgentCls
-
-    async def _no_snapshot(self, phase):
-        return None
-
-    monkeypatch.setattr(AgentCls, "_create_turn_snapshot", _no_snapshot)
 
     state = {"stream_calls": 0}
 

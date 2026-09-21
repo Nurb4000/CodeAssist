@@ -272,7 +272,7 @@ class MCPToolWrapper:
         }
 
     async def execute(self, **kwargs) -> "ToolResult":
-        from tools import ToolResult
+        from .tools import ToolResult
         output = await self._mcp_client.call_tool(self.name, kwargs)
         is_error = output.startswith("Error:")
         return ToolResult(output=output, error=is_error)

@@ -32,4 +32,4 @@ dev = [
 codeassist = "codeassist.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["codeassist*", "tools*"]
+include = ["codeassist*"]

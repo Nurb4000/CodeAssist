@@ -1,7 +1,7 @@
 """Tests for tool manager tool."""
 import pytest
 
-from tools.tool_manager import ToolManagerTool
+from codeassist.tools.tool_manager import ToolManagerTool
 
 
 class TestToolManagerTool:

@@ -63,13 +63,15 @@ class MCPConfig:
 @dataclass
 class SkillsConfig:
     enabled: bool = True
-    directories: list[str] = field(default_factory=lambda: [".codeassist/skills"])
+    directories: list[str] = field(
+        default_factory=lambda: ["codeassist/skills", "runtime/skills"]
+    )
 
 
 @dataclass
 class PluginConfig:
     enabled: bool = False
-    directories: list[str] = field(default_factory=lambda: [".codeassist/plugins"])
+    directories: list[str] = field(default_factory=lambda: ["codeassist/plugins"])
 
 
 @dataclass
@@ -82,12 +84,6 @@ class LSPConfig:
 class GitConfig:
     enabled: bool = True
     auto_detect: bool = True
-
-
-@dataclass
-class SnapshotConfig:
-    enabled: bool = True
-    retention_days: int = 7
 
 
 @dataclass
@@ -136,7 +132,6 @@ class Config:
     plugins: PluginConfig = field(default_factory=PluginConfig)
     lsp: LSPConfig = field(default_factory=LSPConfig)
     git: GitConfig = field(default_factory=GitConfig)
-    snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
     tool_output: ToolOutputConfig = field(default_factory=ToolOutputConfig)
     instructions: InstructionsConfig = field(default_factory=InstructionsConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
@@ -216,11 +211,13 @@ class Config:
             ),
             skills=SkillsConfig(
                 enabled=raw.get("skills", {}).get("enabled", True),
-                directories=raw.get("skills", {}).get("directories", [".codeassist/skills"]),
+                directories=raw.get("skills", {}).get(
+                    "directories", ["codeassist/skills", "runtime/skills"]
+                ),
             ),
             plugins=PluginConfig(
                 enabled=raw.get("plugins", {}).get("enabled", False),
-                directories=raw.get("plugins", {}).get("directories", [".codeassist/plugins"]),
+                directories=raw.get("plugins", {}).get("directories", ["codeassist/plugins"]),
             ),
             lsp=LSPConfig(
                 enabled=raw.get("lsp", {}).get("enabled", False),
@@ -229,10 +226,6 @@ class Config:
             git=GitConfig(
                 enabled=raw.get("git", {}).get("enabled", True),
                 auto_detect=raw.get("git", {}).get("auto_detect", True),
-            ),
-            snapshot=SnapshotConfig(
-                enabled=raw.get("snapshot", {}).get("enabled", True),
-                retention_days=raw.get("snapshot", {}).get("retention_days", 7),
             ),
             tool_output=ToolOutputConfig(
                 max_lines=raw.get("tool_output", {}).get("max_lines", 2000),

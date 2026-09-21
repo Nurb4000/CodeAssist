@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/custom-tools", tags=["custom_tools"])
 
 @router.get("")
 async def list_custom_tools():
-    """List all custom tools discovered from .codeassist/custom_tools/."""
+    """List all custom tools discovered from runtime/custom_tools/."""
     from codeassist.custom_tools_loader import get_custom_tool_registry
     from ..server import get_trust_registry
     from codeassist.config import load_config
@@ -40,7 +40,7 @@ async def reload_custom_tools():
 
 @router.delete("/{name}")
 async def delete_custom_tool(name: str):
-    """Delete a custom tool's source file from .codeassist/custom_tools/."""
+    """Delete a custom tool's source file from runtime/custom_tools/."""
     from codeassist.custom_tools_loader import get_custom_tool_registry
     from ..server import get_trust_registry
     from codeassist.config import load_config

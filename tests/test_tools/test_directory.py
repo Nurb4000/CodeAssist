@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from pathlib import Path
 
-from tools.directory import DirectoryTool
+from codeassist.tools.directory import DirectoryTool
 
 
 class TestDirectoryTool:

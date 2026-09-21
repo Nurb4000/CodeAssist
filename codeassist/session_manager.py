@@ -24,7 +24,7 @@ class SessionManager:
         Args:
             session_id: Session to export.
             redact: Whether to redact PII.
-            as_bundle: If True, write a self-contained JSON file to .codeassist/exports/.
+            as_bundle: If True, write a self-contained JSON file to runtime/exports/.
 
         Returns:
             dict if as_bundle=False, Path to exported file if as_bundle=True.
@@ -46,7 +46,7 @@ class SessionManager:
             export_data = SessionManager._redact_pii(export_data)
 
         if as_bundle:
-            export_dir = Path(".codeassist") / "exports"
+            export_dir = Path("runtime") / "exports"
             export_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r'[^\w\-]', '_', ((summary or {}).get("first_message") or "session")[:40])
             filename = f"{safe_name}_{session_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"

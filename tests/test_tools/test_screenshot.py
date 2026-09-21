@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.screenshot import ScreenshotTool, _CdpConnection
+from codeassist.tools.screenshot import ScreenshotTool, _CdpConnection
 
 
 class _FakeWs:
@@ -170,7 +170,7 @@ def test_find_browser_returns_string_or_none():
 
 
 def test_find_browser_respects_monkeypatched_which(monkeypatch):
-    monkeypatch.setattr("tools.screenshot.shutil.which", lambda name: None)
+    monkeypatch.setattr("codeassist.tools.screenshot.shutil.which", lambda name: None)
     monkeypatch.setattr(Path, "exists", lambda self: False)
     assert ScreenshotTool._find_browser() is None
 
@@ -208,7 +208,7 @@ async def test_maybe_analyze_calls_image_analyze(monkeypatch):
         async def execute(self, **kwargs):
             return _Res()
 
-    monkeypatch.setattr("tools.image_analyze.ImageAnalyzeTool", _Tool)
+    monkeypatch.setattr("codeassist.tools.image_analyze.ImageAnalyzeTool", _Tool)
     tool = ScreenshotTool()
     out = await tool._maybe_analyze(Path("/tmp/x.png"), "what?")
     assert "analyzed!" in out

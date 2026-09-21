@@ -4,7 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from tools.fossil import FossilTool
+from codeassist.tools.fossil import FossilTool
 
 
 class TestFossilTool:

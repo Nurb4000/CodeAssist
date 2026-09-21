@@ -9,7 +9,7 @@ import pytest
 from codeassist.agent import Agent, AgentEvent, CONFIRM_TOOLS, SESSION_TRUST
 from codeassist.config import Config
 from codeassist.session import Session
-from tools import ToolRegistry
+from codeassist.tools import ToolRegistry
 
 
 @pytest.fixture(autouse=True)
