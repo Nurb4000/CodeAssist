@@ -1,30 +1,46 @@
+# Compose variables are read from the sibling .env file (see .env.example).
+# Everything here is namespaced so CodeAssist stays isolated from other
+# projects/containers: own network, own named data volume, fixed port mapping.
 services:
   codeassist:
     build: .
-    container_name: codeassist
+    container_name: ${CONTAINER_NAME}
+    # Host:container port mapping. Keep HOST_PORT == SERVER_PORT so the
+    # healthcheck below targets the port uvicorn actually binds to.
     ports:
-      - "${HOST_PORT:-8090}:${SERVER_PORT:-8090}"
+      - "${HOST_PORT}:${SERVER_PORT}"
     volumes:
-      # Mount your project directory as the workspace
-      - ${WORKSPACE:-.}:/workspace
-      # Mount config (copy config.docker.toml to config.toml to get started)
-      - ./config.toml:/app/config.toml:ro
-      # Persist session history across container restarts
-      - codeassist-data:/app/data
+      # Project root as the workspace (shipped skills/tools resolve under
+      # <workspace>/codeassist/... and runtime/ content is written here).
+      - ${WORKSPACE}:/workspace
+      # Optional host config override. Mounted at a *separate* path on purpose:
+      # if ./config.toml is missing, Docker would otherwise create an empty
+      # directory that clobbers the app's /app/config.toml and breaks boot. The
+      # entrypoint only uses this when it is a real file (see docker-entrypoint.sh).
+      - ./config.toml:/app/override.config.toml:ro
+      # Persist the SQLite DB + session history across container recreation.
+      - ${DATA_VOLUME}:/app/data
     environment:
       - CODEASSIST_WORKSPACE=/workspace
-      # Put the SQLite DB in the mounted volume so session history survives
-      # container recreation (not just in the container's writable layer)
       - CODEASSIST_DATA_DIR=/app/data
+      - SERVER_PORT=${SERVER_PORT}
       - TZ=UTC
-    # /health returns 200 once the app is up. Targets the default port; set
-    # SERVER_PORT/config.toml [server] port to match if you override it.
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${SERVER_PORT}/health"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      - codeassist-net
 
+# Named volume keeps session history even if the container is removed.
 volumes:
   codeassist-data:
+    name: ${DATA_VOLUME}
+
+# Dedicated bridge network isolates CodeAssist from other containers/projects.
+networks:
+  codeassist-net:
+    driver: bridge

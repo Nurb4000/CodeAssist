@@ -8,7 +8,11 @@ codeassist/data/
 *.db-shm
 *.db-journal
 .env
+# Local user config is provided at runtime via an optional override mount, not
+# baked into the image. config.docker.toml IS kept (baked as the default) and
+# pyproject.toml must stay for `pip install -e .`.
 config.toml
+config.example.toml
 *.toml~
 *.egg-info/
 .#config.toml
