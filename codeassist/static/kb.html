@@ -21,6 +21,7 @@
                 <a href="#sessions" class="nav-item" data-page="sessions">Sessions</a>
                 <a href="#analytics" class="nav-item" data-page="analytics">Analytics</a>
                 <a href="#pii" class="nav-item" data-page="pii">PII Manager</a>
+                <a href="#triage" class="nav-item" data-page="triage">Triage</a>
                 <a href="#settings" class="nav-item" data-page="settings">Settings</a>
                 <a href="#export" class="nav-item" data-page="export">Export/Import</a>
             </nav>
@@ -176,7 +177,50 @@
                 <button id="btn-scan-pii">Scan for PII</button>
                 <div id="pii-results"></div>
             </div>
-            
+
+            <!-- Triage Page -->
+            <div id="page-triage" class="kb-page">
+                <h2>Triage</h2>
+                <p>Review, flag, archive, or clean up knowledge base entries that fall outside the normal active listing.</p>
+
+                <div class="triage-toolbar">
+                    <div class="triage-buckets">
+                        <button class="bucket-btn active" data-bucket="review">Under Review <span class="bucket-count" data-count="review">0</span></button>
+                        <button class="bucket-btn" data-bucket="flagged">Flagged <span class="bucket-count" data-count="flagged">0</span></button>
+                        <button class="bucket-btn" data-bucket="archived">Archived <span class="bucket-count" data-count="archived">0</span></button>
+                        <button class="bucket-btn" data-bucket="orphans">Orphans <span class="bucket-count" data-count="orphans">0</span></button>
+                    </div>
+                    <div class="triage-toolbar-actions">
+                        <button id="triage-run-quality" class="btn-warning">Run Quality Pass</button>
+                        <button id="triage-bulk-approve" class="btn-success" style="display:none">Approve Selected</button>
+                        <button id="triage-bulk-archive" class="btn-danger" style="display:none">Archive Selected</button>
+                        <button id="triage-bulk-delete" class="btn-danger" style="display:none">Delete Selected</button>
+                    </div>
+                </div>
+
+                <div id="triage-report" class="triage-report" style="display:none"></div>
+
+                <div id="triage-table-container">
+                    <table id="triage-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="triage-select-all"></th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Content</th>
+                                <th>Scope</th>
+                                <th>Confidence</th>
+                                <th>Uses</th>
+                                <th>Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="triage-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="triage-pagination" class="pagination"></div>
+            </div>
+
             <!-- Settings Page -->
             <div id="page-settings" class="kb-page">
                 <h2>Settings</h2>

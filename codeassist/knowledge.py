@@ -575,6 +575,20 @@ class KnowledgeBase:
             return (await cursor.fetchone())["c"]
 
     @staticmethod
+    async def list_orphan_entries(limit: int = 200, offset: int = 0) -> list[dict]:
+        """List entries whose source session has been deleted (candidates for triage/delete)."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                """SELECT * FROM knowledge_entries ke
+                   WHERE ke.source_session_id IS NOT NULL
+                     AND ke.source_session_id NOT IN (SELECT id FROM sessions)
+                   ORDER BY updated_at DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
+            return await cursor.fetchall()
+
+    @staticmethod
     async def delete_knowledge_entry(entry_id: str) -> bool:
         """Delete a knowledge entry."""
         async with get_db() as db:

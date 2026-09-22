@@ -1106,3 +1106,98 @@ class TestPII:
         await init_db()
         resp = await kb_pii_redact({"entry_id": "does-not-exist"})
         assert resp.status_code == 404
+
+
+class TestTriageListing:
+    """Backend for the triage UI: lifecycle-status filtering + orphan listing.
+
+    These pin G2 (non-active entries are excluded from the default listing but
+    reachable by status) and surface the orphan-count-only gap so the triage tab
+    can enumerate rows for review.
+    """
+
+    @pytest.mark.asyncio
+    async def test_entries_default_excludes_non_active(self):
+        from codeassist.routes.kb_gui import kb_list_entries
+
+        await init_db()
+        active = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="active one"
+        )
+        review = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="under review"
+        )
+        await KnowledgeBase.set_entry_status(review, "review")
+
+        default = await kb_list_entries(status="active")
+        ids = {e["id"] for e in default["entries"]}
+        assert active in ids
+        assert review not in ids
+
+    @pytest.mark.asyncio
+    async def test_entries_status_filter_returns_non_active(self):
+        from codeassist.routes.kb_gui import kb_list_entries
+
+        await init_db()
+        review = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="flag me"
+        )
+        flagged = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="flagged too"
+        )
+        await KnowledgeBase.set_entry_status(review, "review")
+        await KnowledgeBase.set_entry_status(flagged, "flagged")
+
+        review_res = await kb_list_entries(status="review")
+        assert {e["id"] for e in review_res["entries"]} == {review}
+
+        flagged_res = await kb_list_entries(status="flagged")
+        assert {e["id"] for e in flagged_res["entries"]} == {flagged}
+
+    @pytest.mark.asyncio
+    async def test_entries_status_all_returns_every_state(self):
+        from codeassist.routes.kb_gui import kb_list_entries
+
+        await init_db()
+        active = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="a"
+        )
+        archived = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="b"
+        )
+        await KnowledgeBase.archive_entry(archived)
+
+        all_res = await kb_list_entries(status="all")
+        assert {e["id"] for e in all_res["entries"]} == {active, archived}
+
+    @pytest.mark.asyncio
+    async def test_orphan_listing_returns_entries_with_missing_session(self):
+        from codeassist.routes.kb_gui import kb_list_orphans
+
+        await init_db()
+        orphan = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="orphaned content",
+            source_session_id="ghost-session-xyz",
+        )
+        res = await kb_list_orphans()
+        assert res["count"] >= 1
+        assert any(e["id"] == orphan for e in res["entries"])
+
+    @pytest.mark.asyncio
+    async def test_list_orphan_entries_method(self):
+        from codeassist.session import Session
+
+        await init_db()
+        live = await Session.create("Triage Live Session")
+        orphan_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="ghost",
+            source_session_id="session-ghost-missing",
+        )
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="live",
+            source_session_id=live.id,
+        )
+        orphans = await KnowledgeBase.list_orphan_entries()
+        ids = {e["id"] for e in orphans}
+        assert orphan_id in ids
+        assert len(orphans) == 1

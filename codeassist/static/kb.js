@@ -13,6 +13,8 @@ const API = {
     analyticsLlm: '/api/kb/analytics/llm',
     piiScan: '/api/kb/pii/scan',
     piiRedact: '/api/kb/pii/redact',
+    qualityPass: '/api/kb/quality-pass',
+    orphans: '/api/kb/orphans',
     settings: '/api/kb/settings',
     generateEmbeddings: '/api/knowledge/embeddings/generate',
     export: '/api/kb/export',
@@ -62,6 +64,9 @@ async function loadPage(page) {
             break;
         case 'analytics':
             await loadAnalytics();
+            break;
+        case 'triage':
+            await loadTriage();
             break;
         case 'settings':
             await loadSettings();
@@ -222,6 +227,215 @@ function renderPagination(total) {
 function goToPage(page) {
     entriesOffset = (page - 1) * entriesLimit;
     loadEntries();
+}
+
+// ── Triage ───────────────────────────────────────────────────────────
+let triageBucket = 'review';
+let triageOffset = 0;
+const triageLimit = 20;
+
+async function loadTriage() {
+    await loadTriageEntries();
+    await updateTriageCounts();
+}
+
+async function updateTriageCounts() {
+    try {
+        const res = await fetch(API.stats);
+        const stats = await res.json();
+        const sb = stats.status_breakdown || {};
+        document.querySelectorAll('.bucket-count').forEach(el => {
+            const key = el.dataset.count;
+            el.textContent = key === 'orphans' ? (stats.orphan_entries || 0) : (sb[key] !== undefined ? sb[key] : 0);
+        });
+    } catch (err) {
+        console.error('Failed to load triage counts:', err);
+    }
+}
+
+async function setTriageBucket(bucket) {
+    triageBucket = bucket;
+    triageOffset = 0;
+    document.querySelectorAll('.bucket-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.bucket === bucket);
+    });
+    await loadTriageEntries();
+}
+
+async function loadTriageEntries() {
+    try {
+        let res, data;
+        if (triageBucket === 'orphans') {
+            res = await fetch(`${API.orphans}?limit=200`);
+            data = await res.json();
+        } else {
+            const params = new URLSearchParams({ limit: triageLimit, offset: triageOffset, status: triageBucket });
+            res = await fetch(`${API.entries}?${params}`);
+            data = await res.json();
+        }
+        renderTriageTable(data.entries || []);
+        renderTriagePagination(data.count);
+        updateTriageBulkVisibility();
+    } catch (err) {
+        console.error('Failed to load triage entries:', err);
+    }
+}
+
+function renderTriageTable(entries) {
+    const tbody = document.getElementById('triage-tbody');
+    if (!entries || entries.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No entries in this bucket</td></tr>';
+        return;
+    }
+    tbody.innerHTML = entries.map(entry => {
+        const status = entry.status || 'active';
+        const uses = entry.usage_count || 0;
+        const canRestore = status === 'archived';
+        return `
+        <tr class="triage-row" data-id="${entry.id}">
+            <td><input type="checkbox" class="triage-checkbox" data-id="${entry.id}"></td>
+            <td><span class="type-badge ${entry.entry_type}">${escapeHtml(entry.entry_type || '')}</span></td>
+            <td><span class="status-badge status-${status}">${escapeHtml(status)}</span></td>
+            <td class="entry-preview">${escapeHtml((entry.content || '').substring(0, 120))}</td>
+            <td>${escapeHtml(entry.scope || '-')}</td>
+            <td>${(entry.confidence || 0).toFixed(2)}</td>
+            <td>${uses}</td>
+            <td>${formatDate(entry.updated_at || entry.created_at)}</td>
+            <td class="triage-actions">
+                ${canRestore
+                    ? `<button onclick="triageSetStatus('${entry.id}', 'active')">Restore</button>`
+                    : `<button onclick="triageSetStatus('${entry.id}', 'active')">Approve</button>` +
+                      `<button onclick="triageSetStatus('${entry.id}', 'review')">Review</button>` +
+                      `<button onclick="triageSetStatus('${entry.id}', 'flagged')">Flag</button>` +
+                      `<button onclick="triageSetStatus('${entry.id}', 'archived')">Archive</button>`}
+                <button onclick="viewEntry('${entry.id}')">View</button>
+                <button onclick="triageDelete('${entry.id}')" class="btn-danger">Delete</button>
+            </td>
+        </tr>
+        `;
+    }).join('');
+    updateTriageBulkVisibility();
+}
+
+async function triageSetStatus(id, status) {
+    try {
+        const res = await fetch(API.setEntryStatus(id), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+        });
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.error || `Failed to set status ${status}`);
+        }
+        await loadTriageEntries();
+        await updateTriageCounts();
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
+async function triageDelete(id) {
+    if (!confirm('Are you sure you want to delete this entry?')) return;
+    try {
+        await fetch(API.entry(id), { method: 'DELETE' });
+        await loadTriageEntries();
+        await updateTriageCounts();
+    } catch (err) {
+        alert('Failed to delete entry');
+    }
+}
+
+function getTriageSelectedIds() {
+    return Array.from(document.querySelectorAll('.triage-checkbox:checked')).map(cb => cb.dataset.id);
+}
+
+function updateTriageBulkVisibility() {
+    const n = getTriageSelectedIds().length;
+    document.getElementById('triage-bulk-approve').style.display = n > 0 ? 'inline-block' : 'none';
+    document.getElementById('triage-bulk-archive').style.display = n > 0 ? 'inline-block' : 'none';
+    document.getElementById('triage-bulk-delete').style.display = n > 0 ? 'inline-block' : 'none';
+}
+
+async function triageBulk(status) {
+    const ids = getTriageSelectedIds();
+    if (!ids.length) return;
+    if (!confirm(`Set ${ids.length} entry(ies) to "${status}"?`)) return;
+    try {
+        await Promise.all(ids.map(id => fetch(API.setEntryStatus(id), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+        })));
+        await loadTriageEntries();
+        await updateTriageCounts();
+    } catch (err) {
+        alert('Bulk operation failed');
+    }
+}
+
+async function triageBulkDelete() {
+    const ids = getTriageSelectedIds();
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} entry(ies)? This cannot be undone.`)) return;
+    try {
+        await fetch(`${API.entries}/bulk-delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entry_ids: ids }),
+        });
+        await loadTriageEntries();
+        await updateTriageCounts();
+    } catch (err) {
+        alert('Bulk delete failed');
+    }
+}
+
+async function runQualityPass() {
+    if (!confirm('Run the quality/retention pass? This archives low-confidence, unused entries.')) return;
+    const report = document.getElementById('triage-report');
+    report.style.display = 'block';
+    report.innerHTML = '<p class="loading">Running quality pass…</p>';
+    try {
+        const res = await fetch(API.qualityPass, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const data = await res.json();
+        report.innerHTML = `
+            <h3>Quality Pass Report</h3>
+            <p>Scanned <strong>${data.scanned || 0}</strong> active entries; archived <strong>${data.archived || 0}</strong>.</p>
+            ${data.promotable_count ? `<p>${data.promotable_count} entry(ies) eligible for promotion.</p>` : ''}
+            ${Array.isArray(data.candidates) && data.candidates.length
+                ? `<p>Archived candidates:</p><ul class="report-list">${data.candidates.map(c => `<li>${escapeHtml((c.content || '').substring(0, 80))}</li>`).join('')}</ul>`
+                : ''}
+            <button onclick="document.getElementById('triage-report').style.display='none'">Dismiss</button>
+        `;
+        await updateTriageCounts();
+    } catch (err) {
+        report.innerHTML = '<p class="error">Quality pass failed: ' + escapeHtml(err.message) + '</p>';
+    }
+}
+
+function renderTriagePagination(total) {
+    const pages = Math.ceil(total / triageLimit);
+    const container = document.getElementById('triage-pagination');
+    if (pages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+    const currentPage = Math.floor(triageOffset / triageLimit) + 1;
+    let html = '';
+    for (let i = 1; i <= pages && i <= 10; i++) {
+        html += `<button class="${i === currentPage ? 'active' : ''}" onclick="triageGoToPage(${i})">${i}</button>`;
+    }
+    container.innerHTML = html;
+}
+
+function triageGoToPage(page) {
+    triageOffset = (page - 1) * triageLimit;
+    loadTriageEntries();
 }
 
 // Entry actions
@@ -662,6 +876,21 @@ document.getElementById('btn-apply-filters')?.addEventListener('click', () => {
     entriesOffset = 0;
     loadEntries();
 });
+
+// Triage: bucket switching, bulk actions, quality pass
+document.querySelectorAll('.bucket-btn').forEach(btn => {
+    btn.addEventListener('click', () => setTriageBucket(btn.dataset.bucket));
+});
+document.getElementById('triage-select-all')?.addEventListener('change', (e) => {
+    document.querySelectorAll('.triage-checkbox').forEach(cb => {
+        cb.checked = e.target.checked;
+    });
+    updateTriageBulkVisibility();
+});
+document.getElementById('triage-run-quality')?.addEventListener('click', runQualityPass);
+document.getElementById('triage-bulk-approve')?.addEventListener('click', () => triageBulk('active'));
+document.getElementById('triage-bulk-archive')?.addEventListener('click', () => triageBulk('archived'));
+document.getElementById('triage-bulk-delete')?.addEventListener('click', triageBulkDelete);
 
 // Modal close
 document.querySelectorAll('.close').forEach(btn => {

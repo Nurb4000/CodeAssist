@@ -89,14 +89,23 @@ async def kb_list_entries(
     scope: str | None = None,
     tag: str | None = None,
     search: str | None = None,
+    status: str = "active",
     limit: int = 50,
     offset: int = 0,
 ):
-    """List knowledge entries with optional filtering by type, scope, tag, or full-text search."""
+    """List knowledge entries with optional filtering by type, scope, tag, search, or lifecycle status.
+
+    ``status`` accepts a single lifecycle value (``active``/``review``/``flagged``/``archived``)
+    or ``all`` to include every state. The triage UI lists one concrete bucket at a time so
+    full-text search stays meaningful within it; ``all`` skips FTS and filters structurally.
+    """
     from codeassist.knowledge import KnowledgeBase
 
-    if search:
-        entries = await KnowledgeBase.fulltext_search_knowledge(search, entry_type=entry_type, limit=limit)
+    include_all = status == "all"
+    if search and not include_all:
+        entries = await KnowledgeBase.fulltext_search_knowledge(
+            search, entry_type=entry_type, limit=limit + offset, status=status
+        )
     else:
         tags = [tag] if tag else None
         entries = await KnowledgeBase.search_knowledge(
@@ -104,10 +113,20 @@ async def kb_list_entries(
             scope=scope,
             tags=tags,
             limit=limit + offset,
+            status=None if include_all else status,
         )
 
     entries = entries[offset:offset + limit]
 
+    return {"entries": entries, "count": len(entries)}
+
+
+@router.get("/orphans")
+async def kb_list_orphans(limit: int = 200, offset: int = 0):
+    """List knowledge entries whose source session was deleted (triage candidates)."""
+    from codeassist.knowledge import KnowledgeBase
+
+    entries = await KnowledgeBase.list_orphan_entries(limit=limit, offset=offset)
     return {"entries": entries, "count": len(entries)}
 
 

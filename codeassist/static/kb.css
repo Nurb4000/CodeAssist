@@ -144,6 +144,24 @@
     background: #d32f2f !important;
 }
 
+.btn-warning {
+    background: #e65100 !important;
+    color: #fff;
+}
+
+.btn-warning:hover {
+    background: #f4511e !important;
+}
+
+.btn-success {
+    background: #2e7d32 !important;
+    color: #fff;
+}
+
+.btn-success:hover {
+    background: #388e3c !important;
+}
+
 /* Table */
 #entries-table-container {
     overflow-x: auto;
@@ -562,3 +580,87 @@ button:hover {
 .status-badge.status-review { background: #4a148c; color: #ea80fc; }
 .status-badge.status-flagged { background: #e65100; color: #ffcc80; }
 .status-badge.status-archived { background: #424242; color: #e0e0e0; }
+
+/* Triage */
+.triage-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 16px 0;
+}
+
+.triage-buckets {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.bucket-btn {
+    background: #283593;
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.bucket-btn:hover { background: #3949ab; }
+.bucket-btn.active { background: #c62828; }
+
+.bucket-count {
+    display: inline-block;
+    min-width: 20px;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    padding: 0 6px;
+    font-size: 12px;
+}
+
+.triage-toolbar-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.triage-actions button {
+    margin-right: 6px;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+.triage-table-container table { width: 100%; }
+
+.triage-row td { vertical-align: middle; }
+
+.entry-preview { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.triage-report {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px 0;
+}
+
+.triage-report h3 { margin-top: 0; }
+
+.triage-report .report-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 8px 0;
+}
+
+.triage-report .report-list li {
+    font-size: 13px;
+    margin: 4px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.triage-report .loading { color: #616161; }
+.triage-report .error { color: #c62828; }
