@@ -325,6 +325,24 @@ class TestKnowledgeEntries:
         assert report["promotable_count"] >= 1
 
     @pytest.mark.asyncio
+    async def test_quality_pass_report_scanned_counts_all_active(self):
+        """B1: 'scanned' is the total active pool, not just the archived count."""
+        await init_db()
+        # One low-confidence (will archive) + several healthy entries.
+        await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="junk", confidence=0.2
+        )
+        for i in range(4):
+            await KnowledgeBase.create_knowledge_entry(
+                entry_type="pattern", scope="file",
+                content=f"healthy {i}", confidence=0.9,
+            )
+        report = await KnowledgeBase.run_quality_pass(min_confidence=0.5, max_usage=0)
+        assert report["scanned"] == 5          # all active entries examined
+        assert report["archived"] == 1         # only the low-confidence one
+        assert report["scanned"] != report["archived"]
+
+    @pytest.mark.asyncio
     async def test_delete_entry(self):
         await init_db()
         entry_id = await KnowledgeBase.create_knowledge_entry(
@@ -819,7 +837,10 @@ class TestEntryLifecycle:
         assert await KnowledgeBase.archive_entry(entry_id) is True
         entry = await KnowledgeBase.get_knowledge_entry(entry_id)
         assert entry["status"] == "archived"
-        # Archived entries are excluded from a default (active) search.
+        # Archived entries are excluded from a default (active) search, even when
+        # no status is passed explicitly (G2).
+        default_search = await KnowledgeBase.search_knowledge()
+        assert entry_id not in {e["id"] for e in default_search}
         active = await KnowledgeBase.search_knowledge(status="active")
         assert entry_id not in {e["id"] for e in active}
         archived = await KnowledgeBase.search_knowledge(status="archived")

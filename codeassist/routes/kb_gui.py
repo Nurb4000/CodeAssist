@@ -420,6 +420,28 @@ async def kb_pii_redact(body: dict):
         return {"message": "All PII redacted", "entry_id": entry_id}
 
 
+# ── Quality / Retention ─────────────────────────────────────────
+
+@router.post("/quality-pass")
+async def kb_quality_pass(body: dict | None = None):
+    """Run the quality/retention pass on demand and return its report (G1).
+
+    Soft-deletes (archives) active entries that are below ``min_confidence`` and
+    used ``max_usage`` times or fewer, and returns the archived candidates plus
+    promotion candidates for the review UI. Params are optional and default to
+    the values ``run_quality_pass`` uses; pass an empty body for defaults.
+    """
+    from codeassist.knowledge import KnowledgeBase
+
+    body = body or {}
+    report = await KnowledgeBase.run_quality_pass(
+        min_confidence=body.get("min_confidence", 0.5),
+        max_usage=body.get("max_usage", 0),
+        promote_after=body.get("promote_after", 3),
+    )
+    return report
+
+
 # ── Settings ────────────────────────────────────────────────────
 
 @router.get("/settings")

@@ -11,6 +11,7 @@ This module provides:
 
 import json
 import logging
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -203,11 +204,20 @@ class KnowledgeBase:
         tags: list[str] | None = None,
         min_confidence: float = 0.0,
         limit: int = 50,
-        status: str | None = None,
+        status: str | None = "active",
     ) -> list[dict]:
-        """Search knowledge entries with filters."""
+        """Search knowledge entries with filters.
+
+        Defaults to ``status='active'`` so archived/flagged/review entries are
+        excluded from default listing and dedup (G2). Pass ``status=None`` to
+        query every lifecycle state (e.g. the PII scan or a review UI listing
+        flagged/archived rows).
+        """
         conditions = ["confidence >= ?"]
         params: list = [min_confidence]
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
 
         if entry_type:
             conditions.append("entry_type = ?")
@@ -218,9 +228,6 @@ class KnowledgeBase:
         if scope_identifier:
             conditions.append("scope_identifier = ?")
             params.append(scope_identifier)
-        if status:
-            conditions.append("status = ?")
-            params.append(status)
         if tags:
             # JSON-array "contains" check. Escape LIKE wildcards so a tag name
             # containing %, _, or \\ is matched literally instead of acting as a
@@ -351,13 +358,20 @@ class KnowledgeBase:
         promoting, e.g. to a skill). Returns a report.
         """
         async with get_db() as db:
+            # Total active pool examined by this pass (distinct from the subset
+            # that matched the archive criteria below).
+            cursor = await db.execute(
+                "SELECT COUNT(*) as n FROM knowledge_entries WHERE status = 'active'"
+            )
+            scanned = (await cursor.fetchone())["n"]
+
             cursor = await db.execute(
                 """SELECT id, entry_type, scope, scope_identifier, confidence, usage_count,
-                          metadata
-                   FROM knowledge_entries
-                   WHERE status = 'active'
-                     AND confidence < ?
-                     AND usage_count <= ?""",
+                           metadata
+                    FROM knowledge_entries
+                    WHERE status = 'active'
+                      AND confidence < ?
+                      AND usage_count <= ?""",
                 (min_confidence, max_usage),
             )
             candidates = [dict(r) for r in await cursor.fetchall()]
@@ -385,7 +399,7 @@ class KnowledgeBase:
             promotable = [dict(r) for r in await cursor.fetchall()]
 
         return {
-            "scanned": len(candidates),
+            "scanned": scanned,
             "archived": len(candidates),
             "candidates": candidates,
             "promotable": promotable,
@@ -540,8 +554,13 @@ class KnowledgeBase:
         query: str,
         entry_type: str | None = None,
         limit: int = 20,
+        status: str | None = "active",
     ) -> list[dict]:
-        """Full-text search across knowledge entries using FTS5."""
+        """Full-text search across knowledge entries using FTS5.
+
+        Defaults to active-only (G2) so archived/flagged/review rows don't surface
+        in search; pass an explicit ``status`` to include another lifecycle state.
+        """
         try:
             async with get_db() as db:
                 # Ensure FTS table exists and is populated
@@ -551,19 +570,19 @@ class KnowledgeBase:
                     cursor = await db.execute(
                         """SELECT k.* FROM knowledge_search ks
                            JOIN knowledge_entries k ON ks.entry_id = k.id
-                           WHERE knowledge_search MATCH ? AND ks.entry_type = ?
+                           WHERE knowledge_search MATCH ? AND ks.entry_type = ? AND k.status = ?
                            ORDER BY rank
                            LIMIT ?""",
-                        (query, entry_type, limit),
+                        (query, entry_type, status, limit),
                     )
                 else:
                     cursor = await db.execute(
                         """SELECT k.* FROM knowledge_search ks
                            JOIN knowledge_entries k ON ks.entry_id = k.id
-                           WHERE knowledge_search MATCH ?
+                           WHERE knowledge_search MATCH ? AND k.status = ?
                            ORDER BY rank
                            LIMIT ?""",
-                        (query, limit),
+                        (query, status, limit),
                     )
                 rows = await cursor.fetchall()
                 return _strip_embeddings([dict(r) for r in rows])
@@ -781,8 +800,10 @@ class KnowledgeBase:
                 )
                 await db.commit()
                 return tag_id
-            except Exception:
-                # Tag already exists
+            except sqlite3.IntegrityError:
+                # Duplicate (session_id, tag) — the UNIQUE constraint. Return ""
+                # so callers can treat it as an idempotent no-op. Other errors
+                # (connection/IO) propagate instead of being swallowed.
                 return ""
 
     @staticmethod

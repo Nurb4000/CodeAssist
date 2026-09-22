@@ -120,6 +120,27 @@ def test_tools_management_specific_routes_not_shadowed(live_client):
     assert live_client.post("/api/tools/reload").status_code == 200
 
 
+def test_kb_quality_pass_archives_low_confidence(live_client):
+    """G1: the on-demand quality pass archives low-confidence entries and reports it."""
+    created = live_client.post(
+        "/api/kb/entries",
+        json={"entry_type": "pattern", "scope": "project", "content": "junk", "confidence": 0.2},
+    )
+    assert created.status_code == 200, created.text
+
+    report = live_client.post("/api/kb/quality-pass")
+    assert report.status_code == 200, report.text
+    body = report.json()
+    assert body["scanned"] >= 1
+    assert body["archived"] == 1
+    assert len(body["candidates"]) == 1
+
+    # The archived entry no longer appears in the default (active) listing.
+    listed = live_client.get("/api/kb/entries").json()
+    ids = {e["id"] for e in listed["entries"]}
+    assert created.json()["entry_id"] not in ids
+
+
 def test_analytics_parity_between_tools_and_kb_prefixes(live_client):
     """/api/tools/analytics/* must be aliases of /api/kb/analytics/*
     (single source of truth, per review item H1)."""

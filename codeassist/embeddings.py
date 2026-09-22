@@ -198,8 +198,13 @@ class EmbeddingManager:
         limit: int = 10,
         entry_type: str | None = None,
         min_confidence: float = 0.0,
+        status: str = "active",
     ) -> list[dict]:
-        """Search knowledge entries by embedding similarity."""
+        """Search knowledge entries by embedding similarity.
+
+        Defaults to active-only (G2); pass an explicit ``status`` to include
+        archived/flagged/review rows (e.g. a review UI).
+        """
         client = self._get_client()
         if not client:
             # Fallback to text search
@@ -208,7 +213,7 @@ class EmbeddingManager:
                 min_confidence=min_confidence,
                 limit=limit,
             )
-        
+
         try:
             # Generate query embedding
             query_embedding = await client.embed(query)
@@ -219,11 +224,16 @@ class EmbeddingManager:
                     min_confidence=min_confidence,
                     limit=limit,
                 )
-            
+
             async with get_db() as db:
                 # Phase 1: Use FTS5 to get candidate entries (fast text pre-filter)
-                fts_conditions = ["confidence >= ?", "embedding IS NOT NULL", "embedding != ''"]
-                fts_params: list = [min_confidence]
+                fts_conditions = [
+                    "confidence >= ?",
+                    "embedding IS NOT NULL",
+                    "embedding != ''",
+                    "k.status = ?",
+                ]
+                fts_params: list = [min_confidence, status]
                 
                 if entry_type:
                     fts_conditions.append("entry_type = ?")
@@ -238,7 +248,7 @@ class EmbeddingManager:
                     JOIN knowledge_entries k ON ks.entry_id = k.id
                     WHERE knowledge_search MATCH ? AND {fts_where_clause}
                     LIMIT ?
-                """, [*fts_params, query, candidate_limit])
+                """, [query, *fts_params, candidate_limit])
                 
                 entries = await cursor.fetchall()
                 
@@ -290,8 +300,13 @@ class EmbeddingManager:
         self,
         entry_id: str,
         limit: int = 5,
+        status: str = "active",
     ) -> list[dict]:
-        """Find similar entries based on an existing entry's embedding."""
+        """Find similar entries based on an existing entry's embedding.
+
+        Defaults to active-only (G2); pass an explicit ``status`` to include
+        archived/flagged/review rows.
+        """
         try:
             async with get_db() as db:
                 # Get the source entry's embedding
@@ -302,32 +317,32 @@ class EmbeddingManager:
                 row = await cursor.fetchone()
                 if not row or not row["embedding"]:
                     return []
-                
+
                 source_embedding = deserialize_embedding(row["embedding"])
                 if not source_embedding:
                     return []
-                
+
                 # Use FTS5 to get candidate entries (faster than loading all)
                 candidate_limit = max(limit * 10, 50)
-                
+
                 cursor = await db.execute(f"""
                     SELECT k.* FROM knowledge_search ks
                     JOIN knowledge_entries k ON ks.entry_id = k.id
-                    WHERE ks.entry_id != ? AND k.embedding IS NOT NULL AND k.embedding != ''
+                    WHERE ks.entry_id != ? AND k.embedding IS NOT NULL AND k.embedding != '' AND k.status = ?
                     LIMIT ?
-                """, (entry_id, candidate_limit))
-                
+                """, (entry_id, status, candidate_limit))
+
                 entries = await cursor.fetchall()
-                
+
                 # If FTS5 didn't return results, fall back to loading all entries
                 if not entries:
                     cursor = await db.execute(
-                        """SELECT id, entry_type, scope, scope_identifier, content, 
+                        """SELECT id, entry_type, scope, scope_identifier, content,
                                   confidence, tags, embedding
-                           FROM knowledge_entries 
-                           WHERE id != ? AND embedding IS NOT NULL AND embedding != ''
+                           FROM knowledge_entries
+                           WHERE id != ? AND embedding IS NOT NULL AND embedding != '' AND status = ?
                            LIMIT ?""",
-                        (entry_id, candidate_limit),
+                        (entry_id, status, candidate_limit),
                     )
                     entries = await cursor.fetchall()
             
