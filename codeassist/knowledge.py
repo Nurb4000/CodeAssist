@@ -25,6 +25,27 @@ log = logging.getLogger(__name__)
 # SQLite DB or blow up /api/kb/sessions/{id} which returns tool_calls.
 MAX_RESULT_FULL_CHARS = 100_000
 
+# Sentinel returned by _coerce_number when a value can't be converted, so the
+# caller can skip the field instead of storing a corrupt type in a numeric column.
+_SKIP = object()
+
+
+def _coerce_number(value, kind: str):
+    """Coerce ``value`` to int/float for storage.
+
+    Returns ``None`` to clear the column, the coerced number on success, or
+    ``_SKIP`` when ``value`` is a non-null value that can't be parsed. Callers
+    drop ``_SKIP`` fields so a bad client payload (e.g. confidence="high") never
+    corrupts a REAL/INTEGER column or 500s the request (B3).
+    """
+    if value is None:
+        return None
+    try:
+        return int(value) if kind == "int" else float(value)
+    except (TypeError, ValueError):
+        log.warning("Ignoring non-%s value %r for numeric field", kind, value)
+        return _SKIP
+
 
 def _strip_embeddings(rows: list[dict]) -> list[dict]:
     """Remove the raw binary embedding column so rows stay JSON-serializable.
@@ -112,7 +133,9 @@ class KnowledgeBase:
             "files_modified", "duration_seconds", "message_count",
             "token_usage", "model", "quality_score"
         }
-        
+        int_fields = {"duration_seconds", "message_count", "token_usage"}
+        float_fields = {"quality_score"}
+
         fields = []
         values = []
         for key, value in kwargs.items():
@@ -121,6 +144,14 @@ class KnowledgeBase:
             if key in ("key_topics", "goals_achieved", "tools_used", "files_modified"):
                 fields.append(f"{key} = ?")
                 values.append(json.dumps(value) if value else None)
+            elif key in int_fields or key in float_fields:
+                coerced = _coerce_number(
+                    value, "int" if key in int_fields else "float"
+                )
+                if coerced is _SKIP:
+                    continue
+                fields.append(f"{key} = ?")
+                values.append(coerced)
             else:
                 fields.append(f"{key} = ?")
                 values.append(value)
@@ -260,7 +291,8 @@ class KnowledgeBase:
         allowed_fields = {
             "content", "confidence", "tags", "metadata", "embedding"
         }
-        
+        float_fields = {"confidence"}
+
         fields = []
         values = []
         for key, value in kwargs.items():
@@ -269,6 +301,12 @@ class KnowledgeBase:
             if key in ("tags", "metadata"):
                 fields.append(f"{key} = ?")
                 values.append(json.dumps(value) if value else None)
+            elif key in float_fields:
+                coerced = _coerce_number(value, "float")
+                if coerced is _SKIP:
+                    continue
+                fields.append(f"{key} = ?")
+                values.append(coerced)
             else:
                 fields.append(f"{key} = ?")
                 values.append(value)

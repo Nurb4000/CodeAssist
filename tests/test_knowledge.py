@@ -290,6 +290,48 @@ class TestKnowledgeEntries:
         assert await KnowledgeBase.merge_knowledge_entry("no-such-id", confidence=0.9) is False
 
     @pytest.mark.asyncio
+    async def test_update_knowledge_entry_coerces_confidence(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="coerce me"
+        )
+        # A string that parses as float is coerced, not stored raw.
+        assert await KnowledgeBase.update_knowledge_entry(entry_id, confidence="0.8") is True
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["confidence"] == 0.8
+        assert isinstance(entry["confidence"], float)
+
+    @pytest.mark.asyncio
+    async def test_update_knowledge_entry_skips_invalid_confidence(self):
+        await init_db()
+        entry_id = await KnowledgeBase.create_knowledge_entry(
+            entry_type="pattern", scope="file", content="keep me"
+        )
+        # Invalid confidence is skipped (no corruption, no 500) while a valid
+        # field on the same call still updates; existing value stays intact.
+        assert (
+            await KnowledgeBase.update_knowledge_entry(
+                entry_id, confidence="high", content="updated"
+            )
+        ) is True
+        entry = await KnowledgeBase.get_knowledge_entry(entry_id)
+        assert entry["content"] == "updated"   # valid update applied
+        assert entry["confidence"] == 1.0        # invalid value ignored, unchanged
+
+    @pytest.mark.asyncio
+    async def test_update_session_summary_coerces_numeric(self):
+        await init_db()
+        await KnowledgeBase.create_session_summary("sess-coerce", summary="s")
+        assert (
+            await KnowledgeBase.update_session_summary(
+                "sess-coerce", quality_score="4.5", message_count="7"
+            )
+        ) is True
+        row = await KnowledgeBase.get_session_summary("sess-coerce")
+        assert row["quality_score"] == 4.5 and isinstance(row["quality_score"], float)
+        assert row["message_count"] == 7 and isinstance(row["message_count"], int)
+
+    @pytest.mark.asyncio
     async def test_run_quality_pass_archives_low_confidence_unused(self):
         await init_db()
         low = await KnowledgeBase.create_knowledge_entry(
@@ -699,35 +741,35 @@ class TestPeriodFilter:
     async def test_tool_stats_period_excludes_boundary_early_entry(self):
         await init_db()
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        cutoff = now - timedelta(days=6)
-        # Same calendar day as the cutoff but earlier in the day.
-        boundary_entry = cutoff.replace(hour=1, minute=0)
+        # Clearly outside the window (7 days ago for a 6-day period), so the test
+        # is deterministic regardless of the current time of day.
+        old_entry = (now - timedelta(days=7)).isoformat()
 
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO tool_executions (id, session_id, tool_name, result_summary, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), "s-bnd", "shell", "ok", boundary_entry.isoformat()),
+                (str(uuid.uuid4()), "s-bnd", "shell", "ok", old_entry),
             )
             await db.commit()
 
         stats = await KnowledgeBase.get_tool_stats(tool_name="shell", period_days=6)
-        # Correctly excluded: the entry's time-of-day is before the cutoff time.
         assert stats == {}
 
     @pytest.mark.asyncio
     async def test_tool_stats_period_includes_recent_excludes_boundary(self):
         await init_db()
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        cutoff = now - timedelta(days=6)
-        boundary_entry = cutoff.replace(hour=1, minute=0)
+        # Deterministic placement: one entry just outside (7d) and one clearly
+        # inside (3d) the 6-day window.
+        old_entry = (now - timedelta(days=7)).isoformat()
         recent = (now - timedelta(days=3)).isoformat()
 
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO tool_executions (id, session_id, tool_name, result_summary, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), "s-bnd", "shell", "ok", boundary_entry.isoformat()),
+                (str(uuid.uuid4()), "s-bnd", "shell", "ok", old_entry),
             )
             await db.execute(
                 "INSERT INTO tool_executions (id, session_id, tool_name, result_summary, created_at) "
@@ -744,14 +786,14 @@ class TestPeriodFilter:
     async def test_llm_stats_period_excludes_boundary_early_entry(self):
         await init_db()
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        cutoff = now - timedelta(days=10)
-        boundary_entry = cutoff.replace(hour=2, minute=0)
+        # Clearly outside the 10-day window (11 days ago) for determinism.
+        old_entry = (now - timedelta(days=11)).isoformat()
 
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO llm_usage (id, session_id, model, total_tokens, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), "s-llm-bnd", "gpt-4", 100, boundary_entry.isoformat()),
+                (str(uuid.uuid4()), "s-llm-bnd", "gpt-4", 100, old_entry),
             )
             await db.commit()
 
