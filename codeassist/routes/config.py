@@ -36,7 +36,11 @@ async def api_config():
         "effective_model": effective,
         "provider": cfg.llm.provider,
         "workspace": str(cfg.workspace),
-        "agent_name": cfg.agent.name,
+        # Report the agent *id* (registry key), not the display name: clients
+        # select agents by id (see agents.list_agents) and map it to a label.
+        # Returning the display name here made the chat UI revert to "CodeAssist"
+        # on reload instead of the configured default agent's short label.
+        "agent_name": cfg.agent.default_agent,
         "vision": cfg.llm.vision,
         "vision_capable": vision,
         "context_window": cfg.llm.context_window,

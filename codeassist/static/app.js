@@ -50,6 +50,11 @@ let currentContentEl = null;
 let tokenState = { total: 0, lastTotal: 0, lastTime: null };
 let textBuffer = '';
 let reconnectTimer = null;
+// Keepalive for the idle WebSocket. uvicorn itself never closes an idle socket,
+// but intermediate proxies/browsers sometimes do; a periodic ping keeps the
+// connection warm so the UI doesn't flash "Disconnected - reconnecting".
+let pingTimer = null;
+const PING_INTERVAL_MS = 20000;
 let currentToolPanel = null;
 let toolCallCount = 0;
 let currentReasoningEl = null;
@@ -1074,6 +1079,13 @@ function connectWS() {
     ws.onopen = () => {
         wsConnected = true;
         updateConnectionStatus('connected');
+        // (Re)arm the keepalive; clear any stale timer first.
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_) { /* ignored by server */ }
+            }
+        }, PING_INTERVAL_MS);
     };
 
     ws.onmessage = (event) => {
@@ -1179,6 +1191,7 @@ function connectWS() {
 
     ws.onclose = (event) => {
         wsConnected = false;
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         updateConnectionStatus('disconnected');
         if (!isStreaming) {
             sendBtn.disabled = false;

@@ -306,3 +306,17 @@ def test_api_config_exposes_detected_fields(live_client, monkeypatch):
     assert body["backend_source"] == "backend"
     assert body["backend_external"] is False
 
+
+def test_api_config_reports_agent_id_not_display_name(live_client):
+    """Regression: /api/config must report the agent *id* (registry key), never the
+    human display name. The chat UI matches this against a mode-list item's id to
+    render its short label and mark it active; returning the display name made the
+    selector revert to 'CodeAssist' on reload instead of the configured default."""
+    agents = live_client.get("/api/agents").json()
+    agent_ids = {a["id"] for a in agents}
+    body = live_client.get("/api/config").json()
+
+    assert body["agent_name"] in agent_ids
+    # The regression only bites when an id differs from its display name.
+    assert any(a["id"] != a["name"] for a in agents)
+
