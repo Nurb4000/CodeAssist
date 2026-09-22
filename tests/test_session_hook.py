@@ -244,6 +244,33 @@ class TestSubstanceGate:
         assert len(after) == len(before) + 1
 
 
+class TestAutoEmbedOnCreate:
+    """G4: entries get an embedding generated on create when a model is configured.
+
+    The create hook spawns a throttled background task; this pins the throttled
+    wrapper's contract directly so the behavior is deterministic to assert.
+    """
+
+    @pytest.mark.asyncio
+    async def test_throttled_embedding_generates_when_model_configured(self, session_hook):
+        manager = MagicMock()
+        manager.generate_and_store_embedding = AsyncMock(return_value=True)
+        await session_hook._throttled_embedding(manager, "entry-1", "some content")
+        manager.generate_and_store_embedding.assert_awaited_once_with("entry-1", "some content")
+
+    @pytest.mark.asyncio
+    async def test_throttled_embedding_noops_without_model(self, session_hook):
+        # No client configured -> generate_and_store_embedding returns False
+        # (graceful no-op) rather than raising; the wrapper must not propagate.
+
+        manager = MagicMock()
+        manager._get_client.return_value = None
+        manager.generate_and_store_embedding = AsyncMock(return_value=False)
+        result = await session_hook._throttled_embedding(manager, "entry-2", "content")
+        assert result is None  # wrapper swallows the no-op return
+        manager.generate_and_store_embedding.assert_awaited_once()
+
+
 class TestExtractSnippetAroundMatch:
     @pytest.mark.asyncio
     async def test_extracts_snippet(self, session_hook):
