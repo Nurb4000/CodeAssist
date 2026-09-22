@@ -58,7 +58,12 @@ async def test_apply_ignores_invalid_values():
 
 
 @pytest.mark.asyncio
-async def test_clear_restores_file_value():
+async def test_clear_restores_file_value(monkeypatch):
+    # Isolate from any ambient config.toml so reset targets the dataclass
+    # default (""), not a base file value. clear_override reads Config.load().
+    import codeassist.settings as s_mod
+
+    monkeypatch.setattr(s_mod.Config, "load", staticmethod(lambda: Config()))
     await _init()
     await settings_store.set("llm.model", "ui-model")
     cfg = Config()
@@ -136,7 +141,12 @@ def test_put_settings_secret_placeholder_ignored(live_client):
     assert server.get_config().llm.api_key == "secret-123"
 
 
-def test_delete_setting_resets(live_client):
+def test_delete_setting_resets(live_client, monkeypatch):
+    import codeassist.settings as s_mod
+
+    # Reset must target the dataclass default (""), not any ambient config.toml.
+    monkeypatch.setattr(s_mod.Config, "load", staticmethod(lambda: Config()))
+
     import codeassist.server as server
 
     live_client.put("/api/settings", json={"llm.model": "edited-model"})
