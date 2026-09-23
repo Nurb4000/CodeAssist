@@ -584,7 +584,9 @@ async function loadSettings() {
 function bindSettingsActions() {
     document.getElementById('settings-save').onclick = async () => {
         const payload = {};
-        document.querySelectorAll('[data-key]').forEach((inp) => {
+        // Only real form controls carry editable values; the per-row Reset
+        // buttons also have data-key and would overwrite the field with ''.
+        document.querySelectorAll('input[data-key], select[data-key]').forEach((inp) => {
             const spec = settingsList.find((s) => s.key === inp.dataset.key);
             if (!spec) return;
             if (spec.type === 'bool') {
