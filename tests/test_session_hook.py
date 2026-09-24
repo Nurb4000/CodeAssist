@@ -1,14 +1,13 @@
 """Tests for session hook - summary generation, knowledge extraction."""
 import json
-import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from codeassist.knowledge import KnowledgeBase
 from codeassist.llm import TextDelta
 from codeassist.session import Session, init_db
 from codeassist.session_hook import SessionHook
-from codeassist.knowledge import KnowledgeBase
 
 
 @pytest.fixture

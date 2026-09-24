@@ -1,7 +1,5 @@
 """Tests for Git tool."""
-import asyncio
 import pytest
-from pathlib import Path
 
 from codeassist.tools.git import GitTool
 
@@ -19,16 +17,16 @@ class TestGitTool:
         """Test git status on a clean repository."""
         # Initialize a git repo
         import subprocess
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         git_tool.workspace = tmp_path
         
         # Create and commit a file
         (tmp_path / "test.txt").write_text("Hello")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         # Test status
         result = await git_tool.execute(operation="status")
@@ -41,13 +39,13 @@ class TestGitTool:
         import subprocess
         
         # Setup repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "test.txt").write_text("Hello")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         # Modify file
         (tmp_path / "test.txt").write_text("Modified")
@@ -63,13 +61,13 @@ class TestGitTool:
         import subprocess
         
         # Setup repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "test.txt").write_text("Line 1\nLine 2\nLine 3")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         # Modify file
         (tmp_path / "test.txt").write_text("Line 1\nModified Line 2\nLine 3")
@@ -85,17 +83,17 @@ class TestGitTool:
         import subprocess
         
         # Setup repo with commits
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "file1.txt").write_text("File 1")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Commit 1"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Commit 1"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "file2.txt").write_text("File 2")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Commit 2"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Commit 2"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         git_tool.workspace = tmp_path
         result = await git_tool.execute(operation="log", limit=5)
@@ -108,9 +106,9 @@ class TestGitTool:
         import subprocess
         
         # Setup repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "test.txt").write_text("New file")
         
@@ -129,13 +127,13 @@ class TestGitTool:
         import subprocess
         
         # Setup repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "test.txt").write_text("Hello")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         git_tool.workspace = tmp_path
         result = await git_tool.execute(operation="branch", list_branches=True)
@@ -148,7 +146,7 @@ class TestGitTool:
         import subprocess
         
         # Setup repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         git_tool.workspace = tmp_path
         result = await git_tool.execute(operation="commit", all=True)

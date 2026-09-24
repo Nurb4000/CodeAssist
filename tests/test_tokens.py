@@ -1,13 +1,11 @@
 """Tests for token counting, context compaction, and truncation."""
-import json
-import pytest
 from codeassist.tokens import (
-    count_tokens,
-    truncate_tool_result,
-    compact_messages,
-    check_context_limit,
     _extract_conversation_text,
+    check_context_limit,
+    compact_messages,
+    count_tokens,
     strip_media_from_messages,
+    truncate_tool_result,
 )
 
 

@@ -17,7 +17,7 @@ class HTTPTool(Tool):
         "Use this to interact with REST APIs, fetch web content, "
         "or test endpoints."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "method": {
@@ -65,7 +65,7 @@ class HTTPTool(Tool):
             # Validate URL
             if not url.startswith(("http://", "https://")):
                 return ToolResult(
-                    output=f"Error: URL must start with http:// or https://",
+                    output="Error: URL must start with http:// or https://",
                     error=True
                 )
 

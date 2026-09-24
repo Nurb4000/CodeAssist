@@ -1,24 +1,20 @@
 """Tests for instruction discovery, session sharing, apply patch, skills, plugins, and context sources."""
-import asyncio
-import json
-import tempfile
 from pathlib import Path
+
 import pytest
 
 from codeassist.instruction_discovery import (
     InstructionDiscoverer,
     load_file_instructions,
-    get_instruction_discoverer,
 )
+from codeassist.session_manager import SessionTool
 from codeassist.system_context import (
-    SystemContextManager,
     DateSource,
     EnvironmentSource,
     InstructionsSource,
     SkillsSource,
-    get_context_manager,
+    SystemContextManager,
 )
-from codeassist.session_manager import SessionManager, SessionTool
 from codeassist.tools.apply_patch import is_gpt_model
 
 
@@ -141,7 +137,7 @@ class TestSystemContext:
         assert source.should_refresh(Path("/tmp")) is True
         # After getting context, last_date is set
         from datetime import date as d
-        source._last_date = d.today().isoformat()
+        source._last_date = d.today().isoformat()  # noqa: DTZ011
         assert source.should_refresh(Path("/tmp")) is False
         # Simulate date change
         source._last_date = "2020-01-01"
@@ -162,7 +158,7 @@ class TestSystemContext:
         source = DateSource()
         # Set last_date to today so no refresh needed
         from datetime import date as d
-        source._last_date = d.today().isoformat()
+        source._last_date = d.today().isoformat()  # noqa: DTZ011
         mgr.register(source)
         # No updates needed
         result = await mgr.check_for_updates(Path("/tmp"))
@@ -206,8 +202,8 @@ class TestApplyPatchModelDetection:
 class TestSkillGuidanceFormat:
     def test_xml_format(self):
         """Test that skill guidance uses XML format."""
-        from codeassist.skills import SkillRegistry
         from codeassist.config import SkillsConfig
+        from codeassist.skills import SkillRegistry
 
         registry = SkillRegistry(Path("/tmp"), SkillsConfig())
         # Manually add a skill for testing
@@ -231,8 +227,8 @@ class TestSkillGuidanceFormat:
 
     def test_empty_registry(self):
         """Test that empty registry returns empty string."""
-        from codeassist.skills import SkillRegistry
         from codeassist.config import SkillsConfig
+        from codeassist.skills import SkillRegistry
 
         registry = SkillRegistry(Path("/tmp"), SkillsConfig())
         assert registry.get_instructions() == ""
@@ -242,8 +238,8 @@ class TestPluginHooks:
     @pytest.mark.asyncio
     async def test_fire_hook(self):
         """Test firing lifecycle hooks."""
-        from codeassist.plugins import PluginRegistry
         from codeassist.config import PluginConfig
+        from codeassist.plugins import PluginRegistry
 
         registry = PluginRegistry(Path("/tmp"), PluginConfig(enabled=True))
         # No plugins loaded, should return empty results
@@ -252,8 +248,8 @@ class TestPluginHooks:
 
     def test_reload_empty(self):
         """Test reloading with no plugins."""
-        from codeassist.plugins import PluginRegistry
         from codeassist.config import PluginConfig
+        from codeassist.plugins import PluginRegistry
 
         registry = PluginRegistry(Path("/tmp"), PluginConfig(enabled=True))
         # Should not raise

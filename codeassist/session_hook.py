@@ -14,12 +14,11 @@ import json
 import logging
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from .session import Session
 from .knowledge import KnowledgeBase
+from .session import Session
 
 log = logging.getLogger(__name__)
 
@@ -229,8 +228,8 @@ class SessionHook:
                 first_ts = messages[0].get("created_at", "")
                 last_ts = messages[-1].get("created_at", "")
                 if first_ts and last_ts:
-                    first_dt = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
-                    last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    first_dt = datetime.fromisoformat(first_ts)
+                    last_dt = datetime.fromisoformat(last_ts)
                     duration_seconds = int((last_dt - first_dt).total_seconds())
             except (ValueError, TypeError):
                 pass
@@ -281,8 +280,7 @@ class SessionHook:
         
         # Build summary from first and last messages
         first_msg = stats.get("first_user_message", "")
-        last_msg = stats.get("last_user_message", "")
-        
+
         summary_parts = []
         if first_msg:
             summary_parts.append(f"Session started with: {first_msg[:200]}")
@@ -390,7 +388,7 @@ Provide a JSON response with:
             # Fallback to simple summary
             return self._generate_simple_summary(messages, stats)
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("LLM summary generation failed, using simple summary: %s", e)
             try:
                 return self._generate_simple_summary(messages, stats)
@@ -881,36 +879,33 @@ Provide a JSON response with:
             content = msg.get("content", "") or ""
             
             # Look for error messages in tool results
-            if msg["role"] == "tool" and any(word in content.lower() for word in ["error", "exception", "traceback", "failed"]):
+            is_error_tool_result = (
+                msg["role"] == "tool"
+                and any(word in content.lower() for word in ["error", "exception", "traceback", "failed"])
+            )
+            if is_error_tool_result and i > 0:
                 # Find the preceding tool call
-                if i > 0:
-                    prev_msg = messages[i - 1]
-                    if prev_msg.get("tool_calls"):
-                        try:
-                            tool_calls = json.loads(prev_msg["tool_calls"])
-                            for tc in tool_calls:
-                                if isinstance(tc, dict):
-                                    func = tc.get("function", {})
-                                    tool_name = func.get("name", "")
-                                    args_str = func.get("arguments", "{}")
-                                    try:
-                                        args = json.loads(args_str)
-                                    except json.JSONDecodeError:
-                                        args = {}
-                                    
-                                    # Extract error context
-                                    error_knowledge = {
-                                        "entry_type": "pattern",
-                                        "scope": "project",
-                                        "content": f"Error encountered with {tool_name}: {content[:300]}",
-                                        "tags": ["error", "debugging", tool_name],
-                                        "confidence": 0.7,
-                                        "source_session_id": session_id,
-                                    }
-                                    await self._create_knowledge_if_new(**error_knowledge)
-                                    extracted.append(error_knowledge)
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                prev_msg = messages[i - 1]
+                if prev_msg.get("tool_calls"):
+                    try:
+                        tool_calls = json.loads(prev_msg["tool_calls"])
+                        for tc in tool_calls:
+                            if isinstance(tc, dict):
+                                func = tc.get("function", {})
+                                tool_name = func.get("name", "")
+                                # Extract error context
+                                error_knowledge = {
+                                    "entry_type": "pattern",
+                                    "scope": "project",
+                                    "content": f"Error encountered with {tool_name}: {content[:300]}",
+                                    "tags": ["error", "debugging", tool_name],
+                                    "confidence": 0.7,
+                                    "source_session_id": session_id,
+                                }
+                                await self._create_knowledge_if_new(**error_knowledge)
+                                extracted.append(error_knowledge)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
         
         return extracted
     
@@ -1065,7 +1060,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
             
             log.info("Auto-created skill '%s' for repetitive pattern", skill_name)
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to suggest skill creation: %s", e)
     
     @staticmethod
@@ -1093,10 +1088,10 @@ This workflow is now available as a skill. The agent will use this pattern when 
         scope: str,
         content: str,
         source_session_id: str,
-        tags: list[str] = None,
+        tags: list[str] | None = None,
         confidence: float = 0.7,
-        scope_identifier: str = None,
-        metadata: dict = None,
+        scope_identifier: str | None = None,
+        metadata: dict | None = None,
     ):
         """Create a knowledge entry if similar content doesn't exist."""
         try:
@@ -1147,7 +1142,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
                                 cand["id"], confidence=confidence, tags=tags
                             )
                             return
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("Embedding near-dup check skipped: %s", e)
 
             # Create the knowledge entry
@@ -1169,10 +1164,10 @@ This workflow is now available as a skill. The agent will use this pattern when 
                     manager = get_embedding_manager()
                     # Don't await - let it run in background
                     asyncio.create_task(self._throttled_embedding(manager, entry_id, content))
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     log.debug("Embedding generation skipped: %s", e)
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to create knowledge entry: %s", e)
     
     async def _throttled_embedding(self, manager, entry_id: str, content: str):
@@ -1180,7 +1175,7 @@ This workflow is now available as a skill. The agent will use this pattern when 
         async with _embedding_semaphore:
             try:
                 await manager.generate_and_store_embedding(entry_id, content)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("Embedding generation failed: %s", e)
 
     def _content_overlap(self, a: str, b: str) -> float:

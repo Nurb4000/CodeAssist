@@ -1,5 +1,7 @@
-import httpx
 from pathlib import Path
+
+import httpx
+
 from . import Tool, ToolResult
 from .security import validate_url
 
@@ -10,7 +12,7 @@ class WebFetchTool(Tool):
     workspace = Path(".")
     max_chars: int = 30000
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "The URL to fetch"},
@@ -38,7 +40,7 @@ class WebFetchTool(Tool):
             return ToolResult(output=f"Error: request timed out for {url}", error=True)
         except httpx.HTTPStatusError as e:
             return ToolResult(output=f"Error: HTTP {e.response.status_code} for {url}", error=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error fetching {url}: {e}", error=True)
 
         content_type = response.headers.get("content-type", "")
@@ -56,7 +58,6 @@ class WebFetchTool(Tool):
 
     def _html_to_text(self, html: str) -> str:
         try:
-            import markdown
             from html.parser import HTMLParser
 
             class TextExtractor(HTMLParser):

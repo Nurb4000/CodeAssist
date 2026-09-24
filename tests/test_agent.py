@@ -1,16 +1,18 @@
 """Tests for Agent class."""
 import asyncio
-import json
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from codeassist.agent import MAX_RESEARCH_NUDGES, Agent, AgentEvent, CONFIRM_TOOLS, SESSION_TRUST
-from codeassist.config import Config
+from codeassist.agent import (
+    CONFIRM_TOOLS,
+    MAX_RESEARCH_NUDGES,
+    SESSION_TRUST,
+    Agent,
+)
 from codeassist.llm import Finish, TextDelta, ToolCall, Usage
 from codeassist.session import Session
-from codeassist.tools import ToolResult, ToolRegistry
+from codeassist.tools import ToolRegistry, ToolResult
 
 
 @pytest.fixture(autouse=True)
@@ -321,7 +323,7 @@ class TestAgentRun:
     async def test_run_emits_and_persists_reasoning(self, agent, mock_session):
         """Reasoning model output is emitted as a 'reasoning' event and
         persisted in session.update_message.reasoning_content (schema v10)."""
-        from codeassist.llm import TextDelta, ReasoningDelta, Finish, Usage
+        from codeassist.llm import Finish, ReasoningDelta, TextDelta, Usage
 
         async def fake_stream(messages, openai_tools):
             yield ReasoningDelta("Let me think step by step.")
@@ -350,7 +352,7 @@ class TestAgentRun:
     async def test_run_pure_reasoning_turn_persists(self, agent, mock_session):
         """A turn with only reasoning_content (no answer text) still persists and
         updates the message rather than dropping it."""
-        from codeassist.llm import ReasoningDelta, Finish, Usage
+        from codeassist.llm import Finish, ReasoningDelta, Usage
 
         async def fake_stream(messages, openai_tools):
             yield ReasoningDelta("Pure thinking, no answer.")

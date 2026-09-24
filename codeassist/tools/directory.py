@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from . import Tool, ToolResult
-from .security import validate_directory, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_directory
 
 log = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ class DirectoryTool(Tool):
         "with their sizes, modification times, and types. Use this to explore "
         "project structure or verify file operations."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "path": {
@@ -101,13 +101,12 @@ class DirectoryTool(Tool):
                     entries.append(entry_data)
 
                     # Recurse into subdirectories if requested
-                    if recursive and entry.is_dir():
-                        if max_depth == 0 or max_depth > 1:
-                            new_max_depth = max_depth - 1 if max_depth > 0 else 0
-                            sub_entries = await self._list_directory(
-                                Path(entry.path), True, new_max_depth, include_hidden, sort_by
-                            )
-                            entries.extend(sub_entries)
+                    if recursive and entry.is_dir() and (max_depth == 0 or max_depth > 1):
+                        new_max_depth = max_depth - 1 if max_depth > 0 else 0
+                        sub_entries = await self._list_directory(
+                            Path(entry.path), True, new_max_depth, include_hidden, sort_by
+                        )
+                        entries.extend(sub_entries)
 
                 except (PermissionError, OSError):
                     continue

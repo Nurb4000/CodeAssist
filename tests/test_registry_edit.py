@@ -7,10 +7,9 @@ methods added in session.py and AgentManager.update_agent.
 import asyncio
 
 import pytest
-from fastapi.testclient import TestClient
 
-import codeassist.server as server
-from codeassist.session import MCPServer, LSPServer, init_db
+from codeassist import server
+from codeassist.session import LSPServer, MCPServer, init_db
 
 
 async def _flush_reloads():

@@ -123,7 +123,7 @@ async def _probe_backend(cfg) -> dict | None:
             resp = await client.get(f"{base}/models", headers=headers)
             resp.raise_for_status()
             data = resp.json()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log.debug("Backend probe failed: %s", exc)
         return None
     if not isinstance(data, dict):

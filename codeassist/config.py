@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -184,7 +184,7 @@ class Config:
             try:
                 with open(overrides_path, "rb") as of:
                     raw = _deep_merge(raw, tomllib.load(of))
-            except Exception as e:  # pragma: no cover - malformed overrides file
+            except Exception as e:  # pragma: no cover - malformed overrides file  # noqa: BLE001
                 log.warning("Ignoring unreadable overrides file %s: %s", overrides_path, e)
 
         llm_raw = raw.get("llm", {})

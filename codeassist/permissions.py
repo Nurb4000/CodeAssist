@@ -6,9 +6,9 @@ Saved permission preferences persist across sessions.
 """
 
 import fnmatch
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -134,15 +134,14 @@ class SavedPermissions:
         """Load saved permissions from database."""
         try:
             db = await get_db()
-            async with db:
-                async with db.execute(
-                    "SELECT tool_name, pattern, action FROM permission_saves"
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                    for tool_name, pattern, action in rows:
-                        key = f"{tool_name}:{pattern}"
-                        self._cache[key] = action
-        except Exception as e:
+            async with db, db.execute(
+                "SELECT tool_name, pattern, action FROM permission_saves"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                for tool_name, pattern, action in rows:
+                    key = f"{tool_name}:{pattern}"
+                    self._cache[key] = action
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to load saved permissions: %s", e)
 
     async def save(self, tool_name: str, pattern: str, action: str) -> None:
@@ -158,7 +157,7 @@ class SavedPermissions:
                     "VALUES (?, ?, ?, ?, ?)",
                     [str(uuid.uuid4()), tool_name, pattern, action, _now_iso()],
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to save permission: %s", e)
 
     def check_saved(self, tool_name: str, file_path: str = "") -> str | None:
@@ -189,13 +188,13 @@ class SavedPermissions:
             db = await get_db()
             async with db:
                 await db.execute("DELETE FROM permission_saves")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to clear saved permissions: %s", e)
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()
 
 
 class PermissionManager:

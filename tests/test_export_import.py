@@ -3,13 +3,12 @@
 Covers the registry helpers in ``codeassist.skills`` and
 ``codeassist.custom_tools_loader`` plus the REST routes that expose them.
 """
-import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-import codeassist.server as server
+from codeassist import server
 from codeassist.config import SkillsConfig
 
 
@@ -175,9 +174,9 @@ def test_export_base_tools_captures_package_source():
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEASSIST_WORKSPACE", str(tmp_path))
     (tmp_path / "config.toml").write_text(
-        "[server]\nworkspace = \"%s\"\n[skills]\nenabled = true\n"
+        f"[server]\nworkspace = \"{tmp_path!s}\"\n[skills]\nenabled = true\n"
         'directories = ["codeassist/skills", "runtime/skills"]\n'
-        "[tools]\nenabled = true\n" % str(tmp_path),
+        "[tools]\nenabled = true\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -244,7 +243,7 @@ def test_custom_tool_export_import_route(client):
 
 
 def test_base_tool_export_route(client):
-    client, ws = client
+    client, _ = client
     r = client.get("/api/tools/export")
     assert r.status_code == 200, r.text
     payload = r.json()

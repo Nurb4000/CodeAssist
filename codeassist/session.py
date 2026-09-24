@@ -1,13 +1,13 @@
-import aiosqlite
 import asyncio
 import json
 import os
 import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from dataclasses import dataclass
+
+import aiosqlite
 
 # The database lives in a data directory that can be overridden via
 # CODEASSIST_DATA_DIR (used by Docker to point at the mounted persistence
@@ -72,7 +72,7 @@ def _stop_all_conns():
     for conn in list(_ALL_CONNS):
         try:
             conn.stop()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     _ALL_CONNS.clear()
 
@@ -97,7 +97,7 @@ async def async_reset_pool():
     for conn in list(_ALL_CONNS):
         try:
             await conn.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     _ALL_CONNS.clear()
     if _db_pool is not None:
@@ -124,7 +124,7 @@ async def get_db():
 async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with get_db() as db:
-        await db.execute(f"""
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS schema_info (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -137,7 +137,7 @@ async def init_db():
             row = await cursor.fetchone()
             if row:
                 current_version = int(row[0])
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
         if current_version == 0:
@@ -646,7 +646,7 @@ async def _ensure_fts5_tables():
                 """)
             
             await db.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # FTS5 creation can fail if extension not available - log but don't crash
         import logging
         logging.getLogger(__name__).warning("Could not create FTS5 tables: %s", e)
@@ -687,7 +687,7 @@ class Session:
     @classmethod
     async def create(cls, name: str | None = None, parent_id: str | None = None, fork_point: str | None = None) -> "Session":
         sid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_str = now.isoformat()
         default_name = name or now.strftime("%Y-%m-%d %H:%M")
         async with get_db() as db:
@@ -735,7 +735,7 @@ class Session:
 
         Atomic via INSERT OR IGNORE so concurrent connections with the same id
         can't race; prevents orphaned message rows referencing an unknown session."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_str = now.isoformat()
         async with get_db() as db:
             await db.execute(
@@ -759,7 +759,7 @@ class Session:
 
     async def set_agent_name(self, agent_name: str):
         """Persist the agent selected for this session."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "UPDATE sessions SET agent_name = ?, updated_at = ? WHERE id = ?",
@@ -778,7 +778,7 @@ class Session:
         reasoning_content: str | None = None,
     ) -> str:
         mid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_calls, name, reasoning_content, created_at) "
@@ -887,7 +887,7 @@ class Session:
         advances). ``reasoning_content`` stores model thinking separately so it
         can be rendered in a collapsible block on the client.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             sets: list[str] = []
             params: list = []
@@ -915,7 +915,7 @@ class Session:
             await db.commit()
 
     async def rename(self, name: str):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute("UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?", (name, now, self.id))
             await db.commit()
@@ -953,7 +953,7 @@ class Session:
                 (self.id, ref_ts),
             )
             deleted = cursor.rowcount
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             await db.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
                 (now, self.id),
@@ -978,7 +978,7 @@ class Session:
 
     async def fork(self, name: str | None = None) -> "Session":
         """Create a fork of this session."""
-        new_session = await Session.create(name=name, parent_id=self.id, fork_point=datetime.now(timezone.utc).isoformat())
+        new_session = await Session.create(name=name, parent_id=self.id, fork_point=datetime.now(UTC).isoformat())
         messages = await self.get_messages()
         for msg in messages:
             await new_session.add_message(
@@ -1007,7 +1007,7 @@ class Agent:
         permissions: dict[str, list[str]] | None = None,
     ) -> "Agent":
         aid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO agents (id, name, description, instructions, model, max_iterations, permissions, enabled, created_at, updated_at) "
@@ -1050,10 +1050,10 @@ class Agent:
                 return dict(row)
         return {}
 
-    _ALLOWED_UPDATE_FIELDS = {"name", "description", "instructions", "model", "max_iterations", "permissions"}
+    _ALLOWED_UPDATE_FIELDS = {"name", "description", "instructions", "model", "max_iterations", "permissions"}  # noqa: RUF012
 
     async def update(self, **kwargs):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         fields = []
         values = []
         for key, value in kwargs.items():
@@ -1088,7 +1088,7 @@ class MCPServer:
     @classmethod
     async def create(cls, name: str, config: dict) -> "MCPServer":
         sid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO mcp_servers (id, name, config, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
@@ -1125,7 +1125,7 @@ class MCPServer:
         return {}
 
     async def update(self, name: str | None = None, config: dict | None = None):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         fields = []
         values = []
         if name is not None:
@@ -1146,7 +1146,7 @@ class MCPServer:
             await db.commit()
 
     async def set_enabled(self, enabled: bool):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE id = ?",
@@ -1174,7 +1174,7 @@ class Skill:
         slash_command: str | None = None,
     ) -> "Skill":
         sid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO skills (id, name, description, content, source, slash_command, enabled, created_at, updated_at) "
@@ -1222,7 +1222,7 @@ class Plugin:
     @classmethod
     async def create(cls, name: str, version: str | None = None, config: dict | None = None) -> "Plugin":
         pid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO plugins (id, name, version, config, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
@@ -1266,7 +1266,7 @@ class LSPServer:
         languages: list[str] | None = None,
     ) -> "LSPServer":
         sid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO lsp_servers (id, name, command, args, languages, enabled, created_at, updated_at) "
@@ -1313,7 +1313,7 @@ class LSPServer:
         args: list[str] | None = None,
         languages: list[str] | None = None,
     ):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         fields = []
         values = []
         if name is not None:
@@ -1340,7 +1340,7 @@ class LSPServer:
             await db.commit()
 
     async def set_enabled(self, enabled: bool):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "UPDATE lsp_servers SET enabled = ?, updated_at = ? WHERE id = ?",
@@ -1361,7 +1361,7 @@ class GitRepo:
     @classmethod
     async def create(cls, path: str, head_branch: str | None = None) -> "GitRepo":
         rid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO git_repos (id, path, head_branch, last_sync, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1387,7 +1387,7 @@ class GitRepo:
         return None
 
     async def update(self, head_branch: str | None = None):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             if head_branch is not None:
                 await db.execute(

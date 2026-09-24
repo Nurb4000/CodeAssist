@@ -1,7 +1,6 @@
 """Docker Tool - Container management for workspace projects."""
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 
@@ -17,7 +16,7 @@ class DockerTool(Tool):
         "remove, list, and logs operations. Auto-detects Dockerfile and "
         "docker-compose.yml in the workspace."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -58,7 +57,7 @@ class DockerTool(Tool):
                 code, _ = await self._run_docker(["docker", "version"], timeout=10)
                 if code != 0:
                     return ToolResult(output="Error: Docker is not running or not installed", error=True)
-            except (FileNotFoundError, asyncio.TimeoutError):
+            except (TimeoutError, FileNotFoundError):
                 return ToolResult(output="Error: Docker is not installed or not in PATH", error=True)
 
             if action == "build":
@@ -139,7 +138,7 @@ class DockerTool(Tool):
             else:
                 return ToolResult(output=f"Error: unknown action '{action}'", error=True)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResult(output="Error: Docker command timed out", error=True)
         except Exception as e:
             log.exception("docker tool failed")

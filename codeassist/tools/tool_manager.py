@@ -1,5 +1,4 @@
 import logging
-from typing import Any
 
 from . import Tool, ToolResult
 
@@ -14,7 +13,7 @@ class ToolManagerTool(Tool):
         "after creating new ones. This tool allows the agent to discover and "
         "manage its own capabilities."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {

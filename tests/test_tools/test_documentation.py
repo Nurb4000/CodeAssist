@@ -1,6 +1,6 @@
 """Tests for documentation tool."""
+
 import pytest
-from pathlib import Path
 
 from codeassist.tools.documentation import DocumentationTool
 

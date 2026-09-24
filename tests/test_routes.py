@@ -1,7 +1,7 @@
 """Tests for tool management API routes."""
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import base64
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -52,7 +52,7 @@ class TestParseImageAttachments:
         assert "Unsupported image type" in error
 
     def test_oversized_image(self):
-        from codeassist.server import _parse_image_attachments, MAX_IMAGE_BYTES
+        from codeassist.server import MAX_IMAGE_BYTES, _parse_image_attachments
         big = b"x" * (MAX_IMAGE_BYTES + 1)
         attachments, error = _parse_image_attachments(["data:image/png;base64," + base64.b64encode(big).decode()])
         assert attachments == []

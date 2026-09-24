@@ -5,10 +5,7 @@ package existed but was never registered, so every /api/* endpoint returned 404,
 and where route handlers referenced pre-refactor module names (`from session
 import ...`) that would 500 at request time.
 """
-import pytest
-from fastapi.testclient import TestClient
 
-import codeassist.server as server
 
 REST_ENDPOINTS_GET = [
     "/health",
@@ -178,6 +175,7 @@ def test_ws_unknown_session_id_creates_session_not_orphan(live_client, monkeypat
     """Connecting a WS to an unknown session id must create the sessions row
     (get_or_create), so its messages are never orphaned (review item B2)."""
     import uuid
+
     import codeassist.llm as llm_mod
 
     async def _stub_stream(self, *args, **kwargs):
@@ -221,6 +219,7 @@ def test_ws_agent_switcher(live_client, monkeypatch):
     connect, applies a switch_agent request, and remembers the choice per session
     across reconnects."""
     import uuid
+
     import codeassist.llm as llm_mod
 
     async def _stub_stream(self, *args, **kwargs):
@@ -263,7 +262,7 @@ def test_session_pin_api(live_client):
 
     pinned = {s["id"]: s["is_pinned"] for s in live_client.get("/api/sessions").json()}
     assert pinned[sid] == 1
-    assert list(pinned)[0] == sid, "pinned session should sort to the top"
+    assert next(iter(pinned)) == sid, "pinned session should sort to the top"
 
     live_client.patch(f"/api/sessions/{sid}", json={"pinned": False})
     pinned = {s["id"]: s["is_pinned"] for s in live_client.get("/api/sessions").json()}

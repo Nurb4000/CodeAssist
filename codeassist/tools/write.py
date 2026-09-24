@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
+
 from . import Tool, ToolResult
-from .security import validate_path, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_path
 
 log = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ class WriteTool(Tool):
     description = "Write content to a file, overwriting if it exists. Creates parent directories. Backs up existing files to .bak before overwriting."
     workspace = Path(".")
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "file_path": {"type": "string", "description": "Absolute path to the file"},
@@ -35,5 +36,5 @@ class WriteTool(Tool):
             path.write_text(content)
             lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
             return ToolResult(output=f"Wrote {lines} lines to {file_path}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error writing {file_path}: {e}", error=True)

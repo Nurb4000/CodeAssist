@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any
+from datetime import UTC
 
 import httpx
 
@@ -16,7 +16,7 @@ class WebSearchTool(Tool):
         "Search the web for information. Returns search results with titles, URLs, and snippets. "
         "Use this to find documentation, troubleshoot errors, or gather information."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "query": {
@@ -121,7 +121,7 @@ class WebSearchTool(Tool):
 
             return ToolResult(output="\n".join(output_lines))
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(
                 output=f"Web search for '{query}' failed: {e}\n\n"
                        f"Install 'duckduckgo_search' package for a more reliable search backend:\n"
@@ -143,7 +143,7 @@ class QuestionTool(Tool):
         "The 'questions' parameter is an array of question objects. If you only need a single "
         "simple question, use the legacy 'question' string parameter instead."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "question": {
@@ -237,7 +237,7 @@ class QuestionTool(Tool):
         # Persist to database
         try:
             await self._persist_question(question_id, data)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
         # Wait for answer
@@ -249,7 +249,7 @@ class QuestionTool(Tool):
         if answer is not None:
             try:
                 await self._update_question_answer(question_id, answer)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         if answer is None:
@@ -262,8 +262,9 @@ class QuestionTool(Tool):
 
     async def _persist_question(self, question_id: str, data: dict):
         """Persist question to database."""
-        from codeassist.session import get_db
         import json as j
+
+        from codeassist.session import get_db
 
         q_list = data.get("questions", [{"question": data.get("question", ""), "header": ""}])
         async with get_db() as db:
@@ -317,7 +318,7 @@ class QuestionTool(Tool):
         try:
             import asyncio
             asyncio.create_task(self._reject_question_async(question_id))
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     async def _reject_question_async(self, question_id: str):
@@ -333,8 +334,8 @@ class QuestionTool(Tool):
 
 def datetime_now() -> str:
     """Return current UTC timestamp as ISO string."""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()
 
 
 class TaskTool(Tool):
@@ -351,7 +352,7 @@ class TaskTool(Tool):
         "receive a notification when the subagent completes.\n\n"
         "Use `task_id` parameter to resume an existing task session."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "description": {
@@ -459,7 +460,7 @@ class TaskTool(Tool):
                            f'{result}\n'
                            f'</task>'
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return ToolResult(
                     output=f'<task id="{task.id}" state="error">\n'
                            f'Error running subagent: {e}\n'

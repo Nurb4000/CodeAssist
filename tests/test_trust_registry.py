@@ -1,12 +1,9 @@
 """Tests for trust registry."""
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
-from codeassist.trust_registry import TrustRegistry, TrustStatus, TrustRequest
+from codeassist.trust_registry import TrustRegistry, TrustRequest, TrustStatus
 
 
 class TestTrustRegistry:

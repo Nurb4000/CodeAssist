@@ -3,9 +3,9 @@
 
 import argparse
 import sys
-import webbrowser
 import threading
 import time
+import webbrowser
 from pathlib import Path
 
 
@@ -21,8 +21,8 @@ def main():
     parser.add_argument("--config", default="config.toml", help="Config file path (default: config.toml)")
     args = parser.parse_args()
 
+    from codeassist import server
     from codeassist.config import Config
-    import codeassist.server as server
 
     config = Config.load(args.config)
 
@@ -48,7 +48,7 @@ def main():
 
     print(f"\n  CodeAssist running at {url}")
     print(f"  Workspace: {config.workspace}")
-    print(f"  Press Ctrl+C to stop\n")
+    print("  Press Ctrl+C to stop\n")
 
     try:
         import uvicorn

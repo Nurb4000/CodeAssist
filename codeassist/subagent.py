@@ -2,9 +2,8 @@ import asyncio
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +82,7 @@ class SubagentManager:
             parent_session_id=parent_session_id,
             background=background,
             status="pending",
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
 
         self._tasks[tid] = task
@@ -166,7 +165,7 @@ class SubagentManager:
 
             task.status = "completed"
             task.result = full_result[:5000]  # Cap result size
-            task.completed_at = datetime.now(timezone.utc).isoformat()
+            task.completed_at = datetime.now(UTC).isoformat()
 
             # Notify parent if background
             if task.background:
@@ -178,7 +177,7 @@ class SubagentManager:
             log.exception("Subagent task %s failed", task_id)
             task.status = "error"
             task.error = str(e)
-            task.completed_at = datetime.now(timezone.utc).isoformat()
+            task.completed_at = datetime.now(UTC).isoformat()
             raise
 
     async def cancel_task(self, task_id: str) -> bool:
@@ -188,7 +187,7 @@ class SubagentManager:
             return False
 
         task.status = "cancelled"
-        task.completed_at = datetime.now(timezone.utc).isoformat()
+        task.completed_at = datetime.now(UTC).isoformat()
 
         # Cancel asyncio task if running
         if task_id in self._running:
@@ -218,7 +217,7 @@ class SubagentManager:
                     ),
                 )
                 await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to persist subagent task: %s", e)
 
     async def _notify_parent(self, task: SubagentTask):
@@ -227,7 +226,7 @@ class SubagentManager:
             queue = self._notifications.get(task.id)
             if queue:
                 await queue.put(task.to_dict())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to notify parent of subagent completion: %s", e)
 
 

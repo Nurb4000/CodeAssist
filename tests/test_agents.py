@@ -1,7 +1,7 @@
 """Tests for multi-agent system."""
 import pytest
 
-from codeassist.agents import AgentConfig, AgentPermissions, Permission, AgentManager
+from codeassist.agents import AgentConfig, AgentManager, AgentPermissions, Permission
 
 
 class TestPermission:

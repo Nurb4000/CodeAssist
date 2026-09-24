@@ -1,9 +1,7 @@
 """Tests for chat file/image attachments (server-side validation + WS wiring)."""
 import uuid
 
-import pytest
-
-from codeassist.server import _parse_text_files, MAX_FILES_PER_MESSAGE, MAX_FILE_BYTES
+from codeassist.server import MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, _parse_text_files
 
 
 class TestParseTextFiles:

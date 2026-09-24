@@ -1,10 +1,9 @@
 """Tests for runtime model-capability detection (vision + local model/context auto-detect)."""
-import asyncio
 
 import pytest
 
 import codeassist.capabilities as cap_mod
-from codeassist.capabilities import get_backend_info, _default_info
+from codeassist.capabilities import _default_info, get_backend_info
 from codeassist.config import Config, LLMConfig
 
 
@@ -220,7 +219,6 @@ async def test_unprobeable_backend_does_not_poison_cache():
     cfg = _cfg(base_url="")  # no backend configured yet
     assert await cap_mod._probe_backend(cfg) is None
 
-    before = time.monotonic()
     await cap_mod._refresh(cfg)
     remaining = cap_mod._cache["expires"] - time.monotonic()
     # Short retry window, not the full cache TTL.

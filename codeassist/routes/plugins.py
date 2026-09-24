@@ -12,8 +12,9 @@ def _discover_registry():
     Uses ``cfg.workspace`` (the same resolved workspace the boot-time global
     registry uses) so delete operates on exactly what ``GET /api/plugins`` lists.
     """
-    from ..server import get_config
     from codeassist.plugins import PluginRegistry
+
+    from ..server import get_config
 
     cfg = get_config()
     registry = PluginRegistry(Path(cfg.workspace), cfg.plugins)
@@ -34,8 +35,9 @@ async def list_plugins():
 @router.delete("/{name}")
 async def delete_plugin(name: str):
     """Delete a discovered plugin's directory from the workspace."""
-    from ..server import plugin_registry as global_registry
     from codeassist.plugins import PluginRegistry
+
+    from ..server import plugin_registry as global_registry
 
     registry = _discover_registry()
     if registry.get_plugin(name) is None:

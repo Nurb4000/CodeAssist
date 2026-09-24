@@ -1,11 +1,9 @@
 import asyncio
-import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from . import Tool, ToolResult
-from .security import validate_directory, validate_path, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_directory, validate_path
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +15,7 @@ class GitTool(Tool):
         "checkout, branch, fetch, worktree, apply patch. Use 'status' to see current state, "
         "'diff' to see changes, 'log' to view history."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "operation": {
@@ -312,7 +310,7 @@ class GitTool(Tool):
         if kwargs.get("amend"):
             args.append("--amend")
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Commit failed: {stderr}", error=True)
 
@@ -332,7 +330,7 @@ class GitTool(Tool):
         if branch:
             args.append(branch)
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Push failed: {stderr}", error=True)
 
@@ -350,7 +348,7 @@ class GitTool(Tool):
         if branch:
             args.append(branch)
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Pull failed: {stderr}", error=True)
 
@@ -377,7 +375,7 @@ class GitTool(Tool):
             target = Path(target_path).resolve()
             validate_path(str(target), self.workspace)
 
-        stdout, stderr, rc = await self._run_git(self.workspace, args)
+        _, stderr, rc = await self._run_git(self.workspace, args)
         if rc != 0:
             return ToolResult(output=f"Clone failed: {stderr}", error=True)
 
@@ -398,7 +396,7 @@ class GitTool(Tool):
         else:
             args.append(branch)
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Checkout failed: {stderr}", error=True)
 
@@ -416,7 +414,7 @@ class GitTool(Tool):
                 line = line.strip()
                 if line:
                     prefix = "* " if line.startswith("*") else "  "
-                    branches.append(f"{prefix}{line[1:] if line.startswith('*') else line}")
+                    branches.append(f"{prefix}{line.removeprefix('*')}")
 
             return ToolResult(output="\n".join(branches))
 
@@ -440,7 +438,7 @@ class GitTool(Tool):
         if kwargs.get("prune"):
             args.append("--prune")
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Fetch failed: {stderr}", error=True)
 
@@ -541,7 +539,7 @@ class GitTool(Tool):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate(input=patch_content.encode() if patch_content else None)
+        _, stderr = await proc.communicate(input=patch_content.encode() if patch_content else None)
         rc = proc.returncode
 
         if rc != 0:
@@ -560,7 +558,7 @@ class GitTool(Tool):
                 return ToolResult(output="Error: upstream branch is required", error=True)
             args = ["rebase", upstream]
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Rebase failed: {stderr}", error=True)
 
@@ -569,7 +567,7 @@ class GitTool(Tool):
     async def _merge(self, repo_path: Path, kwargs: dict) -> ToolResult:
         if kwargs.get("abort"):
             args = ["merge", "--abort"]
-            stdout, stderr, rc = await self._run_git(repo_path, args)
+            _, stderr, rc = await self._run_git(repo_path, args)
             if rc != 0:
                 return ToolResult(output=f"Merge abort failed: {stderr}", error=True)
             return ToolResult(output="Merge aborted")
@@ -580,7 +578,7 @@ class GitTool(Tool):
 
         args = ["merge", branch]
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Merge failed: {stderr}", error=True)
 
@@ -592,7 +590,7 @@ class GitTool(Tool):
             if kwargs.get("index"):
                 args.append("--index")
 
-            stdout, stderr, rc = await self._run_git(repo_path, args)
+            _, stderr, rc = await self._run_git(repo_path, args)
             if rc != 0:
                 return ToolResult(output=f"Stash pop failed: {stderr}", error=True)
 
@@ -605,7 +603,7 @@ class GitTool(Tool):
         else:
             args.append("push")
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Stash failed: {stderr}", error=True)
 
@@ -617,7 +615,7 @@ class GitTool(Tool):
 
         args = ["reset", f"--{mode}", commit]
 
-        stdout, stderr, rc = await self._run_git(repo_path, args)
+        _, stderr, rc = await self._run_git(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Reset failed: {stderr}", error=True)
 

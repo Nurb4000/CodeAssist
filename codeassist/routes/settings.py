@@ -148,7 +148,6 @@ async def test_connection(payload: dict | None = None):
 
     from ..capabilities import context_window_from_body
     from ..server import get_config
-    from ..settings import BY_KEY, coerce
 
     cfg = get_config()
     base_url = cfg.llm.base_url
@@ -162,7 +161,7 @@ async def test_connection(payload: dict | None = None):
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
             response = await client.get(endpoint, headers=headers)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     if response.status_code != 200:
         return {"ok": False, "error": f"HTTP {response.status_code}", "endpoint": endpoint}
@@ -171,7 +170,7 @@ async def test_connection(payload: dict | None = None):
         body = response.json()
         models = [m.get("id") for m in body.get("data", []) if m.get("id")]
         context_window = context_window_from_body(body)
-    except Exception:
+    except Exception:  # noqa: BLE001
         models = []
     result = {"ok": True, "endpoint": endpoint, "models": models[:25]}
     if context_window is not None:

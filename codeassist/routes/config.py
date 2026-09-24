@@ -1,5 +1,5 @@
 """Config and todo API routes."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 router = APIRouter(tags=["config"])
 
@@ -17,8 +17,12 @@ def _human_size(num: int) -> str:
 @router.get("/api/config")
 async def api_config():
     """Get current server configuration (model, workspace, enabled features)."""
+    from ..capabilities import (
+        effective_context_window,
+        get_backend_info,
+        model_vision_capable,
+    )
     from ..server import get_config
-    from ..capabilities import effective_context_window, get_backend_info, model_vision_capable
     cfg = get_config()
     vision = await model_vision_capable(cfg)
     backend = await get_backend_info(cfg)

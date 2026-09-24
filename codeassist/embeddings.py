@@ -4,16 +4,14 @@ CodeAssist Embeddings - Generate and search vector embeddings for knowledge base
 Uses OpenAI-compatible embedding APIs for vector representations.
 """
 
-import json
 import logging
 import struct
-from typing import Optional
 
 import openai
 
 from .config import Config
-from .session import get_db
 from .knowledge import KnowledgeBase
+from .session import get_db
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +47,7 @@ class EmbeddingClient:
                 input=text[:8000],  # Truncate to avoid token limits
             )
             return response.data[0].embedding
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Embedding generation failed: %s", e)
             return None
     
@@ -70,7 +68,7 @@ class EmbeddingClient:
                 embeddings[item.index] = item.embedding
             
             return embeddings
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Batch embedding generation failed: %s", e)
             return [None] * len(texts)
 
@@ -117,7 +115,7 @@ class EmbeddingManager:
             try:
                 config = Config.load()
                 self.client = EmbeddingClient(config)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.warning("Could not create embedding client: %s", e)
                 return None
         return self.client
@@ -145,7 +143,7 @@ class EmbeddingManager:
             log.debug("Stored embedding for entry %s", entry_id)
             return True
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to generate/store embedding for %s: %s", entry_id, e)
             return False
     
@@ -188,7 +186,7 @@ class EmbeddingManager:
                 log.info("Generated embeddings for %d entries", count)
                 return count
                 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to generate embeddings: %s", e)
             return 0
     
@@ -288,7 +286,7 @@ class EmbeddingManager:
             
             return results[:limit]
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Embedding search failed, falling back to text search: %s", e)
             return await KnowledgeBase.search_knowledge(
                 entry_type=entry_type,
@@ -325,7 +323,7 @@ class EmbeddingManager:
                 # Use FTS5 to get candidate entries (faster than loading all)
                 candidate_limit = max(limit * 10, 50)
 
-                cursor = await db.execute(f"""
+                cursor = await db.execute("""
                     SELECT k.* FROM knowledge_search ks
                     JOIN knowledge_entries k ON ks.entry_id = k.id
                     WHERE ks.entry_id != ? AND k.embedding IS NOT NULL AND k.embedding != '' AND k.status = ?
@@ -362,7 +360,7 @@ class EmbeddingManager:
             
             return results[:limit]
             
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to find similar entries: %s", e)
             return []
 

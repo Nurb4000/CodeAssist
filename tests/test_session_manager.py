@@ -1,5 +1,6 @@
 """Tests for session manager operations."""
 import json
+
 import pytest
 
 from codeassist.session import Session, init_db
@@ -85,7 +86,7 @@ class TestSessionManager:
         await init_db()
         source = await Session.create(name="Reasoning Source")
         await source.add_message("user", "Question")
-        assistant_id = await source.add_message(
+        await source.add_message(
             "assistant",
             content="The answer",
             reasoning_content="Let me think about this step by step.",

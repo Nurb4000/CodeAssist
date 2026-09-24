@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from . import Tool, ToolResult
 
 
@@ -7,7 +8,7 @@ class TodoTool(Tool):
     description = "Manage a task list. Use to track progress on multi-step work."
     workspace = Path(".")
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["add", "update", "list", "clear"], "description": "Action to perform"},

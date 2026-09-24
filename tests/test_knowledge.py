@@ -1,7 +1,7 @@
 """Tests for knowledge base CRUD, search, and analytics."""
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -577,8 +577,8 @@ class TestToolExecutions:
 
     @pytest.mark.asyncio
     async def test_result_full_is_truncated(self):
-        from codeassist.session import get_db
         from codeassist.knowledge import MAX_RESULT_FULL_CHARS
+        from codeassist.session import get_db
 
         await init_db()
         session_id = f"test-b3-{uuid.uuid4().hex[:8]}"
@@ -648,7 +648,7 @@ class TestSessionTags:
     async def test_duplicate_tag_returns_empty(self):
         await init_db()
         session_id = f"test-dup-{uuid.uuid4().hex[:8]}"
-        tag_id1 = await KnowledgeBase.add_session_tag(session_id, "bug")
+        await KnowledgeBase.add_session_tag(session_id, "bug")
         tag_id2 = await KnowledgeBase.add_session_tag(session_id, "bug")
         assert tag_id2 == ""
 
@@ -740,7 +740,7 @@ class TestPeriodFilter:
     @pytest.mark.asyncio
     async def test_tool_stats_period_excludes_boundary_early_entry(self):
         await init_db()
-        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now = datetime.now(UTC).replace(microsecond=0)
         # Clearly outside the window (7 days ago for a 6-day period), so the test
         # is deterministic regardless of the current time of day.
         old_entry = (now - timedelta(days=7)).isoformat()
@@ -759,7 +759,7 @@ class TestPeriodFilter:
     @pytest.mark.asyncio
     async def test_tool_stats_period_includes_recent_excludes_boundary(self):
         await init_db()
-        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now = datetime.now(UTC).replace(microsecond=0)
         # Deterministic placement: one entry just outside (7d) and one clearly
         # inside (3d) the 6-day window.
         old_entry = (now - timedelta(days=7)).isoformat()
@@ -785,7 +785,7 @@ class TestPeriodFilter:
     @pytest.mark.asyncio
     async def test_llm_stats_period_excludes_boundary_early_entry(self):
         await init_db()
-        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now = datetime.now(UTC).replace(microsecond=0)
         # Clearly outside the 10-day window (11 days ago) for determinism.
         old_entry = (now - timedelta(days=11)).isoformat()
 
@@ -986,14 +986,14 @@ class TestExportImport:
         )
         export = await KnowledgeBase.export_all()
         # Must not raise — embedding blobs are stripped (B1).
-        serialized = json.dumps(export)
+        json.dumps(export)
         assert "pattern" in str(export["data"].get("knowledge_entries", [])) or True
         assert "version" in export and "data" in export
 
     @pytest.mark.asyncio
     async def test_import_round_trip_recreates_entries(self):
         await init_db()
-        entry_id = await KnowledgeBase.create_knowledge_entry(
+        await KnowledgeBase.create_knowledge_entry(
             entry_type="convention", scope="project",
             content="round trip convention", confidence=0.8, tags=["x"],
         )
@@ -1031,7 +1031,7 @@ class TestExportImport:
 class TestPII:
     @pytest.mark.asyncio
     async def test_scan_detects_and_redact_removes_email(self):
-        from codeassist.routes.kb_gui import kb_pii_scan, kb_pii_redact
+        from codeassist.routes.kb_gui import kb_pii_redact, kb_pii_scan
 
         await init_db()
         entry_id = await KnowledgeBase.create_knowledge_entry(

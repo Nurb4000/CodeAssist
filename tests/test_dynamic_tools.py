@@ -1,6 +1,6 @@
 """Tests for dynamic tool loading system."""
+
 import pytest
-from pathlib import Path
 
 from codeassist.dynamic_tools import DynamicToolLoader, create_dynamic_registry
 from codeassist.tools import ToolRegistry
@@ -21,7 +21,6 @@ class TestDynamicToolLoader:
 
     def test_discover_tools_with_valid_tool(self, loader, tmp_path):
         """Test discovering a valid tool class."""
-        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -80,7 +79,6 @@ class PrivateTool(Tool):
 
     def test_reload_registry(self, loader, tmp_path):
         """Test reloading tools into a registry."""
-        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -107,7 +105,6 @@ class TestReloadTool(Tool):
 
     def test_get_available_tools(self, loader, tmp_path):
         """Test getting list of available tool classes."""
-        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -138,7 +135,6 @@ class TestCreateDynamicRegistry:
 
     def test_create_dynamic_registry(self, tmp_path):
         """Test creating a registry with dynamic loading."""
-        from codeassist.tools import Tool
         
         # Create a test tool file
         tools_dir = tmp_path / "tools"
@@ -157,6 +153,6 @@ class TestDynRegTool(Tool):
         return "test"
 ''')
         
-        registry, loader = create_dynamic_registry(tmp_path)
+        registry, _ = create_dynamic_registry(tmp_path)
         
         assert "test_dyn_reg" in registry.list_names()

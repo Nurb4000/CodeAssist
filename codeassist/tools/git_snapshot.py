@@ -17,7 +17,7 @@ class GitSnapshotTool(Tool):
         "a rollback point. The snapshot commit is marked with 'snapshot:' prefix for "
         "easy identification and can be reverted with 'git revert'."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "message": {

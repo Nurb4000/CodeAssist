@@ -1,15 +1,15 @@
 """Tests for embeddings (serialize/deserialize/cosine) and semantic-search routing."""
-import json
 
-import pytest
-from fastapi.testclient import TestClient
-from fastapi import FastAPI
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 import codeassist.embeddings as embeddings_mod
-from codeassist.session import init_db
 from codeassist.knowledge import KnowledgeBase
 from codeassist.routes.knowledge import router as knowledge_router
+from codeassist.session import init_db
 
 
 class TestSerializeDeserialize:
@@ -56,8 +56,9 @@ class TestSemanticSearchRouting:
         manager.search_by_embedding = AsyncMock(return_value=[{"id": "1", "similarity": 0.9}])
         monkeypatch.setattr(embeddings_mod, "get_embedding_manager", lambda: manager)
 
-        from codeassist.routes.kb_gui import router
         from fastapi import FastAPI
+
+        from codeassist.routes.kb_gui import router
 
         app = FastAPI()
         app.include_router(router)
@@ -79,8 +80,9 @@ class TestSemanticSearchRouting:
         manager._get_client.return_value = None
         monkeypatch.setattr(embeddings_mod, "get_embedding_manager", lambda: manager)
 
-        from codeassist.routes.kb_gui import router
         from fastapi import FastAPI
+
+        from codeassist.routes.kb_gui import router
 
         app = FastAPI()
         app.include_router(router)
@@ -102,8 +104,9 @@ class TestSemanticSearchRouting:
         manager.search_by_embedding = AsyncMock(return_value=[{"id": "1"}])
         monkeypatch.setattr(embeddings_mod, "get_embedding_manager", lambda: manager)
 
-        from codeassist.routes.kb_gui import router
         from fastapi import FastAPI
+
+        from codeassist.routes.kb_gui import router
 
         app = FastAPI()
         app.include_router(router)
@@ -120,8 +123,9 @@ class TestSemanticSearchRouting:
         # A client should never be consulted for a plain text search.
         monkeypatch.setattr(embeddings_mod, "get_embedding_manager", lambda: manager)
 
-        from codeassist.routes.kb_gui import router
         from fastapi import FastAPI
+
+        from codeassist.routes.kb_gui import router
 
         app = FastAPI()
         app.include_router(router)

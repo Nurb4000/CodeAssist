@@ -4,12 +4,11 @@ Create Tool Tool - Allows creating custom Python tools with KB integration.
 
 import json
 import logging
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
-from . import Tool, ToolResult
 from codeassist.knowledge import KnowledgeBase
+
+from . import Tool, ToolResult
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ class CreateTool(Tool):
         "Tools are Python modules with a TOOLS dict export. "
         "The tool is saved to runtime/custom_tools/ and becomes available after reload."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "name": {
@@ -90,7 +89,7 @@ class CreateTool(Tool):
                 manager = get_embedding_manager()
                 import asyncio
                 asyncio.create_task(manager.generate_and_store_embedding(entry_id, f"{name}: {description}"))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("Embedding generation skipped: %s", e)
 
             return ToolResult(output=f"Tool '{name}' created successfully!\n\nLocation: {tool_path}\n\nNote: Tool will be available after server restart or manual reload.")

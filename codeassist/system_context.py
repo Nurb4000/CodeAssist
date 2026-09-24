@@ -9,7 +9,7 @@ import logging
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -38,12 +38,12 @@ class DateSource(ContextSource):
         self._last_date = None
 
     async def get_context(self, workspace: Path, config: Any = None) -> str:
-        today = date.today().isoformat()
+        today = date.today().isoformat()  # noqa: DTZ011 — calendar date only, no timezone component
         self._last_date = today
         return f"Today's date: {today}"
 
     def should_refresh(self, workspace: Path, config: Any = None) -> bool:
-        today = date.today().isoformat()
+        today = date.today().isoformat()  # noqa: DTZ011 — calendar date only, no timezone component
         if self._last_date != today:
             self._last_date = today
             return True
@@ -143,7 +143,7 @@ class SystemContextManager:
                 content = await source.get_context(workspace, config)
                 if content:
                     parts.append(content)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Context source '%s' failed: %s", source.name, e)
 
         combined = "\n\n".join(parts)

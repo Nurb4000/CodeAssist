@@ -5,16 +5,15 @@ fresh Agent, but the flags are seeded from a session-keyed store, so reconnectin
 to the same session keeps the trust while other sessions stay isolated and
 nothing survives a server restart.
 """
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-import asyncio
-
 import pytest
 
-from codeassist.agent import Agent, SESSION_TRUST, SESSION_TOOL_TRUST
+from codeassist.agent import SESSION_TOOL_TRUST, SESSION_TRUST, Agent
 from codeassist.config import Config
-from codeassist.llm import Finish, LLMClient, TextDelta, ToolCall, Usage
+from codeassist.llm import Finish, TextDelta, ToolCall, Usage
 from codeassist.session import Session
 
 

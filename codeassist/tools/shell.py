@@ -1,9 +1,9 @@
 import asyncio
 import logging
-import shutil
 from pathlib import Path
+
 from . import Tool, ToolResult
-from .security import validate_directory, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_directory
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class ShellTool(Tool):
     # For an internal-only deployment this is acceptable. If exposing externally,
     # consider switching to subprocess_exec with argument lists.
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "The shell command to execute"},
@@ -42,10 +42,8 @@ class ShellTool(Tool):
         except WorkspaceViolationError as e:
             log.warning("Path validation failed for shell workdir: %s", e)
             return ToolResult(output=f"Error: {e}", error=True)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return ToolResult(output=f"Error: workdir does not exist: {cwd_str}", error=True)
-
-        shell = shutil.which("bash") or shutil.which("sh") or "sh"
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -55,13 +53,13 @@ class ShellTool(Tool):
                 cwd=cwd_path,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
             return ToolResult(output=f"Error: command timed out after {timeout}s", error=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error executing command: {e}", error=True)
 
         stdout_str = stdout.decode(errors="replace").strip()

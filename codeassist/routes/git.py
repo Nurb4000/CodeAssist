@@ -7,8 +7,9 @@ router = APIRouter(prefix="/api/git/repos", tags=["git"])
 @router.get("")
 async def list_git_repos():
     """List all tracked Git repositories."""
-    from ..server import get_config
     from codeassist.session import GitRepo
+
+    from ..server import get_config
     cfg = get_config()
     if not cfg.git.enabled:
         return {"repos": []}

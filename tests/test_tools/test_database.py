@@ -1,8 +1,6 @@
 """Tests for database tool."""
-import asyncio
+
 import pytest
-import aiosqlite
-from pathlib import Path
 
 from codeassist.tools.database import DatabaseTool
 

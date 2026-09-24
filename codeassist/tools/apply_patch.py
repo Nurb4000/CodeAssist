@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from . import Tool, ToolResult
-from .security import validate_path, WorkspaceViolationError
+from .security import WorkspaceViolationError
 
 log = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ class ApplyPatchTool(Tool):
         "Use this to apply pre-generated patches, revert changes, "
         "or apply multi-file updates atomically."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "patch_content": {
@@ -44,8 +44,8 @@ class ApplyPatchTool(Tool):
             if not patch_content or not patch_content.strip():
                 return ToolResult(output="Error: patch_content cannot be empty", error=True)
 
-            import tempfile
             import os
+            import tempfile
 
             with tempfile.NamedTemporaryFile(
                 mode='w',
@@ -74,7 +74,7 @@ class ApplyPatchTool(Tool):
                     stderr=asyncio.subprocess.PIPE,
                 )
 
-                stdout, stderr = await proc.communicate()
+                _, stderr = await proc.communicate()
                 rc = proc.returncode
 
                 if rc != 0:
@@ -135,7 +135,7 @@ class ApplyPatchTool(Tool):
                     diag = await self.lsp_client.get_diagnostics(str(full_path))
                     if diag:
                         diagnostics.append(f"  {fp}:\n{diag}")
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         
         if not diagnostics:

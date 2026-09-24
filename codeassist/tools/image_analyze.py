@@ -15,7 +15,7 @@ class ImageAnalyzeTool(Tool):
         "Provide a file path to an image and a question about it. The image is sent to "
         "the LLM for analysis. Supports PNG, JPEG, GIF, WebP formats."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "file_path": {
@@ -30,7 +30,7 @@ class ImageAnalyzeTool(Tool):
         "required": ["file_path"],
     }
 
-    ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}
+    ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}  # noqa: RUF012
     MAX_SIZE_MB = 10
 
     async def execute(self, file_path: str, question: str | None = None) -> ToolResult:
@@ -108,7 +108,7 @@ class ImageAnalyzeTool(Tool):
                            "Install with: pip install openai",
                     error=True,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return ToolResult(
                     output=f"Error calling LLM for image analysis: {e}",
                     error=True,

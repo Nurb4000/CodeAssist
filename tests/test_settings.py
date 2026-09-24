@@ -3,7 +3,13 @@ import pytest
 
 import codeassist.session as session_mod
 from codeassist.config import Config
-from codeassist.settings import SettingsStore, apply_settings_overrides, clear_override, coerce, settings_store
+from codeassist.settings import (
+    SettingsStore,
+    apply_settings_overrides,
+    clear_override,
+    coerce,
+    settings_store,
+)
 
 
 async def _init():
@@ -107,7 +113,7 @@ def test_settings_catalog_has_permissions_trust_all(live_client):
 
 
 def test_put_trust_all_always_persists(live_client):
-    import codeassist.server as server
+    from codeassist import server
     from codeassist.settings import settings_store
 
     r = live_client.put("/api/settings", json={"permissions.trust_all": "always"})
@@ -133,7 +139,7 @@ def test_put_trust_all_rejects_bad_value(live_client):
 async def test_put_trust_all_session_ephemeral(live_client):
     """'This session' trust-all applies live but is never persisted, so a boot
     reverts it to the default — the trust ends when the server does."""
-    import codeassist.server as server
+    from codeassist import server
     from codeassist.settings import apply_settings_overrides, settings_store
 
     r = live_client.put("/api/settings", json={"permissions.trust_all": "session"})
@@ -154,7 +160,7 @@ async def test_put_trust_all_session_ephemeral(live_client):
 
 
 def test_delete_resets_trust_all_session(live_client):
-    import codeassist.server as server
+    from codeassist import server
 
     live_client.put("/api/settings", json={"permissions.trust_all": "session"})
     assert server.get_config().permissions.trust_all == "session"
@@ -165,7 +171,7 @@ def test_delete_resets_trust_all_session(live_client):
 
 
 def test_put_llm_timeout_applies_live_and_rejects_low(live_client):
-    import codeassist.server as server
+    from codeassist import server
 
     # Listed as a normal int setting with a sensible default (360 = 3x the
     # historical 120, for slower hardware).
@@ -193,7 +199,7 @@ def test_put_llm_timeout_applies_live_and_rejects_low(live_client):
 
 
 def test_put_settings_applies_live_and_flags_restart(live_client):
-    import codeassist.server as server
+    from codeassist import server
 
     res = live_client.put("/api/settings", json={
         "llm.model": "edited-model",
@@ -221,7 +227,7 @@ def test_put_settings_validates_types(live_client):
 
 
 def test_put_settings_secret_placeholder_ignored(live_client):
-    import codeassist.server as server
+    from codeassist import server
 
     # A non-empty secret overwrites the file value and applies live.
     res = live_client.put("/api/settings", json={"llm.api_key": "secret-123"})
@@ -242,7 +248,7 @@ def test_delete_setting_resets(live_client, monkeypatch):
     # Reset must target the dataclass default (""), not any ambient config.toml.
     monkeypatch.setattr(s_mod.Config, "load", staticmethod(lambda: Config()))
 
-    import codeassist.server as server
+    from codeassist import server
 
     live_client.put("/api/settings", json={"llm.model": "edited-model"})
     assert server.get_config().llm.model == "edited-model"

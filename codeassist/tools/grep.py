@@ -3,8 +3,9 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+
 from . import Tool, ToolResult
-from .security import validate_directory, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_directory
 
 log = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ class GrepTool(Tool):
     description = "Search file contents using regex. Uses ripgrep if available, otherwise Python regex."
     workspace = Path(".")
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "Regex pattern to search for"},
@@ -40,7 +41,7 @@ class GrepTool(Tool):
         except WorkspaceViolationError as e:
             log.warning("Path validation failed for grep: %s", e)
             return ToolResult(output=f"Error: {e}", error=True)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return ToolResult(output=f"Error: directory not found: {search_dir_str}", error=True)
 
         if shutil.which("rg"):
@@ -59,7 +60,7 @@ class GrepTool(Tool):
             cmd.extend(["-g", f"!{exclude}"])
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
         except subprocess.TimeoutExpired:
             return ToolResult(output="Error: search timed out", error=True)
 
@@ -89,12 +90,12 @@ class GrepTool(Tool):
                 try:
                     if path_obj.match(exclude):
                         continue
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
-            try:
-                text = path_obj.read_text(errors="replace")
-            except Exception:
-                continue
+                try:
+                    text = path_obj.read_text(errors="replace")
+                except OSError:
+                    continue
 
             lines = text.splitlines()
             for i, line in enumerate(lines, 1):

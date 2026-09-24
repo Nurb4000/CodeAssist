@@ -1,15 +1,14 @@
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 
 class SkillValidationError(Exception):
     """Raised when a skill file fails validation."""
-    pass
 
 
 class Skill:
@@ -50,9 +49,8 @@ def validate_skill_frontmatter(frontmatter: dict[str, str], path: Path) -> None:
         errors.append("missing required field 'description'")
 
     slash = frontmatter.get("slash")
-    if slash is not None:
-        if not re.match(r'^[a-zA-Z0-9_-]+$', slash):
-            errors.append(f"slash command must contain only alphanumeric characters, hyphens, and underscores (got: '{slash}')")
+    if slash is not None and not re.match(r'^[a-zA-Z0-9_-]+$', slash):
+        errors.append(f"slash command must contain only alphanumeric characters, hyphens, and underscores (got: '{slash}')")
 
     if errors:
         raise SkillValidationError(
@@ -111,14 +109,14 @@ class SkillRegistry:
                     log.debug("Discovered skill: %s from %s", skill.name, skill_file)
             except SkillValidationError as e:
                 log.warning("Skipping invalid skill file %s: %s", skill_file, e)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Failed to parse skill file %s: %s", skill_file, e)
 
     def _parse_skill_file(self, path: Path) -> Skill | None:
         """Parse a skill markdown file with frontmatter and validate it."""
         try:
             content = path.read_text(encoding="utf-8")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to read skill file %s: %s", path, e)
             return None
 
@@ -167,7 +165,6 @@ class SkillRegistry:
         """Return the on-disk source path for a discovered skill, scoped to the
         workspace. Returns None if the skill is unknown or its source escapes
         the workspace (guards against path traversal via a crafted `source`)."""
-        import os
 
         skill = self._skills.get(name)
         if not skill or not skill.source:
@@ -241,7 +238,7 @@ class SkillRegistry:
         manifest = {
             "format": self.SKILLS_BUNDLE,
             "version": 1,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "data": {"skills": []},
         }
         for skill in self.discover():
@@ -318,12 +315,12 @@ class SkillRegistry:
 
         instructions = "<available_skills>\n"
         for skill in self._skills.values():
-            instructions += f"  <skill>\n"
+            instructions += "  <skill>\n"
             instructions += f"    <name>{skill.name}</name>\n"
             instructions += f"    <description>{skill.description}</description>\n"
             if skill.slash_command:
                 instructions += f"    <slash_command>/{skill.slash_command}</slash_command>\n"
-            instructions += f"  </skill>\n"
+            instructions += "  </skill>\n"
         instructions += "</available_skills>"
 
         return instructions
@@ -347,7 +344,7 @@ class SkillTool:
         "List available skills or get instructions for a specific skill. "
         "Use 'list' to see all skills, or provide a skill name to get its instructions."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {

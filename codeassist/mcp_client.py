@@ -1,13 +1,17 @@
-import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .tools import (
+        ToolResult,  # annotation-only; imported lazily at runtime to avoid a tools<->mcp cycle
+    )
 
 
 @dataclass
@@ -40,7 +44,7 @@ class MCPClient:
                 await self._connect_server(name, config)
                 initialized.append(name)
                 log.info("Connected to MCP server: %s", name)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Failed to connect to MCP server '%s': %s", name, e)
 
         self._initialized = True
@@ -70,7 +74,7 @@ class MCPClient:
                 await self._connect_server(name, servers_config[name])
                 initialized.append(name)
                 log.info("Connected to MCP server: %s", name)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Failed to connect to MCP server '%s': %s", name, e)
         self._initialized = True
         return initialized
@@ -81,7 +85,7 @@ class MCPClient:
         if client is not None:
             try:
                 await client.aclose()
-            except Exception:  # pragma: no cover - best-effort close
+            except Exception:  # pragma: no cover - best-effort close  # noqa: BLE001, S110
                 pass
         self._urls.pop(name, None)
         prefix = f"mcp_{name}_"
@@ -128,7 +132,7 @@ class MCPClient:
         )
 
         if init_response.status_code != 200:
-            raise Exception(f"Initialization failed: {init_response.text}")
+            raise RuntimeError(f"Initialization failed: {init_response.text}")
 
         # Send initialized notification
         await client.post(
@@ -172,7 +176,7 @@ class MCPClient:
                     self._tools[mcp_tool.name] = mcp_tool
                     log.debug("Discovered MCP tool: %s from %s", mcp_tool.name, server_name)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to discover tools from %s: %s", server_name, e)
 
     def get_tools(self) -> list[MCPTool]:

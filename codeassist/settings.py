@@ -13,8 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import tomllib
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -25,7 +24,7 @@ log = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 # A declarative catalog of every editable setting. `section` is the Config
@@ -191,12 +190,11 @@ class SettingsStore:
 
     async def load(self) -> None:
         try:
-            async with get_db() as db:
-                async with db.execute("SELECT key, value FROM settings") as cursor:
-                    rows = await cursor.fetchall()
+            async with get_db() as db, db.execute("SELECT key, value FROM settings") as cursor:
+                rows = await cursor.fetchall()
             self._cache = {row["key"]: row["value"] for row in rows}
             self._loaded = True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to load settings overrides: %s", e)
 
     def is_loaded(self) -> bool:
@@ -218,7 +216,7 @@ class SettingsStore:
                     [key, encoded, _now_iso()],
                 )
                 await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to persist setting %s: %s", key, e)
 
     async def clear(self, key: str) -> None:
@@ -227,7 +225,7 @@ class SettingsStore:
             async with get_db() as db:
                 await db.execute("DELETE FROM settings WHERE key = ?", [key])
                 await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("Failed to clear setting %s: %s", key, e)
 
 
@@ -238,7 +236,7 @@ async def apply_settings_overrides(cfg: Any) -> None:
     """Apply persisted UI overrides onto the live Config object (at boot)."""
     try:
         await settings_store.load()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.debug("Settings override load skipped: %s", e)
         return
     for spec in SETTINGS_CATALOG:
@@ -387,13 +385,13 @@ def write_override(cfg: Config, key: str, value: Any) -> None:
         try:
             with open(opath, "rb") as f:
                 data = tomllib.load(f)
-        except Exception:  # pragma: no cover - corrupt file, start fresh
+        except Exception:  # pragma: no cover - corrupt file, start fresh  # noqa: BLE001
             data = {}
     _nested_set(data, path, value)
     try:
         opath.parent.mkdir(parents=True, exist_ok=True)
         opath.write_text(_toml_dump(data), encoding="utf-8")
-    except Exception as e:  # pragma: no cover - read-only mount, etc.
+    except Exception as e:  # pragma: no cover - read-only mount, etc.  # noqa: BLE001
         log.warning("Could not write overrides file %s: %s", opath, e)
 
 
@@ -408,10 +406,10 @@ def remove_override(cfg: Config, key: str) -> None:
     try:
         with open(opath, "rb") as f:
             data = tomllib.load(f)
-    except Exception:  # pragma: no cover
+    except Exception:  # pragma: no cover  # noqa: BLE001
         return
     _nested_delete(data, _toml_path_for(spec))
     try:
         opath.write_text(_toml_dump(data), encoding="utf-8")
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # pragma: no cover  # noqa: BLE001
         log.warning("Could not rewrite overrides file %s: %s", opath, e)

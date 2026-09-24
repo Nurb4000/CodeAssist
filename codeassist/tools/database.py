@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -17,7 +16,7 @@ class DatabaseTool(Tool):
         "Use this to query, insert, update, or delete data from SQLite databases. "
         "Supports both read and write operations."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -155,6 +154,6 @@ class DatabaseTool(Tool):
             table_list = [row[0] for row in tables]
             
             return ToolResult(
-                output=f"**Tables in database:**\n" + 
+                output="**Tables in database:**\n" + 
                        "\n".join(f"- {t}" for t in table_list)
             )

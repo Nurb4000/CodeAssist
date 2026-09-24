@@ -1,7 +1,7 @@
 """Tests for apply_patch tool."""
 import asyncio
+
 import pytest
-from pathlib import Path
 
 from codeassist.tools.apply_patch import ApplyPatchTool
 
@@ -29,13 +29,13 @@ class TestApplyPatchTool:
         import subprocess
         
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "test.txt").write_text("Original content")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         # Create a patch
         (tmp_path / "test.txt").write_text("Modified content")
@@ -64,13 +64,13 @@ class TestApplyPatchTool:
         import subprocess
         
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         (tmp_path / "test.txt").write_text("Original content")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=str(tmp_path), capture_output=True, check=False)  # noqa: ASYNC221
         
         # Modify file and create patch
         (tmp_path / "test.txt").write_text("Modified content")

@@ -1,6 +1,5 @@
 import json
 import logging
-from typing import Any
 
 from .session import Agent as AgentRecord
 
@@ -160,7 +159,7 @@ class AgentManager:
                     permissions=json.loads(db_agent.get("permissions", "{}")) if db_agent.get("permissions") else {},
                 )
                 self._agents[db_agent["name"]] = config
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to load agents from database: %s", e)
 
         # Add default agent if not exists
@@ -351,7 +350,7 @@ class AgentManager:
 
     def get_default_agent(self) -> AgentConfig:
         """Get the default agent."""
-        return self._agents.get(self._default_agent_name, list(self._agents.values())[0])
+        return self._agents.get(self._default_agent_name, next(iter(self._agents.values())))
 
     async def create_agent(self, name: str, **kwargs) -> AgentConfig:
         """Create a new agent."""
@@ -368,7 +367,7 @@ class AgentManager:
                 max_iterations=kwargs.get("max_iterations"),
                 permissions=kwargs.get("permissions", {}),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to save agent to database: %s", e)
 
         return config
@@ -385,7 +384,7 @@ class AgentManager:
             agent_record = await AgentRecord.get_by_name(name)
             if agent_record:
                 await agent_record.delete()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to delete agent from database: %s", e)
 
     async def update_agent(self, name: str, **kwargs):
@@ -403,7 +402,7 @@ class AgentManager:
             record = await AgentRecord.get_by_name(name)
             if record:
                 await record.update(**updates)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to persist agent changes for '%s': %s", name, e)
         return config
 

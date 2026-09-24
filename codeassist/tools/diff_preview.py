@@ -16,7 +16,7 @@ class DiffPreviewTool(Tool):
         "Compare two files, compare a file against new content, or preview "
         "a string replacement. Useful for verifying edits before committing."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "file_path": {

@@ -2,12 +2,12 @@
 Create Skill Tool - Allows creating new skills with KB integration.
 """
 
-import json
 import logging
 from pathlib import Path
 
-from . import Tool, ToolResult
 from codeassist.knowledge import KnowledgeBase
+
+from . import Tool, ToolResult
 
 log = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class CreateSkill(Tool):
         "Skills are markdown files that define reusable workflows. "
         "The skill is saved to runtime/skills/ and becomes available immediately."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "name": {
@@ -84,7 +84,7 @@ class CreateSkill(Tool):
                 manager = get_embedding_manager()
                 import asyncio
                 asyncio.create_task(manager.generate_and_store_embedding(entry_id, f"{name}: {description} {content[:500]}"))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("Embedding generation skipped: %s", e)
 
             return ToolResult(output=f"Skill '{name}' created successfully!\n\nLocation: {skill_path}\n\nUse '/{slash_command}' or mention '{name}' to invoke.")

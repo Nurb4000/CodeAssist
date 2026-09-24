@@ -8,7 +8,7 @@ import tiktoken
 
 from .config import LLMConfig
 from .llm import LLMClient
-from .prompts import SUMMARY_TEMPLATE, COMPACTION_USER_PROMPT
+from .prompts import COMPACTION_USER_PROMPT, SUMMARY_TEMPLATE
 
 log = logging.getLogger(__name__)
 
@@ -157,7 +157,6 @@ def compact_messages(
             if role == "tool":
                 # Summarize tool output to 1 line
                 content = msg.get("content", "") or ""
-                tool_call_id = msg.get("tool_call_id", "")
                 if len(content) > 200:
                     summary = content[:200].rsplit("\n", 1)[0] + "..."
                 else:
@@ -372,7 +371,8 @@ async def llm_compact_messages(
     try:
         summary_text = ""
         async for event in compaction_client.stream(compaction_msgs):
-            from .llm import TextDelta as TD, Finish as F
+            from .llm import Finish as F
+            from .llm import TextDelta as TD
             if isinstance(event, TD):
                 summary_text += event.content
             elif isinstance(event, F):
@@ -396,7 +396,7 @@ async def llm_compact_messages(
                  len(head_messages), len(summary_text), len(compacted))
         return compacted, summary_text
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.error("LLM compaction failed: %s. Falling back to text compaction.", e)
         return messages, previous_summary
 

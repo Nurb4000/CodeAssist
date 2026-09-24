@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
+
 from . import Tool, ToolResult
-from .security import validate_directory, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_directory
 
 try:
     from wcmatch import glob as wcglob
@@ -17,7 +18,7 @@ class GlobTool(Tool):
     description = "Find files matching a glob pattern. Returns matching file paths."
     workspace = Path(".")
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "Glob pattern (e.g. '*.py', 'src/**/*.ts')"},
@@ -33,7 +34,7 @@ class GlobTool(Tool):
         except WorkspaceViolationError as e:
             log.warning("Path validation failed for glob: %s", e)
             return ToolResult(output=f"Error: {e}", error=True)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return ToolResult(output=f"Error: directory not found: {search_dir_str}", error=True)
 
         try:
@@ -43,7 +44,7 @@ class GlobTool(Tool):
                 )
             else:
                 matches = sorted(str(p) for p in search_dir.rglob(pattern))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error with glob pattern: {e}", error=True)
 
         if not matches:

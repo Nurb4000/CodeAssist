@@ -1,7 +1,5 @@
 """Tests for directory tool."""
-import asyncio
 import pytest
-from pathlib import Path
 
 from codeassist.tools.directory import DirectoryTool
 

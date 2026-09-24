@@ -7,10 +7,9 @@ Tools are loaded from the tools/ directory and can be reloaded on demand.
 import importlib
 import inspect
 import logging
-import pkgutil
 import sys
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .tools import Tool, ToolRegistry
 from .trust_registry import TrustRegistry, TrustStatus
@@ -21,7 +20,7 @@ log = logging.getLogger(__name__)
 class DynamicToolLoader:
     """Loads and manages tools dynamically from the tools directory."""
 
-    def __init__(self, workspace: Path, trust_registry: Optional[TrustRegistry] = None):
+    def __init__(self, workspace: Path, trust_registry: TrustRegistry | None = None):
         self.workspace = workspace
         self.tools_dir = workspace / "tools"
         self.trust_registry = trust_registry
@@ -84,7 +83,7 @@ class DynamicToolLoader:
                                 discovered.append(obj)
                                 log.info("Discovered tool class: %s.%s", module_name, name)
                 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     log.error("Failed to load tool from %s: %s", item, e)
 
         return discovered
@@ -96,7 +95,7 @@ class DynamicToolLoader:
             if hasattr(tool, 'workspace'):
                 tool.workspace = workspace
             return tool
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to create tool instance %s: %s", tool_class.__name__, e)
             return None
 
@@ -131,7 +130,7 @@ class DynamicToolLoader:
         ]
 
 
-def create_dynamic_registry(workspace: Path, trust_registry: Optional[TrustRegistry] = None) -> tuple[ToolRegistry, DynamicToolLoader]:
+def create_dynamic_registry(workspace: Path, trust_registry: TrustRegistry | None = None) -> tuple[ToolRegistry, DynamicToolLoader]:
     """Create a tool registry with dynamic loading capability."""
     loader = DynamicToolLoader(workspace, trust_registry=trust_registry)
     registry = ToolRegistry(workspace)

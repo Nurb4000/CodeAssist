@@ -1,8 +1,6 @@
 """Tests for fossil RCS tool."""
-import asyncio
+
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 from codeassist.tools.fossil import FossilTool
 

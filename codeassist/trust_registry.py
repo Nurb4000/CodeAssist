@@ -7,10 +7,10 @@ loaded code (plugins, custom tools, dynamic tools).
 import hashlib
 import json
 import logging
-from pathlib import Path
-from typing import Callable, Optional
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class TrustRegistry:
     user approval for new or modified files.
     """
     
-    def __init__(self, registry_path: Optional[Path] = None):
+    def __init__(self, registry_path: Path | None = None):
         """Initialize trust registry.
         
         Args:
@@ -60,7 +60,7 @@ class TrustRegistry:
         self.registry_path = registry_path
         self._registry: dict[str, dict] = {}  # file_path -> {"hash": ..., "approved": bool}
         self._pending_requests: dict[str, TrustRequest] = {}  # file_path -> TrustRequest
-        self._approval_callback: Optional[Callable[[TrustRequest, bool], None]] = None
+        self._approval_callback: Callable[[TrustRequest, bool], None] | None = None
         
         self._load_registry()
     
@@ -79,7 +79,7 @@ class TrustRegistry:
                 with open(self.registry_path, "r", encoding="utf-8") as f:
                     self._registry = json.load(f)
                 log.debug("Loaded trust registry from %s", self.registry_path)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Failed to load trust registry: %s", e)
                 self._registry = {}
     
@@ -90,7 +90,7 @@ class TrustRegistry:
             with open(self.registry_path, "w", encoding="utf-8") as f:
                 json.dump(self._registry, f, indent=2)
             log.debug("Saved trust registry to %s", self.registry_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to save trust registry: %s", e)
     
     @staticmethod

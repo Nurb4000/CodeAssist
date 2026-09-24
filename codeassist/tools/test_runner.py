@@ -133,7 +133,7 @@ class TestRunnerTool(Tool):
         "Supports pytest, jest, vitest, go test, cargo test, maven, and gradle. "
         "Returns structured results with pass/fail counts and failure details."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "test_path": {
@@ -204,7 +204,7 @@ class TestRunnerTool(Tool):
                 error=not results.get("success", False),
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResult(output="Error: tests timed out after 300 seconds", error=True)
         except Exception as e:
             log.exception("test_runner failed")

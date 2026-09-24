@@ -1,12 +1,10 @@
 import ast
-import inspect
 import logging
 import re
 from pathlib import Path
-from typing import Any
 
 from . import Tool, ToolResult
-from .security import validate_path, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_path
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +16,7 @@ class DocumentationTool(Tool):
         "and other languages. Extracts functions, classes, methods, and their signatures, "
         "parameters, and docstrings. Outputs in Markdown, JSDoc, or reStructuredText format."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -130,7 +128,7 @@ class DocumentationTool(Tool):
         if ext == ".py":
             docs = self._extract_python(path, include_private, include_dunders)
         else:
-            return ToolResult(output=f"Error: update only supported for Python files", error=True)
+            return ToolResult(output="Error: update only supported for Python files", error=True)
 
         if not docs:
             return ToolResult(output=f"No documentable items found in {path.name}")
@@ -145,7 +143,7 @@ class DocumentationTool(Tool):
         try:
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to parse Python file: %s", e)
             return []
 
@@ -326,7 +324,7 @@ class DocumentationTool(Tool):
 
     def _format_markdown(self, docs: list[dict]) -> str:
         """Format as Markdown."""
-        lines = [f"# Documentation\n"]
+        lines = ["# Documentation\n"]
 
         for doc in docs:
             if doc["type"] == "class":
@@ -339,7 +337,7 @@ class DocumentationTool(Tool):
                     for method in doc["methods"]:
                         lines.append(f"#### `{method['name']}`")
                         if method.get("params"):
-                            lines.append(f"\n**Parameters:**\n")
+                            lines.append("\n**Parameters:**\n")
                             for param in method["params"]:
                                 type_str = f" (`{param['type']}`)" if param.get("type") else ""
                                 lines.append(f"- `{param['name']}`{type_str}")
@@ -351,7 +349,7 @@ class DocumentationTool(Tool):
             elif doc["type"] == "function":
                 lines.append(f"## Function: {doc['name']}\n")
                 if doc.get("params"):
-                    lines.append(f"**Parameters:**\n")
+                    lines.append("**Parameters:**\n")
                     for param in doc["params"]:
                         type_str = f" (`{param['type']}`)" if param.get("type") else ""
                         lines.append(f"- `{param['name']}`{type_str}")
@@ -368,14 +366,14 @@ class DocumentationTool(Tool):
 
         for doc in docs:
             if doc["type"] == "class":
-                lines.append(f"/**")
+                lines.append("/**")
                 if doc["docstring"]:
                     lines.append(f" * {doc['docstring']}")
                 lines.append(" */")
                 lines.append(f"class {doc['name']} {{}}\n")
             
             elif doc["type"] == "function":
-                lines.append(f"/**")
+                lines.append("/**")
                 if doc.get("docstring"):
                     lines.append(f" * {doc['docstring']}")
                 if doc.get("params"):

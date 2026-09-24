@@ -1,6 +1,7 @@
 """Tool management API routes."""
 import re
 from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -14,7 +15,7 @@ async def reload_tools_endpoint():
     try:
         await reload_all_tools()
         return {"ok": True, "message": "Tools reloaded successfully"}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to reload tools: {e}")
 
 
@@ -43,10 +44,11 @@ async def export_base_tools():
 @router.get("/manage/list")
 async def list_all_tools():
     """List all tools (built-in + custom) with usage stats and trust status."""
-    from ..server import get_config, get_trust_registry
-    from ..tools import get_tools
     from codeassist.custom_tools_loader import get_custom_tool_registry
     from codeassist.knowledge import KnowledgeBase
+
+    from ..server import get_config, get_trust_registry
+    from ..tools import get_tools
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -109,9 +111,10 @@ async def get_tool_usage_stats(period_days: int = 30):
 @router.get("/manage/{tool_name}")
 async def get_tool_details(tool_name: str):
     """Get detailed information about a specific tool including its schema and source code."""
+    from codeassist.custom_tools_loader import get_custom_tool_registry
+
     from ..server import get_config, get_trust_registry
     from ..tools import get_tools
-    from codeassist.custom_tools_loader import get_custom_tool_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -125,7 +128,7 @@ async def get_tool_details(tool_name: str):
             "name": tool_name,
             "type": "builtin",
             "description": getattr(tool, 'description', ''),
-            "schema": getattr(tool, 'schema', lambda: {})(),
+            "schema": getattr(tool, 'schema', dict)(),
             "trusted": True,
         }
 
@@ -155,8 +158,9 @@ async def get_tool_details(tool_name: str):
 @router.put("/manage/{tool_name}/trust")
 async def set_tool_trust(tool_name: str, body: dict):
     """Set the trust level for a custom tool. Body must contain 'trusted' (boolean)."""
-    from ..server import get_config, get_trust_registry
     from codeassist.custom_tools_loader import get_custom_tool_registry
+
+    from ..server import get_config, get_trust_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -178,8 +182,9 @@ async def set_tool_trust(tool_name: str, body: dict):
 @router.delete("/manage/{tool_name}")
 async def delete_custom_tool(tool_name: str):
     """Delete a custom tool file and remove it from the registry."""
-    from ..server import get_config, get_trust_registry
     from codeassist.custom_tools_loader import get_custom_tool_registry
+
+    from ..server import get_config, get_trust_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)
@@ -204,8 +209,9 @@ async def delete_custom_tool(tool_name: str):
 @router.post("/manage/scan")
 async def scan_custom_tools():
     """Scan all custom tools for potentially dangerous patterns (network, file system, subprocess)."""
-    from ..server import get_config, get_trust_registry
     from codeassist.custom_tools_loader import get_custom_tool_registry
+
+    from ..server import get_config, get_trust_registry
 
     config = get_config()
     workspace = Path(config.server.workspace)

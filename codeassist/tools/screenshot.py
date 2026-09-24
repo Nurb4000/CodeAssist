@@ -17,7 +17,7 @@ import logging
 import shutil
 import socket
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import Tool, ToolResult
@@ -52,7 +52,7 @@ class ScreenshotTool(Tool):
         "returns its path; optionally send the image through image_analyze with "
         "question."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "url": {
@@ -185,9 +185,9 @@ class ScreenshotTool(Tool):
         if output_path:
             try:
                 return validate_path(output_path, base)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return ToolResult(output=f"Error: {e}", error=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         return base / f"screenshot_{stamp}.png"
 
     @staticmethod
@@ -265,7 +265,7 @@ class ScreenshotTool(Tool):
             proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
         except ProcessLookupError:
@@ -339,9 +339,9 @@ class ScreenshotTool(Tool):
                 question=question or "Describe this screenshot and note any UI issues.",
             )
             return f"\n\n{res.output}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug("screenshot analyze failed: %s", e)
-            return "\n\n(image_analyze skipped: {})".format(e)
+            return f"\n\n(image_analyze skipped: {e})"
 
 
 class _CdpConnection:
@@ -383,7 +383,7 @@ class _CdpConnection:
                         if m == method and not fut.done():
                             fut.set_result(msg)
                             self._event_futures.pop(i)
-        except Exception:  # noqa: BLE001 - connection closed; drain ends
+        except Exception:  # noqa: BLE001, S110
             pass
 
     async def call(self, method, params=None, session_id=None):
@@ -407,7 +407,7 @@ class _CdpConnection:
         await self.call("Page.navigate", {"url": url}, session_id)
         try:
             await asyncio.wait_for(self.wait_for_event("Page.loadEventFired"), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Still usable; a slow page may have partially rendered.
             pass
 
@@ -420,16 +420,16 @@ class _CdpConnection:
             await self.ws.send(
                 json.dumps({"method": "Target.detachFromTarget", "sessionId": 0})
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         # Close the transport first so the drain task's async-for ends cleanly
         # (rather than needing to be cancelled mid-await).
         try:
             await self.ws.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         if self._drain_task is not None:
             try:
                 await asyncio.wait_for(self._drain_task, timeout=2.0)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass

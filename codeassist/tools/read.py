@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
+
 from . import Tool, ToolResult
-from .security import validate_path, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_path
 
 log = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ class ReadTool(Tool):
     description = "Read a file's contents. Returns numbered lines. Use offset/limit for large files."
     workspace = Path(".")
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "file_path": {"type": "string", "description": "Absolute path to the file"},
@@ -35,7 +36,7 @@ class ReadTool(Tool):
 
         try:
             content = path.read_text(errors="replace")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error reading {file_path}: {e}", error=True)
 
         lines = content.splitlines()

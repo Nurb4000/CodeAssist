@@ -6,21 +6,26 @@ import logging
 import logging.config
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import parse_qs
+from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import Config
-from .session import init_db
-from .mcp_client import MCPClient
-from .skills import SkillRegistry
-from .plugins import PluginRegistry
-from .trust_registry import TrustRegistry
-from .instruction_discovery import get_instruction_discoverer
-from .tools import ToolRegistry, create_registry
 from .agents import agent_manager
+from .config import Config
+from .instruction_discovery import get_instruction_discoverer
+from .mcp_client import MCPClient
+from .plugins import PluginRegistry
+from .session import init_db
+from .skills import SkillRegistry
+from .tools import ToolRegistry, create_registry
+from .trust_registry import TrustRegistry
+
+if TYPE_CHECKING:
+    from .lsp_client import (
+        LSPClient,  # annotation-only; imported lazily at runtime to avoid a boot-time cycle
+    )
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +93,7 @@ def get_trust_registry() -> TrustRegistry | None:
 
 async def broadcast_message(message: dict):
     """Broadcast a message to all connected WebSocket clients."""
+    global _active_websockets
     if not _active_websockets:
         return
     
@@ -95,7 +101,7 @@ async def broadcast_message(message: dict):
     for ws in _active_websockets:
         try:
             await ws.send_json(message)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to broadcast to websocket: %s", e)
             disconnected.add(ws)
     
@@ -143,7 +149,7 @@ async def _merged_lsp_specs(cfg: Config) -> dict:
 
     try:
         db_rows = await LSPServer.list_all()
-    except Exception as e:  # pragma: no cover - DB unavailable at boot
+    except Exception as e:  # pragma: no cover - DB unavailable at boot  # noqa: BLE001
         log.warning("Could not read LSP servers from DB: %s", e)
         db_rows = []
 
@@ -154,7 +160,7 @@ async def _merged_lsp_specs(cfg: Config) -> dict:
         try:
             args = json.loads(row["args"])
             languages = json.loads(row["languages"])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Skipping LSP server '%s': invalid args/languages JSON (%s)", name, e)
             continue
         specs[name] = {"command": row["command"], "args": args, "languages": languages}
@@ -178,7 +184,7 @@ async def _start_lsp_servers(cfg: Config, lsp_client) -> None:
                 languages=spec["languages"],
                 workspace=cfg.workspace,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to start LSP server '%s': %s", name, e)
 
 
@@ -268,7 +274,7 @@ async def _merged_mcp_servers(cfg: Config) -> dict:
 
     try:
         db_rows = await MCPServer.list_all()
-    except Exception as e:  # pragma: no cover - DB unavailable at boot
+    except Exception as e:  # pragma: no cover - DB unavailable at boot  # noqa: BLE001
         log.warning("Could not read MCP servers from DB: %s", e)
         db_rows = []
 
@@ -278,7 +284,7 @@ async def _merged_mcp_servers(cfg: Config) -> dict:
             continue
         try:
             merged[name] = json.loads(row["config"])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Skipping MCP server '%s': invalid config JSON (%s)", name, e)
     return merged
 
@@ -300,7 +306,6 @@ async def init_plugins():
 
 async def reload_all_tools():
     """Reload all tools from the tools directory."""
-    global tools
     cfg = get_config()
     from codeassist.dynamic_tools import DynamicToolLoader
 
@@ -321,7 +326,6 @@ async def reload_configured_subsystems() -> None:
     changes (host/port/password) still require a container/process restart, so
     the caller reports those separately.
     """
-    global mcp_client, skill_registry, plugin_registry, tools, trust_registry, lsp_client
     cfg = get_config()
     from .settings import apply_settings_overrides
 
@@ -392,7 +396,7 @@ async def static_cache_headers(request, call_next):
     return await call_next(request)
 
 # Register REST API routes (sessions, config, knowledge base, tools, agents, etc.)
-from .routes import register_routes  # noqa: E402
+from .routes import register_routes
 
 register_routes(app)
 
@@ -417,10 +421,10 @@ async def auth_middleware(request, call_next):
     if auth_header.startswith("Basic "):
         try:
             decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-            username, _, pw = decoded.partition(":")
+            _, _, pw = decoded.partition(":")
             if hmac.compare_digest(pw, password):
                 return await call_next(request)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     return JSONResponse(
@@ -516,7 +520,7 @@ def _parse_image_attachments(images: list) -> tuple[list[dict], str | None]:
             if mime not in ALLOWED_IMAGE_MIME:
                 return [], f"Unsupported image type '{mime}'. Supported: {', '.join(ALLOWED_IMAGE_MIME)}"
             raw = base64.b64decode(b64, validate=True)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return [], "Invalid image data URL."
         if not raw:
             return [], "Invalid image data URL."
@@ -534,11 +538,12 @@ def _parse_image_attachments(images: list) -> tuple[list[dict], str | None]:
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    from codeassist.session import Session, Agent as AgentRecord
+    import asyncio
+
     from codeassist.agent import Agent
     from codeassist.agents import agent_manager
+    from codeassist.session import Session
     from codeassist.session_hook import get_session_hook
-    import asyncio
     cfg = get_config()
 
     await websocket.accept()
@@ -651,7 +656,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             log.exception("Agent error")
             try:
                 await websocket.send_json({"type": "error", "message": str(e)})
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         finally:
             agent_task = None
@@ -821,7 +826,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         try:
             hook = get_session_hook()
             await hook.on_session_end(session, agent)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("Failed to generate session summary: %s", e)
     except Exception:
         log.exception("WebSocket error")
@@ -830,7 +835,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             agent.cancel()
         try:
             await websocket.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
 

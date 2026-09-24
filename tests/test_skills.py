@@ -1,6 +1,6 @@
 """Tests for skills system."""
+
 import pytest
-from pathlib import Path
 
 from codeassist.skills import SkillRegistry, SkillTool
 
@@ -220,7 +220,7 @@ class TestSkillValidation:
 
     def test_missing_name(self, tmp_path):
         """Test that missing name is caught."""
-        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        from codeassist.skills import SkillValidationError, validate_skill_frontmatter
         
         frontmatter = {
             "description": "A valid skill",
@@ -231,7 +231,7 @@ class TestSkillValidation:
 
     def test_invalid_name_chars(self, tmp_path):
         """Test that invalid characters in name are caught."""
-        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        from codeassist.skills import SkillValidationError, validate_skill_frontmatter
         
         frontmatter = {
             "name": "my skill!",
@@ -243,7 +243,7 @@ class TestSkillValidation:
 
     def test_missing_description(self, tmp_path):
         """Test that missing description is caught."""
-        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        from codeassist.skills import SkillValidationError, validate_skill_frontmatter
         
         frontmatter = {
             "name": "my-skill",
@@ -254,7 +254,7 @@ class TestSkillValidation:
 
     def test_invalid_slash_command(self, tmp_path):
         """Test that invalid slash command characters are caught."""
-        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        from codeassist.skills import SkillValidationError, validate_skill_frontmatter
         
         frontmatter = {
             "name": "my-skill",
@@ -267,7 +267,7 @@ class TestSkillValidation:
 
     def test_empty_name(self, tmp_path):
         """Test that empty name is caught."""
-        from codeassist.skills import validate_skill_frontmatter, SkillValidationError
+        from codeassist.skills import SkillValidationError, validate_skill_frontmatter
         
         frontmatter = {
             "name": "",
@@ -326,7 +326,6 @@ Content here.
 
     def test_discover_skips_duplicate_slash_commands(self, tmp_path, caplog):
         """Test that duplicate slash commands log a warning."""
-        import logging
         from codeassist.skills import SkillRegistry
         
         config = type('Config', (), {

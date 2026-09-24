@@ -1,7 +1,6 @@
 """Package Manager Tool - Detect and run package managers."""
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 
@@ -55,7 +54,7 @@ def parse_package_list(manager: str, output: str) -> list[dict]:
     packages = []
     for line in output.splitlines():
         line = line.strip()
-        if not line or line.startswith("-") or line.startswith("=") or line.startswith("#"):
+        if not line or line.startswith(("-", "=", "#")):
             continue
         parts = line.split()
         if len(parts) >= 2:
@@ -69,7 +68,7 @@ class PackageManagerTool(Tool):
         "Manage project dependencies. Auto-detects package managers (pip, poetry, npm, "
         "yarn, pnpm, go, cargo, bundler, composer) and can install, add, remove, or list packages."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -161,7 +160,7 @@ class PackageManagerTool(Tool):
                     error=True,
                 )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ToolResult(output="Error: command timed out after 120 seconds", error=True)
         except Exception as e:
             log.exception("package_manager failed")

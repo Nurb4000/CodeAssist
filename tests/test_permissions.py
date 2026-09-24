@@ -1,10 +1,11 @@
 """Tests for pattern-based permission system."""
 import pytest
+
 from codeassist.permissions import (
+    PermissionManager,
     PermissionRule,
     PermissionRuleset,
     SavedPermissions,
-    PermissionManager,
 )
 
 

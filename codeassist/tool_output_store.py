@@ -7,7 +7,7 @@ file and returns a truncated preview with a path hint for the agent.
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class ToolOutputStore:
 
     def _get_filename(self, tool_name: str, session_id: str) -> str:
         """Generate a unique filename for a tool output."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         safe_tool = tool_name.replace("/", "_").replace("\\", "_")
         return f"{safe_tool}_{session_id[:8]}_{ts}.txt"
 
@@ -63,7 +63,7 @@ class ToolOutputStore:
                 tool_name, line_count, byte_count, filepath,
             )
             return str(filepath)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to save tool output: %s", e)
             return None
 
@@ -79,8 +79,8 @@ class ToolOutputStore:
         tail = "\n".join(lines[-tail_count:]) if len(lines) > head_count + tail_count else ""
 
         preview_lines = [
-            f"[Tool output too large ({len(lines)} lines, {len(output.encode('utf-8', errors='replace'))} bytes). "
-            f"Showing first and last {head_count} lines.]",
+            (f"[Tool output too large ({len(lines)} lines, {len(output.encode('utf-8', errors='replace'))} bytes). "
+            f"Showing first and last {head_count} lines.]"),
             "",
             head,
         ]
@@ -96,8 +96,8 @@ class ToolOutputStore:
 
         preview_lines.extend([
             "",
-            f"Full output saved to: `{safe_path}`. Use Read with offset/limit to examine specific sections, "
-            f"or Grep to search for patterns.",
+            (f"Full output saved to: `{safe_path}`. Use Read with offset/limit to examine specific sections, "
+            f"or Grep to search for patterns."),
         ])
 
         return "\n".join(preview_lines)
@@ -115,14 +115,14 @@ class ToolOutputStore:
                 if filepath.is_file() and filepath.stat().st_mtime < cutoff:
                     filepath.unlink()
                     removed += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Cleanup failed: %s", e)
 
         if removed:
             log.info("Cleaned up %d old tool output files", removed)
         return removed
 
-    async def list_outputs(self, session_id: str = None) -> list[dict]:
+    async def list_outputs(self, session_id: str | None = None) -> list[dict]:
         """List saved tool outputs, optionally filtered by session."""
         results = []
         if not self.output_dir.exists():
@@ -150,7 +150,7 @@ class ToolOutputStore:
             results.append({
                 "path": str(filepath),
                 "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                 "session_prefix": file_session,
             })
 

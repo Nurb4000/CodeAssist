@@ -1,5 +1,4 @@
 """Tests for session management."""
-import asyncio
 import pytest
 
 from codeassist.session import Session, init_db
@@ -34,8 +33,8 @@ class TestSession:
         await init_db()
         
         # Create multiple sessions
-        session1 = await Session.create(name="Session 1")
-        session2 = await Session.create(name="Session 2")
+        await Session.create(name="Session 1")
+        await Session.create(name="Session 2")
         
         sessions = await Session.list_all()
         assert len(sessions) == 2
@@ -98,7 +97,7 @@ class TestSession:
             }
         ]
         
-        msg_id = await session.add_message(
+        await session.add_message(
             "assistant",
             content="Let me read that file.",
             tool_calls=tool_calls
@@ -114,7 +113,7 @@ class TestSession:
         await init_db()
         session = await Session.create()
         
-        msg_id = await session.add_message(
+        await session.add_message(
             "tool",
             content="File contents here...",
             tool_call_id="call_123"
@@ -187,14 +186,14 @@ class TestSession:
         
         # Get initial updated_at
         sessions = await Session.list_all()
-        initial_updated = [s for s in sessions if s["id"] == session.id][0]["updated_at"]
+        initial_updated = next(s for s in sessions if s["id"] == session.id)["updated_at"]
         
         # Add a message
         await session.add_message("user", "New message")
         
         # Check updated_at changed
         sessions = await Session.list_all()
-        new_updated = [s for s in sessions if s["id"] == session.id][0]["updated_at"]
+        new_updated = next(s for s in sessions if s["id"] == session.id)["updated_at"]
         
         assert new_updated != initial_updated
 
@@ -268,6 +267,7 @@ class TestSession:
         assert len(sessions) == 0
 
         import sqlite3
+
         from codeassist.session import DB_PATH
         conn = sqlite3.connect(DB_PATH)
         try:
@@ -324,7 +324,6 @@ class TestAutoTitle:
 
     @pytest.mark.asyncio
     async def test_second_user_message_does_not_retitle(self):
-        from codeassist.session import is_default_title
         await init_db()
         s = await Session.create()
         await s.add_message("user", "Refactor auth module")

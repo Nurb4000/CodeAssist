@@ -1,5 +1,4 @@
 """Tests for process tool."""
-import asyncio
 import pytest
 
 from codeassist.tools.process import ProcessTool

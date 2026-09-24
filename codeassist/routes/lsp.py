@@ -26,7 +26,7 @@ async def create_lsp_server(body: dict):
         args=body.get("args", []),
         languages=body.get("languages", []),
     )
-    from ..server import spawn_reload, reload_lsp_servers
+    from ..server import reload_lsp_servers, spawn_reload
 
     # Reconcile live connections off the request path (batch edits stay snappy).
     spawn_reload(reload_lsp_servers())
@@ -49,7 +49,7 @@ async def update_lsp_server(server_id: str, body: dict):
     enabled = body.get("enabled")
     if enabled is not None:
         await server.set_enabled(bool(enabled))
-    from ..server import spawn_reload, reload_lsp_servers
+    from ..server import reload_lsp_servers, spawn_reload
 
     spawn_reload(reload_lsp_servers())
     return {"ok": True}
@@ -59,7 +59,8 @@ async def update_lsp_server(server_id: str, body: dict):
 async def delete_lsp_server(server_id: str):
     """Delete an LSP server by ID."""
     from codeassist.session import LSPServer
-    from ..server import spawn_reload, reload_lsp_servers
+
+    from ..server import reload_lsp_servers, spawn_reload
 
     server = LSPServer(server_id)
     await server.delete()
@@ -74,7 +75,7 @@ async def reload_lsp_connections():
 
     try:
         await reload_lsp_servers()
-    except Exception as e:  # pragma: no cover - defensive; reload logs internally
+    except Exception as e:  # pragma: no cover - defensive; reload logs internally  # noqa: BLE001
         log.error("Failed to reload LSP servers: %s", e)
         raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
     return {"ok": True}

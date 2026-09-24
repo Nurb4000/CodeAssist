@@ -1,9 +1,11 @@
+import asyncio
 import importlib
 import importlib.util
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .trust_registry import TrustRegistry, TrustStatus
 
@@ -33,7 +35,7 @@ class Plugin:
 class PluginRegistry:
     """Discovers and manages plugins from the workspace."""
 
-    def __init__(self, workspace: Path, config=None, trust_registry: Optional[TrustRegistry] = None):
+    def __init__(self, workspace: Path, config=None, trust_registry: TrustRegistry | None = None):
         self.workspace = workspace
         self.config = config
         self.trust_registry = trust_registry
@@ -114,7 +116,7 @@ class PluginRegistry:
                 else:
                     log.warning("Plugin '%s' missing required 'register' function", plugin_name)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Failed to load plugin from %s: %s", plugin_path, e)
 
     def get_plugin(self, name: str) -> Plugin | None:
@@ -186,7 +188,7 @@ class PluginRegistry:
                     result = hook_fn(*args, **kwargs)
                 if result is not None:
                     results.append(result)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Hook %s failed: %s", hook_name, e)
         return results
 

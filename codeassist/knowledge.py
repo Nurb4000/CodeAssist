@@ -13,8 +13,7 @@ import json
 import logging
 import sqlite3
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from .session import get_db
 
@@ -84,7 +83,7 @@ class KnowledgeBase:
     ) -> str:
         """Create a session summary entry."""
         summary_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         async with get_db() as db:
             await db.execute(
@@ -160,7 +159,7 @@ class KnowledgeBase:
             return False
         
         fields.append("updated_at = ?")
-        values.append(datetime.now(timezone.utc).isoformat())
+        values.append(datetime.now(UTC).isoformat())
         values.append(session_id)
 
         async with get_db() as db:
@@ -186,7 +185,7 @@ class KnowledgeBase:
     ) -> str:
         """Create a knowledge entry."""
         entry_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         async with get_db() as db:
             await db.execute(
@@ -315,7 +314,7 @@ class KnowledgeBase:
             return False
         
         fields.append("updated_at = ?")
-        values.append(datetime.now(timezone.utc).isoformat())
+        values.append(datetime.now(UTC).isoformat())
         values.append(entry_id)
 
         async with get_db() as db:
@@ -362,7 +361,7 @@ class KnowledgeBase:
                 (
                     final_conf,
                     json.dumps(all_tags) if all_tags else None,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                     entry_id,
                 ),
             )
@@ -414,7 +413,7 @@ class KnowledgeBase:
             )
             candidates = [dict(r) for r in await cursor.fetchall()]
 
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             for c in candidates:
                 metadata = json.loads(c["metadata"]) if c["metadata"] else {}
                 metadata["archived_reason"] = "low_confidence_unused"
@@ -463,7 +462,7 @@ class KnowledgeBase:
 
     # ── Lifecycle state machine (F3) ───────────────────────────────────
 
-    VALID_STATUSES = {"active", "review", "flagged", "archived"}
+    VALID_STATUSES = {"active", "review", "flagged", "archived"}  # noqa: RUF012
 
     @staticmethod
     async def set_entry_status(entry_id: str, status: str) -> bool:
@@ -473,7 +472,7 @@ class KnowledgeBase:
         async with get_db() as db:
             cursor = await db.execute(
                 "UPDATE knowledge_entries SET status = ?, updated_at = ? WHERE id = ?",
-                (status, datetime.now(timezone.utc).isoformat(), entry_id),
+                (status, datetime.now(UTC).isoformat(), entry_id),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -502,7 +501,7 @@ class KnowledgeBase:
         """
         if not findings:
             return 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         updated = 0
         async with get_db() as db:
             for entry_id, pii_types in findings.items():
@@ -638,7 +637,7 @@ class KnowledgeBase:
                     )
                 rows = await cursor.fetchall()
                 return _strip_embeddings([dict(r) for r in rows])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("FTS5 search failed, falling back to LIKE search: %s", e)
             # Fallback to LIKE search
             return await KnowledgeBase.search_knowledge(
@@ -684,7 +683,7 @@ class KnowledgeBase:
     ) -> str:
         """Log a tool execution."""
         execution_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         async with get_db() as db:
             await db.execute(
@@ -765,7 +764,7 @@ class KnowledgeBase:
     ) -> str:
         """Log LLM usage."""
         usage_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         async with get_db() as db:
             await db.execute(
@@ -841,7 +840,7 @@ class KnowledgeBase:
     ) -> str:
         """Add a tag to a session."""
         tag_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         async with get_db() as db:
             try:
@@ -920,7 +919,7 @@ class KnowledgeBase:
     ) -> str:
         """Log a file snapshot."""
         snapshot_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         async with get_db() as db:
             await db.execute(
@@ -967,7 +966,7 @@ class KnowledgeBase:
 
     # ── Export / Import ────────────────────────────────────────────────
 
-    EXPORT_TABLES = [
+    EXPORT_TABLES = [  # noqa: RUF012
         "session_summaries", "knowledge_entries", "tool_executions",
         "llm_usage", "session_tags", "file_snapshots",
     ]
@@ -976,7 +975,7 @@ class KnowledgeBase:
     async def export_all() -> dict:
         """Export all KB data as a JSON-serializable dict (without embeddings)."""
         from .session import get_db  # local import to avoid circular
-        export = {"version": 1, "exported_at": datetime.now(timezone.utc).isoformat(), "data": {}}
+        export = {"version": 1, "exported_at": datetime.now(UTC).isoformat(), "data": {}}
         async with get_db() as db:
             for table in KnowledgeBase.EXPORT_TABLES:
                 cursor = await db.execute(f"SELECT * FROM {table}")
@@ -1010,7 +1009,7 @@ class KnowledgeBase:
                             vals.append(str(uuid.uuid4()))
                         elif k in ("created_at", "updated_at"):
                             cols.append(k)
-                            vals.append(datetime.now(timezone.utc).isoformat())
+                            vals.append(datetime.now(UTC).isoformat())
                         elif k == "source_session_id" and source_session_id:
                             cols.append(k)
                             vals.append(source_session_id)
@@ -1026,7 +1025,7 @@ class KnowledgeBase:
                             vals,
                         )
                         inserted += 1
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         log.debug("Skipping row in %s: %s", table, e)
                 await db.commit()
                 counts[table] = inserted
@@ -1041,7 +1040,7 @@ class KnowledgeBase:
         try:
             async with get_db() as db:
                 await _ensure_fts_populated(db)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning("FTS rebuild failed: %s", e)
 
 
@@ -1065,7 +1064,7 @@ async def _ensure_fts_populated(db):
                        SELECT id, entry_type, content, tags, scope, scope_identifier
                        FROM knowledge_entries"""
                 )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning("Failed to populate knowledge_search FTS: %s", e)
     
     try:
@@ -1084,10 +1083,10 @@ async def _ensure_fts_populated(db):
                        SELECT id, session_id, summary, key_topics, tools_used, files_modified
                        FROM session_summaries"""
                 )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning("Failed to populate session_summary_search FTS: %s", e)
     
     try:
         await db.commit()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass

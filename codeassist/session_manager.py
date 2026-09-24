@@ -1,9 +1,7 @@
 import json
 import re
-import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from .session import Session
 
@@ -37,7 +35,7 @@ class SessionManager:
             "version": 2,
             "session_id": session_id,
             "name": ((summary or {}).get("first_message") or "Untitled")[:80],
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "summary": summary or {},
             "messages": messages,
         }
@@ -49,7 +47,7 @@ class SessionManager:
             export_dir = Path("runtime") / "exports"
             export_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r'[^\w\-]', '_', ((summary or {}).get("first_message") or "session")[:40])
-            filename = f"{safe_name}_{session_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+            filename = f"{safe_name}_{session_id[:8]}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             filepath = export_dir / filename
             filepath.write_text(json.dumps(export_data, indent=2, ensure_ascii=False), encoding="utf-8")
             return filepath
@@ -129,7 +127,7 @@ class SessionTool:
         "'export' to export session data as JSON, 'share' to create a self-contained export file, "
         "'import' to import from JSON, or 'summary' to get session statistics."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -175,7 +173,7 @@ class SessionTool:
             try:
                 new_session = await SessionManager.fork_session(target_id, name)
                 return f"Forked session. New session ID: {new_session.id}"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return f"Error forking session: {e}"
 
         elif action == "export":
@@ -183,7 +181,7 @@ class SessionTool:
             try:
                 export_data = await SessionManager.export_session(target_id, redact)
                 return json.dumps(export_data, indent=2)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return f"Error exporting session: {e}"
 
         elif action == "share":
@@ -197,7 +195,7 @@ class SessionTool:
                         f"You can share this file or import it later."
                     )
                 return str(result)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return f"Error sharing session: {e}"
 
         elif action == "import":
@@ -209,7 +207,7 @@ class SessionTool:
                 return f"Imported session. New session ID: {new_session.id}"
             except json.JSONDecodeError as e:
                 return f"Error: invalid JSON data: {e}"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return f"Error importing session: {e}"
 
         elif action == "summary":
@@ -217,7 +215,7 @@ class SessionTool:
             try:
                 summary = await SessionManager.get_session_summary(target_id)
                 return json.dumps(summary, indent=2)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return f"Error getting session summary: {e}"
 
         else:

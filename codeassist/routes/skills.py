@@ -13,8 +13,9 @@ def _discover_registry():
     """
     from pathlib import Path
 
-    from ..server import get_config
     from codeassist.skills import SkillRegistry
+
+    from ..server import get_config
 
     cfg = get_config()
     registry = SkillRegistry(Path(cfg.workspace), cfg.skills)
@@ -35,8 +36,9 @@ async def list_skills():
 @router.post("")
 async def create_skill(body: dict):
     """Create a new skill stored in the database. Body must contain 'name', 'description', and 'content'."""
-    from ..server import get_config
     from codeassist.session import Skill
+
+    from ..server import get_config
     cfg = get_config()
     if not cfg.skills.enabled:
         raise HTTPException(status_code=400, detail="Skills are not enabled")
@@ -52,9 +54,10 @@ async def create_skill(body: dict):
 @router.get("/list")
 async def list_all_skills():
     """List all skills discovered from disk (bypasses database)."""
-    from codeassist.skills import SkillRegistry
-    from codeassist.config import load_config
     from pathlib import Path
+
+    from codeassist.config import load_config
+    from codeassist.skills import SkillRegistry
     config = load_config()
     workspace = Path(config.server.workspace)
     registry = SkillRegistry(workspace, config.skills)
@@ -65,9 +68,10 @@ async def list_all_skills():
 @router.post("/reload")
 async def reload_skills():
     """Hot-reload skills from disk without restarting the server."""
-    from codeassist.skills import SkillRegistry
-    from codeassist.config import load_config
     from pathlib import Path
+
+    from codeassist.config import load_config
+    from codeassist.skills import SkillRegistry
     config = load_config()
     workspace = Path(config.server.workspace)
     registry = SkillRegistry(workspace, config.skills)
@@ -82,8 +86,9 @@ async def update_skill(name: str, body: dict):
     The change is written back to the skill's source file and the live registry
     is re-discovered so it takes effect immediately.
     """
-    from ..server import skill_registry as global_registry
     from codeassist.skills import SkillRegistry
+
+    from ..server import skill_registry as global_registry
 
     registry = _discover_registry()
     skill = registry.get_skill(name)
@@ -111,8 +116,9 @@ async def update_skill(name: str, body: dict):
 @router.delete("/{name}")
 async def delete_skill(name: str):
     """Delete a discovered skill's source file from the workspace."""
-    from ..server import skill_registry as global_registry
     from codeassist.skills import SkillRegistry
+
+    from ..server import skill_registry as global_registry
 
     registry = _discover_registry()
     if not registry.get_skill(name):
@@ -144,8 +150,9 @@ async def import_skills(manifest: dict):
     ``base`` entries are written to the shipped directory and ``custom`` entries
     to the runtime directory; the live registry is reloaded so imports take effect.
     """
-    from ..server import skill_registry as global_registry
     from codeassist.skills import SkillRegistry
+
+    from ..server import skill_registry as global_registry
 
     registry = _discover_registry()
     try:
@@ -164,8 +171,9 @@ async def import_skills(manifest: dict):
 @router.post("/{name}/promote")
 async def promote_skill(name: str):
     """Promote a custom skill into the shipped base directory."""
-    from ..server import skill_registry as global_registry
     from codeassist.skills import SkillRegistry
+
+    from ..server import skill_registry as global_registry
 
     registry = _discover_registry()
     target = registry.promote_skill(name)

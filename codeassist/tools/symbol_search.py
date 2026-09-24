@@ -1,7 +1,7 @@
 """Symbol Search Tool - ctags-based go-to-definition and find-references."""
 
 import logging
-import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,7 +14,7 @@ def _run_ctags(workspace: Path, extra_args: list[str] | None = None) -> list[dic
     """Run ctags and parse output."""
     cmd = ["ctags", "-f", "-", "--sort=no", "--fields=+nKsS"] + (extra_args or []) + ["-R", str(workspace)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
     except FileNotFoundError:
         return []
     except subprocess.TimeoutExpired:
@@ -70,7 +70,7 @@ class SymbolSearchTool(Tool):
         "Supports go-to-definition (find where a symbol is defined) and "
         "find-references (find where a symbol is used). Requires ctags to be installed."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -95,9 +95,7 @@ class SymbolSearchTool(Tool):
             workspace = Path(self.workspace) if hasattr(self, "workspace") else Path(".")
 
             # Check if ctags is available
-            try:
-                subprocess.run(["ctags", "--version"], capture_output=True, timeout=5)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+            if shutil.which("ctags") is None:
                 return ToolResult(
                     output="Error: ctags is not installed. Install with:\n"
                            "  Ubuntu/Debian: sudo apt install universal-ctags\n"

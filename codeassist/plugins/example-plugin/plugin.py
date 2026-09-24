@@ -5,6 +5,7 @@ This demonstrates how to create a plugin that adds custom tools.
 """
 
 import logging
+
 from codeassist.tools import Tool, ToolResult
 
 log = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ class WeatherTool(Tool):
 
     name = "weather"
     description = "Get current weather information for a location (demo tool)"
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "location": {

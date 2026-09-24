@@ -1,10 +1,9 @@
 import asyncio
-import json
 import logging
 from pathlib import Path
 
 from . import Tool, ToolResult
-from .security import validate_directory, WorkspaceViolationError
+from .security import WorkspaceViolationError
 
 log = logging.getLogger(__name__)
 
@@ -16,7 +15,7 @@ class FossilTool(Tool):
         "with built-in wiki, issue tracker, and forum. Supports status, diff, log, commit, "
         "checkout, branch, tag, and more operations."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "operation": {
@@ -289,7 +288,7 @@ class FossilTool(Tool):
         if kwargs.get("all"):
             args.append("--all")
 
-        stdout, stderr, rc = await self._run_fossil(repo_path, args)
+        _, stderr, rc = await self._run_fossil(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Commit failed: {stderr}", error=True)
 
@@ -303,7 +302,7 @@ class FossilTool(Tool):
 
         args = ["checkout", revision]
         
-        stdout, stderr, rc = await self._run_fossil(repo_path, args)
+        _, stderr, rc = await self._run_fossil(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Checkout failed: {stderr}", error=True)
 
@@ -401,7 +400,7 @@ class FossilTool(Tool):
             return ToolResult(output="Error: revision is required", error=True)
 
         args = ["close", revision]
-        stdout, stderr, rc = await self._run_fossil(repo_path, args)
+        _, stderr, rc = await self._run_fossil(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Close failed: {stderr}", error=True)
 
@@ -414,7 +413,7 @@ class FossilTool(Tool):
             return ToolResult(output="Error: source_branch is required", error=True)
 
         args = ["merge", source]
-        stdout, stderr, rc = await self._run_fossil(repo_path, args)
+        _, stderr, rc = await self._run_fossil(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Merge failed: {stderr}", error=True)
 
@@ -427,7 +426,7 @@ class FossilTool(Tool):
             return ToolResult(output="Error: revision_to_revert is required", error=True)
 
         args = ["revert", "--all", revision]
-        stdout, stderr, rc = await self._run_fossil(repo_path, args)
+        _, stderr, rc = await self._run_fossil(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Revert failed: {stderr}", error=True)
 
@@ -442,7 +441,7 @@ class FossilTool(Tool):
             return ToolResult(output="Error: filename is required for export", error=True)
 
         args = ["export", f"--{fmt}", filename]
-        stdout, stderr, rc = await self._run_fossil(repo_path, args)
+        _, stderr, rc = await self._run_fossil(repo_path, args)
         if rc != 0:
             return ToolResult(output=f"Export failed: {stderr}", error=True)
 

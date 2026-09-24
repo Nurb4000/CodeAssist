@@ -1,11 +1,11 @@
 """Knowledge Base GUI dashboard API routes."""
-from datetime import datetime
-import json
-import logging
 import csv
 import io
+import json
+import logging
 import re
-from pathlib import Path
+from datetime import UTC, datetime
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -152,7 +152,7 @@ async def kb_get_entry(entry_id: str):
     # failed increment must never break viewing an entry.
     try:
         await KnowledgeBase.increment_usage(entry_id)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.debug("Failed to record entry usage for %s: %s", entry_id, e)
 
     return entry
@@ -269,7 +269,7 @@ async def kb_search(
                 q, entry_type=entry_type, limit=limit
             )
             return {"results": results, "type": "text"}
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     results = await KnowledgeBase.fulltext_search_knowledge(q, entry_type=entry_type, limit=limit)
@@ -298,8 +298,8 @@ async def kb_list_sessions(limit: int = 50, offset: int = 0):
 @router.get("/sessions/{session_id}")
 async def kb_get_session(session_id: str):
     """Get full session details including messages, summary, tags, and tool executions."""
-    from codeassist.session import get_db, Session
     from codeassist.knowledge import KnowledgeBase
+    from codeassist.session import Session, get_db
 
     session = Session(session_id)
     messages = await session.get_messages()
@@ -325,8 +325,8 @@ async def kb_get_session(session_id: str):
 
 @router.get("/analytics/tools")
 async def kb_analytics_tools(
-    session_id: str = None,
-    tool_name: str = None,
+    session_id: str | None = None,
+    tool_name: str | None = None,
     period_days: int = 30,
 ):
     """Get tool usage analytics for the specified period."""
@@ -340,8 +340,8 @@ async def kb_analytics_tools(
 
 @router.get("/analytics/llm")
 async def kb_analytics_llm(
-    session_id: str = None,
-    model: str = None,
+    session_id: str | None = None,
+    model: str | None = None,
     period_days: int = 30,
 ):
     """Get LLM usage analytics (token counts, costs) for the specified period."""
@@ -518,14 +518,14 @@ async def kb_export(body: dict | None = None):
             "format": "csv",
             "data": output.getvalue(),
             "count": len(entries),
-            "filename": f"codeassist_kb_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            "filename": f"codeassist_kb_export_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
         }
     else:
         return {
             "format": "json",
             "data": json.dumps(entries, indent=2, default=str),
             "count": len(entries),
-            "filename": f"codeassist_kb_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            "filename": f"codeassist_kb_export_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
         }
 
 
@@ -551,7 +551,7 @@ async def kb_import(body: dict):
                 metadata=entry.get("metadata"),
             )
             imported += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             import logging
             logging.getLogger(__name__).warning("Failed to import entry: %s", e)
 

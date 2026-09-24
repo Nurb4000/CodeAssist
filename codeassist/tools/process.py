@@ -1,11 +1,8 @@
 import asyncio
-import json
 import logging
-import signal
 from pathlib import Path
 
 from . import Tool, ToolResult
-from .security import validate_directory, WorkspaceViolationError
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +14,7 @@ class ProcessTool(Tool):
         "about long-running processes. Use this for development servers, "
         "background tasks, or monitoring process status."
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {
@@ -122,14 +119,14 @@ class ProcessTool(Tool):
             proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
 
             del self._processes[process_id]
             return ToolResult(output=f"Process {process_id} stopped successfully")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error stopping process: {e}", error=True)
 
     async def _status(self, process_id: str | None) -> ToolResult:
@@ -167,7 +164,7 @@ class ProcessTool(Tool):
             if proc.stderr and not proc.stderr.at_eof():
                 stderr_data = await asyncio.wait_for(proc.stderr.read(1024), timeout=1.0)
                 stderr_lines = stderr_data.decode('utf-8', errors='replace').strip().split('\n')
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):  # noqa: BLE001, S110
             pass
 
         output_parts = []
@@ -198,10 +195,10 @@ class ProcessTool(Tool):
 
     def cleanup(self):
         """Clean up all managed processes."""
-        for pid, proc in self._processes.items():
+        for proc in self._processes.values():
             try:
                 if proc.returncode is None:
                     proc.terminate()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         self._processes.clear()

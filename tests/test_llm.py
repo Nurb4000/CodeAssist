@@ -1,15 +1,12 @@
 """Tests for LLM client."""
-import asyncio
 import json
-from dataclasses import dataclass
-from typing import AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import openai
 import pytest
 
-from codeassist.llm import LLMClient, TextDelta, ReasoningDelta, ToolCall, Finish, Usage, ToolResult
 from codeassist.config import LLMConfig
+from codeassist.llm import Finish, LLMClient, ReasoningDelta, TextDelta, ToolCall, Usage
 
 
 @pytest.fixture
@@ -40,21 +37,21 @@ class TestLLMClientInit:
     def test_init_with_api_key(self, llm_config):
         """Test initialization with API key."""
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
-            client = LLMClient(llm_config)
+            LLMClient(llm_config)
             mock_openai.assert_called_once_with(api_key="test-key", timeout=360)
 
     def test_init_without_api_key(self):
         """Test initialization without API key."""
         config = LLMConfig(provider="openai", model="gpt-4o")
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
-            client = LLMClient(config)
+            LLMClient(config)
             mock_openai.assert_called_once_with(timeout=360)
 
     def test_init_with_base_url(self, llm_config):
         """Test initialization with custom base URL."""
         llm_config.base_url = "https://custom.api.com/v1"
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
-            client = LLMClient(llm_config)
+            LLMClient(llm_config)
             mock_openai.assert_called_once_with(
                 api_key="test-key", base_url="https://custom.api.com/v1", timeout=360
             )
@@ -63,7 +60,7 @@ class TestLLMClientInit:
         """A configured timeout is passed through to the SDK client."""
         config = LLMConfig(provider="openai", model="gpt-4o", api_key="test-key", timeout=720)
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
-            client = LLMClient(config)
+            LLMClient(config)
             mock_openai.assert_called_once_with(api_key="test-key", timeout=720)
 
 

@@ -1,8 +1,8 @@
 """Cost Tracker - Real-time token budget enforcement for the agent loop."""
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class UsageRecord:
 
     def __post_init__(self):
         if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
         self.total_tokens = self.prompt_tokens + self.completion_tokens
 
 
@@ -98,9 +98,8 @@ class CostTracker:
                 log.warning("Token usage at %.0f%% of budget", pct)
 
         # Check cost limits
-        if self.config.max_cost_per_session > 0:
-            if self._total_cost >= self.config.max_cost_per_session:
-                return False, f"Cost budget exceeded: ${self._total_cost:.4f} / ${self.config.max_cost_per_session:.2f}"
+        if self.config.max_cost_per_session > 0 and self._total_cost >= self.config.max_cost_per_session:
+            return False, f"Cost budget exceeded: ${self._total_cost:.4f} / ${self.config.max_cost_per_session:.2f}"
 
         return True, ""
 

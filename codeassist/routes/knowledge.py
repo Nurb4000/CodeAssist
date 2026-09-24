@@ -1,21 +1,16 @@
 """Knowledge base API routes."""
-from pathlib import Path
-from datetime import datetime
 import json
-import csv
-import io
-import re
+
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 
 @router.get("")
 async def list_knowledge(
-    entry_type: str = None,
-    scope: str = None,
-    scope_identifier: str = None,
+    entry_type: str | None = None,
+    scope: str | None = None,
+    scope_identifier: str | None = None,
     min_confidence: float = 0.0,
     limit: int = 50,
 ):
@@ -31,14 +26,14 @@ async def list_knowledge(
 
 
 @router.get("/search")
-async def search_knowledge(q: str, entry_type: str = None, limit: int = 20):
+async def search_knowledge(q: str, entry_type: str | None = None, limit: int = 20):
     """Search knowledge entries using full-text search (FTS5) or fallback to filter."""
     from codeassist.knowledge import KnowledgeBase
     try:
         results = await KnowledgeBase.fulltext_search_knowledge(q, entry_type=entry_type, limit=limit)
         if results:
             return results
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     return await KnowledgeBase.search_knowledge(
         entry_type=entry_type,
@@ -127,7 +122,7 @@ async def delete_knowledge(entry_id: str):
 
 
 @router.get("/semantic")
-async def semantic_search(q: str, entry_type: str = None, limit: int = 10):
+async def semantic_search(q: str, entry_type: str | None = None, limit: int = 10):
     """Search knowledge entries using vector embeddings (requires configured embedding model).
 
     Falls back to text search when no embedding model is configured; the returned

@@ -2,14 +2,12 @@
 tools (backlog item #3). Covers the registry mutation helpers (path-scoped,
 traversal-guarded) and the REST routes that write back to disk + reload.
 """
-import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-import codeassist.server as server
-
+from codeassist import server
 
 # --------------------------------------------------------------------------- #
 # Registry-level unit tests (no app boot)                                    #
@@ -27,8 +25,8 @@ def _write_skill(ws: Path, name: str, description: str, body: str, slash: str) -
 
 
 def test_skill_format_roundtrip(tmp_path):
-    from codeassist.skills import SkillRegistry
     from codeassist.config import SkillsConfig
+    from codeassist.skills import SkillRegistry
 
     cfg = SkillsConfig(enabled=True, directories=["codeassist/skills"])
     reg = SkillRegistry(tmp_path, cfg)
@@ -45,11 +43,11 @@ def test_skill_format_roundtrip(tmp_path):
 
 
 def test_update_skill_rewrites_file(tmp_path):
-    from codeassist.skills import SkillRegistry
     from codeassist.config import SkillsConfig
+    from codeassist.skills import SkillRegistry
 
     cfg = SkillsConfig(enabled=True, directories=["codeassist/skills"])
-    fp = _write_skill(tmp_path, "demo", "old desc", "old body", "demo")
+    _write_skill(tmp_path, "demo", "old desc", "old body", "demo")
     reg = SkillRegistry(tmp_path, cfg)
     reg.discover()
 
@@ -69,8 +67,8 @@ def test_update_skill_rewrites_file(tmp_path):
 
 
 def test_remove_skill_deletes_file(tmp_path):
-    from codeassist.skills import SkillRegistry
     from codeassist.config import SkillsConfig
+    from codeassist.skills import SkillRegistry
 
     cfg = SkillsConfig(enabled=True, directories=["codeassist/skills"])
     reg = SkillRegistry(tmp_path, cfg)
@@ -84,8 +82,8 @@ def test_remove_skill_deletes_file(tmp_path):
 
 def test_remove_skill_blocks_traversal(tmp_path):
     """A crafted `source` escaping the workspace must not be deletable."""
-    from codeassist.skills import SkillRegistry, Skill
     from codeassist.config import SkillsConfig
+    from codeassist.skills import Skill, SkillRegistry
 
     cfg = SkillsConfig(enabled=True, directories=["codeassist/skills"])
     reg = SkillRegistry(tmp_path, cfg)
@@ -102,8 +100,8 @@ def test_remove_skill_blocks_traversal(tmp_path):
 
 
 def test_remove_plugin_deletes_dir(tmp_path):
-    from codeassist.plugins import PluginRegistry
     from codeassist.config import PluginConfig
+    from codeassist.plugins import PluginRegistry
 
     pdir = tmp_path / "codeassist" / "plugins" / "demo"
     pdir.mkdir(parents=True)
@@ -153,10 +151,9 @@ def test_remove_custom_tool_deletes_file(tmp_path):
 def ws_client(tmp_path, monkeypatch):
     """Boot the app with [server] workspace pointed at an isolated tmp dir."""
     (tmp_path / "config.toml").write_text(
-        "[server]\nhost = \"127.0.0.1\"\nport = 8090\nworkspace = \"%s\"\n"
+        f"[server]\nhost = \"127.0.0.1\"\nport = 8090\nworkspace = \"{tmp_path!s}\"\n"
         "[skills]\nenabled = true\ndirectories = [\"codeassist/skills\"]\n"
-        "[plugins]\nenabled = true\ndirectories = [\"codeassist/plugins\"]\n"
-        % str(tmp_path),
+        "[plugins]\nenabled = true\ndirectories = [\"codeassist/plugins\"]\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -198,6 +195,6 @@ def test_delete_plugin_route(ws_client):
 
 
 def test_delete_custom_tool_route_404(ws_client):
-    client, ws = ws_client
+    client, _ = ws_client
     # No custom tools exist -> 404.
     assert client.delete("/api/custom-tools/none").status_code == 404

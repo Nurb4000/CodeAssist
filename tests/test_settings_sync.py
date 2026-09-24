@@ -5,15 +5,12 @@ writing UI edits back to a sibling ``config.overrides.toml`` that ``Config.load`
 merges on boot — so overrides survive a data-dir reset even when config.toml is
 mounted read-only in Docker.
 """
-import json
 import tomllib
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-import codeassist.server as server
-
+from codeassist import server
 
 BASE_CONFIG = """\
 [llm]
@@ -72,7 +69,7 @@ def test_put_validates_and_syncs_to_file(settings_env):
 
 
 def test_get_reports_ui_source_after_put(settings_env):
-    client, tmp_path = settings_env
+    client, _ = settings_env
     client.put("/api/settings", json={"llm.model": "claude-3"})
     listed = client.get("/api/settings").json()["settings"]
     by_key = {s["key"]: s for s in listed}
@@ -115,7 +112,7 @@ def test_delete_clears_db_and_file(settings_env):
 
 
 def test_restart_endpoint_reloads_config(settings_env):
-    client, tmp_path = settings_env
+    client, _ = settings_env
     # Flip a feature toggle to file, then hit the restart endpoint.
     client.put("/api/settings", json={"skills.enabled": True})
     r = client.post("/api/settings/restart")

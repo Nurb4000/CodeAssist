@@ -1,9 +1,10 @@
 """Shared test fixtures and configuration."""
-import pytest
-from fastapi.testclient import TestClient
-import codeassist.session as _session_mod
 from pathlib import Path
 
+import pytest
+from fastapi.testclient import TestClient
+
+import codeassist.session as _session_mod
 
 # Redirect all DB operations to a test-only database so we never touch production data
 _TEST_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "codeassist_test.db"
@@ -80,7 +81,7 @@ def test_workspace(tmp_path):
 @pytest.fixture
 def live_client(monkeypatch, test_workspace):
     """Boot the real app against an isolated temp workspace and test database."""
-    import codeassist.server as server
+    from codeassist import server
 
     _GLOBALS = (
         "_config", "tools", "skill_registry", "plugin_registry",

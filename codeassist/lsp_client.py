@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from .tools import Tool, ToolResult
 
@@ -69,7 +68,7 @@ class LSPClient:
             )
 
             # Send initialize request
-            init_response = await self._send_request(
+            await self._send_request(
                 proc,
                 "initialize",
                 {
@@ -119,7 +118,7 @@ class LSPClient:
                     continue
 
                 # Read the blank line separator
-                sep = await proc.stdout.readline()
+                await proc.stdout.readline()
 
                 # Read the JSON-RPC body
                 body = await proc.stdout.readexactly(content_length)
@@ -135,7 +134,7 @@ class LSPClient:
 
         except asyncio.CancelledError:
             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("LSP reader for '%s' crashed: %s", name, e)
 
     async def _send_request(self, proc: asyncio.subprocess.Process, method: str, params: dict,
@@ -165,7 +164,7 @@ class LSPClient:
                 log.warning("LSP error for %s: %s", method, response["error"])
                 return {}
             return response.get("result", {})
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("LSP request %s timed out after %.1fs", method, timeout)
             return {}
         finally:
@@ -210,7 +209,7 @@ class LSPClient:
 
     async def get_diagnostics(self, uri: str, language_id: str) -> list[LSPDiagnostic]:
         """Get diagnostics for a file. Sends didOpen then waits briefly for diagnostics."""
-        for name, proc in self._servers.items():
+        for name in self._servers:
             try:
                 await self.did_open(name, uri, language_id, "")
                 # Give the server time to publish diagnostics
@@ -219,7 +218,7 @@ class LSPClient:
                 diags = []
                 while not self._notifications.empty():
                     try:
-                        srv_name, notif = self._notifications.get_nowait()
+                        _, notif = self._notifications.get_nowait()
                         if notif.get("method") == "textDocument/publishDiagnostics":
                             params = notif.get("params", {})
                             if params.get("uri") == uri:
@@ -234,7 +233,7 @@ class LSPClient:
                     except asyncio.QueueEmpty:
                         break
                 return diags
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_diagnostics failed on %s: %s", name, e)
         return []
 
@@ -268,7 +267,7 @@ class LSPClient:
                             suffix = lines[end_line][end_char:]
                             lines[start_line:end_line + 1] = (prefix + new_text + suffix).split("\n")
                     return "\n".join(lines)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("format_document failed on %s: %s", name, e)
         return None
 
@@ -290,7 +289,7 @@ class LSPClient:
                     {"label": item.get("label", ""), "kind": item.get("kind", ""), "detail": item.get("detail", "")}
                     for item in items
                 ]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_completions failed on %s: %s", name, e)
         return []
 
@@ -308,7 +307,7 @@ class LSPClient:
                     return self._format_locations(result["targets"])
                 elif isinstance(result, dict):
                     return self._format_locations([result])
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_definition failed on %s: %s", name, e)
         return []
 
@@ -323,7 +322,7 @@ class LSPClient:
                 }, timeout=10.0)
                 if isinstance(result, list):
                     return self._format_locations(result)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_references failed on %s: %s", name, e)
         return []
 
@@ -349,7 +348,7 @@ class LSPClient:
                         return {"value": "\n".join(parts), "kind": "markdown"}
                     else:
                         return {"value": str(contents), "kind": "plain"}
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_hover failed on %s: %s", name, e)
         return {}
 
@@ -370,7 +369,7 @@ class LSPClient:
                             "children": sym.get("children", []),
                         })
                     return symbols
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_document_symbols failed on %s: %s", name, e)
         return []
 
@@ -393,7 +392,7 @@ class LSPClient:
                             "container_name": sym.get("containerName", ""),
                         })
                     return symbols[:50]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_workspace_symbols failed on %s: %s", name, e)
         return []
 
@@ -408,7 +407,7 @@ class LSPClient:
                 }, timeout=10.0)
                 if result:
                     return result
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("rename_symbol failed on %s: %s", name, e)
         return None
 
@@ -424,7 +423,7 @@ class LSPClient:
                     return self._format_locations(result)
                 elif isinstance(result, dict):
                     return self._format_locations([result])
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_type_definition failed on %s: %s", name, e)
         return []
 
@@ -440,7 +439,7 @@ class LSPClient:
                     return self._format_locations(result)
                 elif isinstance(result, dict):
                     return self._format_locations([result])
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.debug("get_implementation failed on %s: %s", name, e)
         return []
 
@@ -469,7 +468,7 @@ class LSPClient:
             try:
                 await self._send_request(proc, "shutdown", {}, timeout=3.0)
                 await self._send_notification(proc, "exit", {})
-            except Exception:  # pragma: no cover - server may already be gone
+            except Exception:  # pragma: no cover - server may already be gone  # noqa: BLE001, S110
                 pass
             proc.terminate()
             log.info("Stopped LSP server: %s", name)
@@ -519,7 +518,7 @@ class LSPTool(Tool):
         "- type_definition: Find type definition at position\n"
         "- implementation: Find implementations at position"
     )
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "action": {

@@ -1,6 +1,6 @@
 """Tests for HTTP tool."""
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from codeassist.tools.http import HTTPTool
 
@@ -35,5 +35,5 @@ class TestHTTPTool:
     async def test_required_parameters(self, http_tool):
         """Test that method and url are required."""
         # This should fail because url is missing
-        with pytest.raises(Exception):
+        with pytest.raises(TypeError):
             await http_tool.execute(method="GET")

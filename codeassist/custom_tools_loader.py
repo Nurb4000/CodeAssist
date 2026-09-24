@@ -4,12 +4,12 @@ Custom Tools Loader - Dynamic loading and management of custom tools.
 
 import ast
 import importlib.util
-import json
 import logging
 import sys
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .trust_registry import TrustRegistry, TrustStatus
 
@@ -42,7 +42,7 @@ class CustomTool:
 class CustomToolRegistry:
     """Manages dynamic loading of custom tools."""
     
-    def __init__(self, workspace: Path, trust_registry: Optional[TrustRegistry] = None):
+    def __init__(self, workspace: Path, trust_registry: TrustRegistry | None = None):
         self.workspace = workspace
         self.tools_dir = workspace / "runtime" / "custom_tools"
         self.trust_registry = trust_registry
@@ -59,7 +59,7 @@ class CustomToolRegistry:
                 continue
             try:
                 self._load_tool(tool_file)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("Failed to load custom tool %s: %s", tool_file, e)
         
         return list(self._tools.values())
@@ -219,7 +219,7 @@ class CustomToolRegistry:
         manifest = {
             "format": self.TOOLS_BUNDLE,
             "version": 1,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "data": {"tools": []},
         }
         if not self.tools_dir.exists():
@@ -281,7 +281,7 @@ class CustomToolRegistry:
 _custom_tool_registry: CustomToolRegistry | None = None
 
 
-def get_custom_tool_registry(workspace: Path, trust_registry: Optional[TrustRegistry] = None) -> CustomToolRegistry:
+def get_custom_tool_registry(workspace: Path, trust_registry: TrustRegistry | None = None) -> CustomToolRegistry:
     """Get or create the custom tool registry singleton."""
     global _custom_tool_registry
     if _custom_tool_registry is None:

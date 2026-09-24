@@ -94,10 +94,7 @@ def _is_blocked_ip(ip_str: str) -> bool:
     if ip.is_private:
         return True
 
-    if ip_str in _BLOCKED_LINK_LOCAL_IPS:
-        return True
-
-    return False
+    return ip_str in _BLOCKED_LINK_LOCAL_IPS
 
 
 def _resolve_and_check(hostname: str) -> bool:
@@ -127,7 +124,7 @@ def validate_url(url: str) -> bool:
     """
     try:
         parsed = urlparse(url)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
     if parsed.scheme not in ("http", "https"):

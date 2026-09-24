@@ -32,7 +32,7 @@ async def create_agent(body: dict):
 @router.patch("/{agent_name}")
 async def update_agent(agent_name: str, body: dict):
     """Update a custom agent's editable fields (description/model/instructions/max_iterations)."""
-    from codeassist.agents import agent_manager, BUILTIN_AGENT_KEYS
+    from codeassist.agents import BUILTIN_AGENT_KEYS, agent_manager
     if agent_name in BUILTIN_AGENT_KEYS:
         raise HTTPException(status_code=400, detail=f"Built-in agent '{agent_name}' is not editable (built-in)")
     try:

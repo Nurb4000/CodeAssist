@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
+
 from . import Tool, ToolResult
-from .security import validate_path, WorkspaceViolationError
+from .security import WorkspaceViolationError, validate_path
 
 log = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ class EditTool(Tool):
     description = "Replace an exact string in a file. The old_string must be unique or use replaceAll."
     workspace = Path(".")
 
-    parameters = {
+    parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "file_path": {"type": "string", "description": "Absolute path to the file"},
@@ -34,7 +35,7 @@ class EditTool(Tool):
 
         try:
             content = path.read_text(errors="replace")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error reading {file_path}: {e}", error=True)
 
         count = content.count(old_string)
@@ -68,7 +69,7 @@ class EditTool(Tool):
 
         try:
             path.write_text(new_content)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error writing {file_path}: {e}", error=True)
 
         return ToolResult(output=f"Replaced {replacements} occurrence(s) in {file_path}")

@@ -5,12 +5,10 @@ Walks up the directory tree from workspace to find project instruction files
 Discovered instructions are injected into the system prompt.
 """
 
-import asyncio
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -60,9 +58,9 @@ async def load_file_instructions(path: Path, max_size: int = 64 * 1024) -> Instr
         content = path.read_text(encoding="utf-8", errors="replace")
         source.content = content
         source.loaded = True
-        source.load_time = datetime.now(timezone.utc)
+        source.load_time = datetime.now(UTC)
         log.info("Loaded instructions from %s (%d bytes)", path, len(content))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         source.error = f"Failed to load {path}: {e}"
         log.error(source.error)
 
@@ -83,9 +81,9 @@ async def load_url_instructions(url: str, timeout: float = 10.0) -> InstructionS
                 return source
             source.content = content
             source.loaded = True
-            source.load_time = datetime.now(timezone.utc)
+            source.load_time = datetime.now(UTC)
             log.info("Loaded remote instructions from %s (%d bytes)", url, len(content))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         source.error = f"Failed to fetch {url}: {e}"
         log.error(source.error)
 
@@ -102,7 +100,7 @@ class InstructionDiscoverer:
     async def discover(
         self,
         workspace: Path,
-        config_paths: list[str] = None,
+        config_paths: list[str] | None = None,
         disable_project_config: bool = False,
     ) -> list[InstructionSource]:
         """Discover and load all instruction sources.
@@ -191,7 +189,7 @@ class InstructionDiscoverer:
         else:
             return await load_file_instructions(Path(path_or_url))
 
-    def get_combined_content(self, sources: list[InstructionSource] = None) -> str:
+    def get_combined_content(self, sources: list[InstructionSource] | None = None) -> str:
         """Combine all loaded instructions into a single text block."""
         if sources is None:
             sources = [s for s in self.sources if s.loaded]
@@ -206,7 +204,7 @@ class InstructionDiscoverer:
 
         return "\n\n---\n\n".join(parts)
 
-    def get_instruction_block(self, sources: list[InstructionSource] = None) -> str:
+    def get_instruction_block(self, sources: list[InstructionSource] | None = None) -> str:
         """Get formatted instruction block for system prompt injection."""
         content = self.get_combined_content(sources)
         if not content:
