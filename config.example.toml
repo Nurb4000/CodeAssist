@@ -53,7 +53,7 @@ workspace = "."
 # password = ""
 
 [agent]
-max_iterations = 30
+max_iterations = 100
 name = "CodeAssist"
 default_agent = "default"
 

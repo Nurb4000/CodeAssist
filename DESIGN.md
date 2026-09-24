@@ -134,7 +134,7 @@ port = 8090
 workspace = "."                         # Root directory for file operations
 
 [agent]
-max_iterations = 30                     # Max tool-call rounds per prompt
+max_iterations = 100                    # Max tool-call rounds per prompt
 name = "CodeAssist"
 ```
 

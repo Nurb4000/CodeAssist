@@ -42,7 +42,7 @@ class ServerConfig:
 
 @dataclass
 class AgentConfig:
-    max_iterations: int = 30
+    max_iterations: int = 100
     name: str = "CodeAssist"
     default_agent: str = "default"
     subagent_depth: int = 1  # Max nested subagent depth (0 = no subagents)
@@ -214,7 +214,7 @@ class Config:
                 password=raw.get("server", {}).get("password", ""),
             ),
             agent=AgentConfig(
-                max_iterations=raw.get("agent", {}).get("max_iterations", 30),
+                max_iterations=raw.get("agent", {}).get("max_iterations", 100),
                 name=raw.get("agent", {}).get("name", "CodeAssist"),
                 default_agent=raw.get("agent", {}).get("default_agent", "default"),
                 subagent_depth=raw.get("agent", {}).get("subagent_depth", 1),
