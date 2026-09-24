@@ -176,6 +176,15 @@ class Agent:
         except (ValueError, OSError, RuntimeError):
             return False
 
+    def _workspace_trusted_for(self, tool_name: str, file_path: str) -> bool:
+        """Whether a write/edit tool call for ``file_path`` is trusted this session."""
+        return (
+            tool_name in ("write", "edit")
+            and self._trust_workspace_writes
+            and bool(file_path)
+            and self._is_in_workspace(file_path)
+        )
+
     async def needs_confirmation(self, tool_name: str, arguments: dict) -> bool:
         """Check if a tool call requires user confirmation.
 
@@ -193,9 +202,8 @@ class Agent:
             return False
 
         # Check workspace write trust (legacy) — only skip for in-workspace paths
-        if tool_name in ("write", "edit") and self._trust_workspace_writes:
-            if file_path and self._is_in_workspace(file_path):
-                return False
+        if self._workspace_trusted_for(tool_name, file_path):
+            return False
 
         # Per-tool session trust ("trust this tool for the rest of this session")
         if tool_name in SESSION_TOOL_TRUST.get(self.session.id, set()):
@@ -208,7 +216,7 @@ class Agent:
                 return False
             if action == "deny":
                 return True  # Will be handled as denied below
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — fall back to legacy trust on any permission-check error
             log.debug("Permission check failed, falling back to legacy: %s", e)
 
         # Legacy fallback: tools in CONFIRM_TOOLS need confirmation
@@ -314,7 +322,7 @@ class Agent:
             removed = await self._tool_output_store.cleanup()
             if removed:
                 log.info("Cleaned up %d old tool output files", removed)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — tool-output cleanup is best-effort, must never break the run
             log.debug("Tool output cleanup failed: %s", e)
 
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
@@ -643,7 +651,7 @@ class Agent:
                                 success=not result.error,
                                 error_message=truncated[:500] if result.error else None,
                             )
-                        except Exception:
+                        except Exception:  # noqa: BLE001 — KB logging is best-effort; a failed write must not break the loop
                             log.debug("Failed to log tool execution")
                         if tc.name == "todo":
                             todo_tool = self.tools.get("todo")

@@ -124,12 +124,13 @@ def build_system_prompt(workspace: Path, model_id: str, features: dict | None = 
     if features is None:
         features = {}
 
+    today_str = date.today().isoformat()  # noqa: DTZ011 — system prompt must reflect the current date
     env_block = f"""<env>
   Working directory: {workspace}
   Platform: {sys.platform}
   Python: {sys.version.split()[0]}
   Model: {model_id}
-  Today's date: {date.today().isoformat()}
+  Today's date: {today_str}
   Features: MCP={features.get('mcp_enabled', False)}, Skills={features.get('skills_enabled', False)}, Plugins={features.get('plugins_enabled', False)}, LSP={features.get('lsp_enabled', False)}, Git={features.get('git_enabled', False)}
 </env>"""
 
