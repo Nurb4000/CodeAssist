@@ -1,9 +1,10 @@
 import asyncio
+import copy
 import json
 import logging
 import random
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator
 
 import openai
 
@@ -187,7 +188,7 @@ class LLMClient:
                             ),
                         )
                 break
-            except (openai.APIConnectionError, openai.APITimeoutError, asyncio.TimeoutError) as e:
+            except (openai.APIConnectionError, openai.APITimeoutError, asyncio.TimeoutError) as e:  # noqa: UP041 — keep openai's specific timeout error, not just the builtin
                 log.warning("LLM stream interrupted (attempt %d/%d): %s", stream_attempt + 1, MAX_RETRIES, e)
                 if stream_attempt < MAX_RETRIES - 1:
                     jitter = stream_backoff * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
@@ -209,14 +210,22 @@ class LLMClient:
             yield ToolCall(id=tc["id"], name=tc["name"], arguments=args)
 
     def format_tools(self, tool_schemas: list[dict]) -> list[dict]:
-        return [
-            {
+        encoded = []
+        for s in tool_schemas:
+            # Per-parameter prose descriptions cost ~1.2k tokens on every request
+            # but the model already infers usage from arg name/type/required/enum.
+            # Drop only the prose, keep all structural schema so tool-calling
+            # reliability is unchanged. Deep-copy so the cached registry schema is
+            # never mutated.
+            parameters = copy.deepcopy(s.get("parameters") or {})
+            for prop in parameters.get("properties", {}).values():
+                prop.pop("description", None)
+            encoded.append({
                 "type": "function",
                 "function": {
                     "name": s["name"],
                     "description": s["description"],
-                    "parameters": s["parameters"],
+                    "parameters": parameters,
                 },
-            }
-            for s in tool_schemas
-        ]
+            })
+        return encoded

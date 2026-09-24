@@ -106,6 +106,39 @@ class TestFormatTools:
         assert result[0]["function"]["name"] == "read"
         assert result[1]["function"]["name"] == "write"
 
+    def test_format_strips_param_descriptions_but_keeps_structure(self, llm_client):
+        """Per-parameter prose is trimmed from the emitted schema while all
+        structural info (type/required/enum/nested props) is preserved, and the
+        input schema is never mutated."""
+        tools = [
+            {
+                "name": "read",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute path to the file"},
+                        "mode": {"type": "string", "enum": ["r", "rb"], "description": "Open mode"},
+                    },
+                    "required": ["path"],
+                },
+            }
+        ]
+        before = json.dumps(tools, sort_keys=True)
+
+        result = llm_client.format_tools(tools)
+
+        prop = result[0]["function"]["parameters"]["properties"]
+        assert "description" not in prop["path"]
+        assert "description" not in prop["mode"]
+        # Structural info survives.
+        assert prop["path"]["type"] == "string"
+        assert prop["mode"]["enum"] == ["r", "rb"]
+        assert result[0]["function"]["parameters"]["required"] == ["path"]
+        # Input was deep-copied, not mutated in place.
+        assert json.dumps(tools, sort_keys=True) == before
+        assert "description" in tools[0]["parameters"]["properties"]["path"]
+
 
 class TestStream:
     """Test stream method."""
