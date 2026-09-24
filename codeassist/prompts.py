@@ -3,7 +3,6 @@ import sys
 from datetime import date
 from pathlib import Path
 
-
 BASE_PROMPT = """You are CodeAssist, an AI coding agent. You help developers write, edit, debug, and understand code.
 
 You have access to tools that let you read files, write files, edit files, run shell commands, search code, fetch web content, perform Git operations, search the web, manage sessions, and more.
@@ -121,7 +120,7 @@ COMPACTION_USER_PROMPT = """Summarize the following conversation history. Previo
 Produce an updated summary that merges the previous context with the new turns."""
 
 
-def build_system_prompt(workspace: Path, model_id: str, features: dict = None, instructions: str = None) -> str:
+def build_system_prompt(workspace: Path, model_id: str, features: dict | None = None, instructions: str | None = None) -> str:
     if features is None:
         features = {}
 

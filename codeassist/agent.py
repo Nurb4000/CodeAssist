@@ -2,23 +2,29 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator
 
 import openai
 
 from .capabilities import effective_context_window
 from .config import Config
-from .cost_tracker import CostTracker, BudgetConfig
+from .cost_tracker import CostTracker
 from .knowledge import KnowledgeBase
-from .llm import LLMClient, TextDelta, ReasoningDelta, ToolCall, Finish, LLMEvent
-from .prompts import build_system_prompt, build_openai_messages
+from .llm import Finish, LLMClient, ReasoningDelta, TextDelta, ToolCall
+from .permissions import PermissionRuleset, permission_manager
+from .prompts import build_openai_messages, build_system_prompt
 from .session import Session
-from .tools import ToolRegistry
-from .tokens import compact_messages, check_context_limit, truncate_tool_result, llm_compact_messages, strip_media_from_messages
+from .tokens import (
+    check_context_limit,
+    compact_messages,
+    llm_compact_messages,
+    strip_media_from_messages,
+    truncate_tool_result,
+)
 from .tool_output_store import get_tool_output_store
-from .permissions import permission_manager, PermissionRuleset
+from .tools import ToolRegistry
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +80,7 @@ class AgentEvent:
 
 
 class Agent:
-    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str = None, agent_ruleset: PermissionRuleset = None):
+    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str | None = None, agent_ruleset: PermissionRuleset | None = None):
         self.config = config
         self.session = session
         self.tools = tools
