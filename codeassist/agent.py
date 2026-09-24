@@ -33,6 +33,27 @@ SESSION_TRUST: dict[str, dict] = {}
 # Per-session sets of tool names trusted "for the rest of this session".
 SESSION_TOOL_TRUST: dict[str, set[str]] = {}
 
+# Tools whose successful execution means the run made concrete progress (a
+# deliverable was produced or the workspace changed). Pure research tools
+# (read/grep/glob/webfetch/...) do not count, so a model that only researches
+# and then stops would otherwise be marked "complete" without doing any work.
+PRODUCTIVE_TOOLS = frozenset({
+    "write", "edit", "apply_patch", "shell", "git", "fossil",
+    "documentation", "create_tool", "create_skill",
+    "package_manager", "docker", "database", "test_runner",
+})
+
+# How many times the loop will nudge a model that stops after research without
+# having produced any concrete change before giving up and marking done.
+MAX_RESEARCH_NUDGES = 2
+
+RESEARCH_ONLY_CONTINUATION = (
+    "[Progress check: you have used tools but made no changes to the workspace yet. "
+    "If the task is already fully answered, reply with your final answer now. "
+    "Otherwise continue with the necessary actions (write/edit/run tests/document) "
+    "to actually complete it — do not stop after research alone.]"
+)
+
 
 @dataclass
 class AgentEvent:
@@ -67,6 +88,10 @@ class Agent:
         # Compaction state tracking
         self._compaction_summary: str = ""
         self._compaction_count: int = 0
+        # Research-only termination guard (reset per run in run())
+        self._run_progress_made: bool = False
+        self._run_used_tools: bool = False
+        self._research_only_nudges: int = 0
         # Tool output store for managed file outputs
         self._tool_output_store = get_tool_output_store(
             self.config.workspace,
@@ -224,6 +249,10 @@ class Agent:
         # Reset compaction state for new user turn
         self._compaction_summary = ""
         self._compaction_count = 0
+        # Reset research-only guard state for new user turn
+        self._run_progress_made = False
+        self._run_used_tools = False
+        self._research_only_nudges = 0
 
         await self.session.add_message("user", user_message, attachments=attachments)
 
@@ -452,6 +481,7 @@ class Agent:
                     })
 
             if tool_calls:
+                self._run_used_tools = True
                 tc_dicts = [
                     {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                     for tc in tool_calls
@@ -579,6 +609,8 @@ class Agent:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                         self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
+                        if tc.name in PRODUCTIVE_TOOLS and not result.error:
+                            self._run_progress_made = True
                         try:
                             await KnowledgeBase.log_tool_execution(
                                 session_id=self.session.id,
@@ -616,6 +648,25 @@ class Agent:
                     log.warning("LLM repetition detected (%d identical responses), breaking loop", max_repeats)
                     yield AgentEvent("error", {"message": f"Detected repetitive output — stopped after {max_repeats} identical responses."})
                     break
+
+            # Research-only termination guard: if the model stopped using tools
+            # but has produced no concrete change yet (only research so far),
+            # nudge it to continue instead of prematurely marking the turn done.
+            if (
+                not self._run_progress_made
+                and self._run_used_tools
+                and self._research_only_nudges < MAX_RESEARCH_NUDGES
+            ):
+                self._research_only_nudges += 1
+                log.warning(
+                    "LLM stopped after research with no changes (nudge %d/%d). Nudging to continue.",
+                    self._research_only_nudges, MAX_RESEARCH_NUDGES,
+                )
+                messages.append({"role": "user", "content": RESEARCH_ONLY_CONTINUATION})
+                _cached_messages = messages
+                _cached_history_len = len(history)
+                self._messages_dirty = False
+                continue
 
             break
         else:

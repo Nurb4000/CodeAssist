@@ -1360,7 +1360,7 @@ function showContinueButton() {
     messagesEl.appendChild(continueBtnContainer);
     continueBtnContainer.querySelector('#continue-btn').onclick = () => {
         hideContinueButton();
-        inputEl.value = 'continue';
+        inputEl.value = 'Continue with the original task — take the actions needed to complete it (make the code/documentation changes, don\'t just summarize or stop after research).';
         sendMessage();
     };
     scrollToBottom();
