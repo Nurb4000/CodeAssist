@@ -58,6 +58,7 @@ class Agent:
         stored_trust = SESSION_TRUST.get(self.session.id, {})
         self._trust_workspace_writes = stored_trust.get("workspace", False)
         self._trust_shell = stored_trust.get("shell", False)
+        self._trust_all = stored_trust.get("all", False)
         # Cost tracking
         self.cost_tracker = CostTracker()
         # Incremental message cache — avoids DB fetch on every iteration
@@ -86,10 +87,11 @@ class Agent:
         """Reset trust flags for new session."""
         self._trust_workspace_writes = False
         self._trust_shell = False
+        self._trust_all = False
         SESSION_TRUST.pop(self.session.id, None)
         SESSION_TOOL_TRUST.pop(self.session.id, None)
 
-    def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False):
+    def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False, trust_all: bool = False):
         """Set trust flags from user confirmation (persisted per session id)."""
         if trust_workspace:
             self._trust_workspace_writes = True
@@ -97,10 +99,28 @@ class Agent:
         if trust_shell:
             self._trust_shell = True
             log.info("Shell commands trusted. Flag=%s", self._trust_shell)
-        SESSION_TRUST[self.session.id] = {
+        if trust_all:
+            self._trust_all = True
+            log.info("All tools trusted for this session. Flag=%s", self._trust_all)
+        entry = {
             "workspace": self._trust_workspace_writes,
             "shell": self._trust_shell,
         }
+        if self._trust_all:
+            entry["all"] = True
+        SESSION_TRUST[self.session.id] = entry
+
+    def _trust_all_active(self) -> bool:
+        """Whether trust-all is enabled for this agent.
+
+        Combines the per-session "trust all tools" flag (set from the confirm
+        dialog) with the admin-level config option (Settings > Permissions),
+        which is either this-session (ephemeral) or always (persisted).
+        """
+        if self._trust_all:
+            return True
+        perms = getattr(self.config, "permissions", None)
+        return getattr(perms, "trust_all", "ask") in ("session", "always")
 
     def _is_in_workspace(self, file_path: str) -> bool:
         """Check if a file path is within the workspace."""
@@ -119,6 +139,10 @@ class Agent:
         Falls back to legacy trust flags for backwards compatibility.
         """
         file_path = arguments.get("file_path", arguments.get("path", ""))
+
+        # Trust-all (session or permanent): skip confirmation for everything.
+        if self._trust_all_active():
+            return False
 
         # Check shell trust (legacy)
         if tool_name == "shell" and self._trust_shell:
@@ -149,6 +173,8 @@ class Agent:
     async def get_permission_action(self, tool_name: str, arguments: dict) -> str:
         """Get the permission action for a tool call. Returns 'allow', 'deny', or 'ask'."""
         file_path = arguments.get("file_path", arguments.get("path", ""))
+        if self._trust_all_active():
+            return "allow"
         return await permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
 
     async def wait_for_confirm(self, confirm_id: str) -> bool:
@@ -168,13 +194,13 @@ class Agent:
         """
         return self._confirm_requests.pop(confirm_id, None)
 
-    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False):
+    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False, trust_all: bool = False):
         """Resolve a pending confirmation from WebSocket."""
-        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, trust_tool=%s, remember=%s",
-                 confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember)
+        log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, trust_tool=%s, remember=%s, trust_all=%s",
+                 confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
         tool_name = self._confirm_tools.pop(confirm_id, None)
         if approved:
-            self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell)
+            self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell, trust_all=trust_all)
             if trust_tool and tool_name:
                 SESSION_TOOL_TRUST.setdefault(self.session.id, set()).add(tool_name)
                 log.info("Tool '%s' trusted for session %s", tool_name, self.session.id)

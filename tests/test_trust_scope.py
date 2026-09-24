@@ -54,6 +54,76 @@ async def test_trust_persists_across_agents_same_session(tmp_path):
     assert await a2.needs_confirmation("shell", {"shell_command": "ls"}) is False
 
 
+@pytest.mark.asyncio
+async def test_trust_all_session_flag_skips_confirmation(tmp_path):
+    """resolve_confirm(trust_all=True) gates every tool for the session (A1)."""
+    agent = _agent("sess-AA", tmp_path)
+    agent._confirm_tools["c1"] = "shell"
+    agent.resolve_confirm("c1", True, trust_all=True)
+    assert SESSION_TRUST["sess-AA"].get("all") is True
+
+    # Reconnect to the same session keeps trust-all.
+    reconnect = _agent("sess-AA", tmp_path)
+    assert reconnect._trust_all is True
+    assert await reconnect.needs_confirmation("shell", {"shell_command": "ls"}) is False
+    assert await reconnect.needs_confirmation("write", {"file_path": str(tmp_path / "x.py"), "content": "x = 1"}) is False
+    assert await reconnect.get_permission_action("shell", {"shell_command": "ls"}) == "allow"
+
+
+def test_trust_all_isolated_per_session_id(tmp_path):
+    agent = _agent("sess-AB", tmp_path)
+    agent._confirm_tools["c1"] = "shell"
+    agent.resolve_confirm("c1", True, trust_all=True)
+    assert SESSION_TRUST["sess-AB"].get("all") is True
+
+    other = _agent("sess-AC", tmp_path)
+    assert other._trust_all is False
+
+
+def test_reset_trust_clears_trust_all(tmp_path):
+    agent = _agent("sess-AD", tmp_path)
+    agent.set_trust(trust_all=True)
+    assert SESSION_TRUST["sess-AD"].get("all") is True
+
+    agent.reset_trust()
+    assert "sess-AD" not in SESSION_TRUST
+
+
+def _config_agent(session_id: str, workspace: Path) -> Agent:
+    """Agent whose admin-level trust-all mode comes entirely from config."""
+    cfg = Config()
+    cfg.workspace = workspace
+    cfg.llm.api_key = "not-used-in-test"
+    return Agent(cfg, Session(session_id), {}, "system prompt")
+
+
+@pytest.mark.asyncio
+async def test_config_trust_all_always_skips_confirmation(tmp_path):
+    agent = _config_agent("sess-AE", tmp_path)
+    agent.config.permissions.trust_all = "always"
+    assert await agent.needs_confirmation("shell", {"shell_command": "ls"}) is False
+    assert await agent.needs_confirmation("write", {"file_path": str(tmp_path / "x.py"), "content": "x = 1"}) is False
+    assert await agent.get_permission_action("shell", {"shell_command": "ls"}) == "allow"
+
+
+@pytest.mark.asyncio
+async def test_config_trust_all_session_skips_confirmation(tmp_path):
+    agent = _config_agent("sess-AF", tmp_path)
+    agent.config.permissions.trust_all = "session"
+    assert await agent.needs_confirmation("git", {}) is False
+    assert await agent.get_permission_action("edit", {"file_path": str(tmp_path / "x.py")}) == "allow"
+
+
+@pytest.mark.asyncio
+async def test_config_trust_all_ask_still_confirms(tmp_path):
+    """In the default 'ask' mode nothing short-circuits; tools still prompt."""
+    agent = _config_agent("sess-AG", tmp_path)
+    assert agent.config.permissions.trust_all == "ask"
+    assert agent._trust_all_active() is False
+    # 'git' is in the legacy CONFIRM_TOOLS set and has no allow rule.
+    assert await agent.needs_confirmation("git", {}) is True
+
+
 def test_trust_isolated_per_session_id(tmp_path):
     _agent("sess-C", tmp_path).set_trust(trust_shell=True)
     assert SESSION_TRUST["sess-C"]["shell"] is True

@@ -106,6 +106,17 @@ class InstructionsConfig:
 
 
 @dataclass
+class PermissionConfig:
+    # Trust-all mode for tool confirmations:
+    #   "ask"     — prompt the user for every tool call (default)
+    #   "session" — auto-allow everything until the server restarts (ephemeral;
+    #               set from the admin Settings UI, never persisted so it reverts
+    #               on a restart)
+    #   "always"  — auto-allow everything, persisted across restarts
+    trust_all: str = "ask"
+
+
+@dataclass
 class CompactionConfig:
     enabled: bool = True
     mode: str = "llm"  # "llm" or "text"
@@ -141,6 +152,7 @@ class Config:
     tool_output: ToolOutputConfig = field(default_factory=ToolOutputConfig)
     instructions: InstructionsConfig = field(default_factory=InstructionsConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
+    permissions: PermissionConfig = field(default_factory=PermissionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
     @property
@@ -251,6 +263,9 @@ class Config:
                 preserve_recent_tokens=raw.get("compaction", {}).get("preserve_recent_tokens", 4000),
                 model=raw.get("compaction", {}).get("model", ""),
                 tool_result_max_tokens=raw.get("compaction", {}).get("tool_result_max_tokens", 4000),
+            ),
+            permissions=PermissionConfig(
+                trust_all=raw.get("permissions", {}).get("trust_all", "ask"),
             ),
         )
         config.workspace = Path(

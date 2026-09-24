@@ -18,6 +18,10 @@ def _catalog_payload(spec: dict, cfg, value: str | None) -> dict:
         "source": "ui" if value is not None else "file",
         "value": None if spec.get("secret") else effective,
     }
+    # "Session" trust-all is a runtime-only preference (no persisted override);
+    # label its source so the UI can show it as active for the server lifetime.
+    if spec["key"] == "permissions.trust_all" and effective == "session":
+        item["source"] = "runtime"
     if spec.get("options"):
         item["options"] = spec["options"]
     if spec.get("secret"):
@@ -50,6 +54,7 @@ async def update_settings(payload: dict):
     from ..settings import (
         BY_KEY,
         coerce,
+        remove_override,
         settings_store,
         validate_setting,
         write_override,
@@ -76,6 +81,15 @@ async def update_settings(payload: dict):
         error = validate_setting(spec, coerced)
         if error:
             raise HTTPException(status_code=422, detail=error)
+        if spec["key"] == "permissions.trust_all" and coerced == "session":
+            # "This session" is ephemeral: apply it live, drop any persisted
+            # override (DB + overrides file) so it reverts after a restart.
+            await settings_store.clear(key)
+            remove_override(cfg, key)
+            section = getattr(cfg, spec["section"])
+            setattr(section, spec["field"], coerced)
+            applied.append(key)
+            continue
         await settings_store.set(key, coerced)
         # Persist non-secret edits back to config.overrides.toml so they survive
         # a data-dir reset. Secrets stay DB-only (never written to disk).

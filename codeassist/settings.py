@@ -106,6 +106,15 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
     {"key": "git.enabled", "section": "git", "field": "enabled", "type": "bool",
      "label": "Git integration", "description": "Restart required.",
      "group": "Features", "restart_required": True},
+
+    # --- Permissions ---
+    # "session" is ephemeral: applied live only and never persisted, so it
+    # reverts after a server restart. "always" is persisted like any other UI
+    # setting and survives restarts. See config.PermissionConfig.
+    {"key": "permissions.trust_all", "section": "permissions", "field": "trust_all", "type": "str",
+     "label": "Trust all tools",
+     "description": "Auto-allow every tool call without confirmation. 'This session' lasts until the server restarts; 'Always' persists. Overrides per-tool rules and skips prompts.",
+     "group": "Permissions", "options": ["ask", "session", "always"], "restart_required": False},
 ]
 
 

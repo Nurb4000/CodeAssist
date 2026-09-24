@@ -33,7 +33,8 @@ The password is NEVER accepted via query parameters (security best practice).
 // Respond to a tool confirmation prompt.
 // remember: "always allow this tool" — persisted server-side, bound to the
 // confirm_id's own tool + file_path (client tool/file_path values are ignored).
-{"type": "confirm_response", "id": "...", "approved": true, "trust_workspace": false, "trust_shell": false, "trust_tool": false, "remember": false}
+// trust_all: "trust all tools for this session" (session-scoped, ephemeral).
+{"type": "confirm_response", "id": "...", "approved": true, "trust_workspace": false, "trust_shell": false, "trust_tool": false, "trust_all": false, "remember": false}
 
 // Respond to a question from the agent
 {"type": "question_response", "id": "...", "answer": "..."}

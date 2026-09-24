@@ -716,9 +716,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 trust_workspace = data.get("trust_workspace", False)
                 trust_shell = data.get("trust_shell", False)
                 trust_tool = data.get("trust_tool", False)
+                trust_all = data.get("trust_all", False)
                 remember = data.get("remember", False)
                 if confirm_id:
-                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember)
+                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
                     # Persist a remembered permission from server-bound context,
                     # never from client-echoed tool/file_path values.
                     if remember and approved:

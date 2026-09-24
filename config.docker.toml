@@ -60,3 +60,11 @@ enabled = true
 threshold_pct = 75
 keep_recent = 20
 tool_result_max_tokens = 4000
+
+[permissions]
+# Tool permission mode. Set from the admin Settings UI (Settings > Permissions >
+# Trust all tools) and persisted in the DB; config is the file-based fallback.
+#   "ask"      -> prompt for confirmation on every tool call (default)
+#   "session"  -> auto-allow all tool calls until the server restarts
+#   "always"   -> auto-allow all tool calls, persisted across restarts
+trust_all = "ask"

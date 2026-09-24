@@ -202,3 +202,21 @@ password = "secret123"
         
         config = Config.load(config_file)
         assert config.server.password == "secret123"
+
+    def test_permissions_config(self, tmp_path):
+        """Test permissions (trust-all) configuration loading."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[permissions]
+trust_all = "always"
+""")
+        
+        config = Config.load(config_file)
+        assert config.permissions.trust_all == "always"
+
+
+class TestPermissionConfigDefaults:
+    def test_default_ask(self):
+        """Default permissions mode prompts for confirmation (safest default)."""
+        config = Config()
+        assert config.permissions.trust_all == "ask"
