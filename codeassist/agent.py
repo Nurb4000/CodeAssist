@@ -43,15 +43,27 @@ PRODUCTIVE_TOOLS = frozenset({
     "package_manager", "docker", "database", "test_runner",
 })
 
-# How many times the loop will nudge a model that stops after research without
-# having produced any concrete change before giving up and marking done.
-MAX_RESEARCH_NUDGES = 2
+# How many times the loop will nudge a model that keeps researching without
+# producing any concrete change before giving up and flagging the task
+# incomplete instead of falsely marking it done.
+MAX_RESEARCH_NUDGES = 5
 
+# First nudge: gentle, and it offers an escape hatch so a legitimate
+# research-only question (e.g. "what is in this file?") can still be answered.
 RESEARCH_ONLY_CONTINUATION = (
     "[Progress check: you have used tools but made no changes to the workspace yet. "
     "If the task is already fully answered, reply with your final answer now. "
     "Otherwise continue with the necessary actions (write/edit/run tests/document) "
     "to actually complete it — do not stop after research alone.]"
+)
+
+# Follow-up nudges for a model that keeps doing more research instead of
+# acting: firmer, and no escape hatch, so it cannot answer its way out.
+RESEARCH_ONLY_CONTINUATION_FIRM = (
+    "[You are still only gathering information and have not made any changes to "
+    "complete the task. Stay focused: proceed with the required actions now "
+    "(write/edit/run tests/document) to finish the actual work. Do not conclude "
+    "with a summary — make the changes.]"
 )
 
 
@@ -91,6 +103,7 @@ class Agent:
         # Research-only termination guard (reset per run in run())
         self._run_progress_made: bool = False
         self._run_used_tools: bool = False
+        self._since_nudge_tools: bool = False
         self._research_only_nudges: int = 0
         # Tool output store for managed file outputs
         self._tool_output_store = get_tool_output_store(
@@ -252,6 +265,7 @@ class Agent:
         # Reset research-only guard state for new user turn
         self._run_progress_made = False
         self._run_used_tools = False
+        self._since_nudge_tools = False
         self._research_only_nudges = 0
 
         await self.session.add_message("user", user_message, attachments=attachments)
@@ -482,6 +496,7 @@ class Agent:
 
             if tool_calls:
                 self._run_used_tools = True
+                self._since_nudge_tools = True
                 tc_dicts = [
                     {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                     for tc in tool_calls
@@ -649,24 +664,50 @@ class Agent:
                     yield AgentEvent("error", {"message": f"Detected repetitive output — stopped after {max_repeats} identical responses."})
                     break
 
-            # Research-only termination guard: if the model stopped using tools
-            # but has produced no concrete change yet (only research so far),
-            # nudge it to continue instead of prematurely marking the turn done.
-            if (
-                not self._run_progress_made
-                and self._run_used_tools
-                and self._research_only_nudges < MAX_RESEARCH_NUDGES
-            ):
-                self._research_only_nudges += 1
-                log.warning(
-                    "LLM stopped after research with no changes (nudge %d/%d). Nudging to continue.",
-                    self._research_only_nudges, MAX_RESEARCH_NUDGES,
-                )
-                messages.append({"role": "user", "content": RESEARCH_ONLY_CONTINUATION})
-                _cached_messages = messages
-                _cached_history_len = len(history)
-                self._messages_dirty = False
-                continue
+            # Research-only termination guard. If the model stopped using tools
+            # but has produced no concrete change yet, decide whether to keep
+            # working or finish:
+            #  - Real progress was made this run -> the model is done, finish.
+            #  - First research-stop -> gentle nudge with an escape hatch so a
+            #    legitimate research-only question can still be answered.
+            #  - Already nudged and the model answered without doing more work
+            #    -> respect that; it cannot be forced to act.
+            #  - Already nudged and the model kept researching instead -> firmer
+            #    nudge. Once the nudge budget is spent, flag the task incomplete
+            #    rather than falsely marking it complete.
+            if not self._run_progress_made and self._run_used_tools:
+                if not self._research_only_nudges:
+                    self._research_only_nudges = 1
+                    self._since_nudge_tools = False
+                    log.warning("LLM stopped after research with no changes; nudging to continue.")
+                    messages.append({"role": "user", "content": RESEARCH_ONLY_CONTINUATION})
+                    _cached_messages = messages
+                    _cached_history_len = len(history)
+                    self._messages_dirty = False
+                    continue
+                if not self._since_nudge_tools:
+                    log.debug("LLM answered after a nudge without further work; treating as complete.")
+                elif self._research_only_nudges < MAX_RESEARCH_NUDGES:
+                    self._research_only_nudges += 1
+                    self._since_nudge_tools = False
+                    log.warning(
+                        "LLM still scattered after research (nudge %d/%d); pushing further.",
+                        self._research_only_nudges, MAX_RESEARCH_NUDGES,
+                    )
+                    messages.append({"role": "user", "content": RESEARCH_ONLY_CONTINUATION_FIRM})
+                    _cached_messages = messages
+                    _cached_history_len = len(history)
+                    self._messages_dirty = False
+                    continue
+                else:
+                    log.warning(
+                        "LLM stuck in research loop after %d nudges; marking incomplete.",
+                        self._research_only_nudges,
+                    )
+                    yield AgentEvent("incomplete", {
+                        "message": "The task may not be complete: the agent kept researching without making changes and did not finish. Use Continue to let it keep going.",
+                    })
+                    return
 
             break
         else:

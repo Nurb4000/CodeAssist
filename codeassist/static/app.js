@@ -1144,6 +1144,24 @@ function connectWS() {
             inputEl.disabled = false;
             setAttachmentUiBusy(false);
             inputEl.focus();
+        } else if (data.type === 'incomplete') {
+            hideProgress();
+            finalizeToolPanel();
+            if (!currentContentEl) startAssistantMessage();
+            currentContentEl.innerHTML += `<p style="color:var(--yellow);margin-top:8px;">⚠ ${escapeHtml(data.message)}</p>`;
+            scrollToBottom();
+            showContinueButton();
+
+            currentContentEl = null;
+            currentReasoningEl = null;
+            textBuffer = '';
+            isStreaming = false;
+            sendBtn.disabled = false;
+            sendBtn.style.display = 'flex';
+            stopBtn.style.display = 'none';
+            inputEl.disabled = false;
+            setAttachmentUiBusy(false);
+            inputEl.focus();
         } else if (data.type === 'done') {
             hideProgress();
             finalizeToolPanel();
