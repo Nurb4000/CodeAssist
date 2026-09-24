@@ -56,6 +56,9 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
     {"key": "llm.vision", "section": "llm", "field": "vision", "type": "bool",
      "label": "Vision capable", "description": "Manual override; auto-detected otherwise.",
      "group": "LLM", "restart_required": False},
+    {"key": "llm.timeout", "section": "llm", "field": "timeout", "type": "int",
+     "label": "LLM timeout (s)", "description": "Seconds without LLM output before the request is aborted. Raise for slower hardware (default 360).",
+     "group": "LLM", "restart_required": False},
 
     # --- Server ---
     {"key": "server.host", "section": "server", "field": "host", "type": "str",
@@ -132,6 +135,7 @@ _CONSTRAINTS: dict[str, dict] = {
     "llm.temperature": {"min": 0.0, "max": 2.0},
     "llm.max_tokens": {"min": 1},
     "llm.context_window": {"min": 1},
+    "llm.timeout": {"min": 5},
     "server.port": {"min": 1, "max": 65535},
     "agent.max_iterations": {"min": 1},
     "tools.shell_timeout": {"min": 1},

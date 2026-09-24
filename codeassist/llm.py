@@ -68,6 +68,9 @@ class LLMClient:
         kwargs = {"api_key": config.api_key} if config.api_key else {}
         if config.base_url:
             kwargs["base_url"] = config.base_url
+        # Honor the configured LLM timeout so slow local servers (llama.cpp,
+        # vLLM) get more than the SDK's own generous default only when asked.
+        kwargs["timeout"] = config.timeout
         self.client = openai.AsyncOpenAI(**kwargs)
 
     async def stream(

@@ -27,6 +27,9 @@ class LLMConfig:
     presence_penalty: float = 0.0
     embedding_model: str = ""
     vision: bool = False
+    # Seconds without LLM output before the request/stream is declared timed
+    # out. Generous for slower local hardware (360s = 3x the historical 120s).
+    timeout: int = 360
 
 
 @dataclass
@@ -202,6 +205,7 @@ class Config:
                 frequency_penalty=params.get("frequency_penalty", 0.0),
                 presence_penalty=params.get("presence_penalty", 0.0),
                 vision=llm_raw.get("vision", False),
+                timeout=llm_raw.get("timeout", 360),
             ),
             server=ServerConfig(
                 host=raw.get("server", {}).get("host", "127.0.0.1"),

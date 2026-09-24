@@ -89,6 +89,20 @@ context_window = 64000
         assert config.llm.max_tokens == 4096
         assert config.llm.context_window == 64000
 
+    def test_llm_timeout_default_and_override(self, tmp_path):
+        """LLM stream timeout defaults to 360s and is overridable from [llm]."""
+        assert Config.load("/nonexistent/config.toml").llm.timeout == 360
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[llm]
+provider = "openai"
+timeout = 720
+""")
+
+        config = Config.load(config_file)
+        assert config.llm.timeout == 720
+
     def test_mcp_config(self, tmp_path):
         """Test MCP configuration loading."""
         config_file = tmp_path / "config.toml"

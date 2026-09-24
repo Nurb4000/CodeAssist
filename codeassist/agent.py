@@ -408,7 +408,7 @@ class Agent:
             tool_calls: list[ToolCall] = []
 
             stream_start = time.monotonic()
-            stream_timeout = 120.0  # seconds
+            stream_timeout = float(getattr(self.config.llm, "timeout", 120))  # seconds
 
             # Save placeholder immediately so partial responses survive crashes
             stream_msg_id = await self.session.add_message("assistant", content="")

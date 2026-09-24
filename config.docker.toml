@@ -12,6 +12,11 @@ model = ""
 api_key = ""
 base_url = ""
 
+# Seconds without LLM output before the request/stream is treated as timed out
+# (default 360 = triple the historical 120, for slower hardware). Changeable
+# from the admin UI under Settings > LLM.
+timeout = 360
+
 [llm.parameters]
 temperature = 0.0
 max_tokens = 8192

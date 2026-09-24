@@ -97,6 +97,101 @@ def test_get_settings_lists_catalog(live_client):
     assert secret["has_value"] is False
 
 
+def test_settings_catalog_has_permissions_trust_all(live_client):
+    data = live_client.get("/api/settings").json()
+    item = next(s for s in data["settings"] if s["key"] == "permissions.trust_all")
+    assert item["group"] == "Permissions"
+    assert item["options"] == ["ask", "session", "always"]
+    assert item["value"] == "ask"
+    assert item["source"] == "file"
+
+
+def test_put_trust_all_always_persists(live_client):
+    import codeassist.server as server
+    from codeassist.settings import settings_store
+
+    r = live_client.put("/api/settings", json={"permissions.trust_all": "always"})
+    assert r.status_code == 200
+    assert r.json()["applied"] == ["permissions.trust_all"]
+    # Applied live...
+    assert server.get_config().permissions.trust_all == "always"
+    # ...and persisted for the next boot.
+    assert settings_store.get("permissions.trust_all") == "always"
+
+    listed = live_client.get("/api/settings").json()["settings"]
+    item = next(s for s in listed if s["key"] == "permissions.trust_all")
+    assert item["source"] == "ui"
+    assert item["value"] == "always"
+
+
+def test_put_trust_all_rejects_bad_value(live_client):
+    r = live_client.put("/api/settings", json={"permissions.trust_all": "sometimes"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_put_trust_all_session_ephemeral(live_client):
+    """'This session' trust-all applies live but is never persisted, so a boot
+    reverts it to the default — the trust ends when the server does."""
+    import codeassist.server as server
+    from codeassist.settings import apply_settings_overrides, settings_store
+
+    r = live_client.put("/api/settings", json={"permissions.trust_all": "session"})
+    assert r.status_code == 200
+    assert server.get_config().permissions.trust_all == "session"
+
+    # GET reports the runtime session source.
+    listed = live_client.get("/api/settings").json()["settings"]
+    item = next(s for s in listed if s["key"] == "permissions.trust_all")
+    assert item["source"] == "runtime"
+    assert item["value"] == "session"
+
+    # Nothing persisted: a fresh boot applies the "ask" default again.
+    assert settings_store.get("permissions.trust_all") is None
+    cfg = Config()
+    await apply_settings_overrides(cfg)
+    assert cfg.permissions.trust_all == "ask"
+
+
+def test_delete_resets_trust_all_session(live_client):
+    import codeassist.server as server
+
+    live_client.put("/api/settings", json={"permissions.trust_all": "session"})
+    assert server.get_config().permissions.trust_all == "session"
+
+    r = live_client.delete("/api/settings/permissions.trust_all")
+    assert r.status_code == 200
+    assert server.get_config().permissions.trust_all == "ask"
+
+
+def test_put_llm_timeout_applies_live_and_rejects_low(live_client):
+    import codeassist.server as server
+
+    # Listed as a normal int setting with a sensible default (360 = 3x the
+    # historical 120, for slower hardware).
+    listed = live_client.get("/api/settings").json()["settings"]
+    item = next(s for s in listed if s["key"] == "llm.timeout")
+    assert item["group"] == "LLM"
+    assert item["value"] == 360
+    assert item["source"] == "file"
+
+    # PUT applies live.
+    r = live_client.put("/api/settings", json={"llm.timeout": 720})
+    assert r.status_code == 200
+    assert r.json()["applied"] == ["llm.timeout"]
+    assert server.get_config().llm.timeout == 720
+
+    listed = live_client.get("/api/settings").json()["settings"]
+    item = next(s for s in listed if s["key"] == "llm.timeout")
+    assert item["source"] == "ui"
+    assert item["value"] == 720
+
+    # Values below the validation min are rejected.
+    bad = live_client.put("/api/settings", json={"llm.timeout": 2})
+    assert bad.status_code == 422
+    assert server.get_config().llm.timeout == 720
+
+
 def test_put_settings_applies_live_and_flags_restart(live_client):
     import codeassist.server as server
 
