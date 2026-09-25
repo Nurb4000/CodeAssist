@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import random
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -66,7 +67,13 @@ LLMEvent = TextDelta | ReasoningDelta | ToolCall | ToolResult | Finish
 class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
-        kwargs = {"api_key": config.api_key} if config.api_key else {}
+        # The OpenAI SDK rejects an empty or missing key at construction, but
+        # no-auth backends (e.g. a local/on-prem llama.cpp) are often configured
+        # with an empty key. Fall back to the OPENAI_API_KEY env var, then a
+        # placeholder sentinel so the client still constructs and the request
+        # goes through unauthenticated instead of raising "Missing credentials".
+        api_key = config.api_key or os.environ.get("OPENAI_API_KEY")
+        kwargs = {"api_key": api_key or "sk-no-auth"}
         if config.base_url:
             kwargs["base_url"] = config.base_url
         # Honor the configured LLM timeout so slow local servers (llama.cpp,

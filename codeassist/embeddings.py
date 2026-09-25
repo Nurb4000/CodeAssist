@@ -5,6 +5,7 @@ Uses OpenAI-compatible embedding APIs for vector representations.
 """
 
 import logging
+import os
 import struct
 
 import openai
@@ -33,8 +34,11 @@ class EmbeddingClient:
         self.config = config
         self.model = getattr(config.llm, 'embedding_model', None) or DEFAULT_EMBEDDING_MODEL
         
-        # Create OpenAI client for embeddings
-        kwargs = {"api_key": config.llm.api_key} if config.llm.api_key else {}
+        # Create OpenAI client for embeddings. The SDK rejects an empty key, so
+        # fall back to the OPENAI_API_KEY env var then a placeholder sentinel
+        # that no-auth backends (e.g. llama.cpp) ignore.
+        api_key = config.llm.api_key or os.environ.get("OPENAI_API_KEY")
+        kwargs = {"api_key": api_key or "sk-no-auth"}
         if config.llm.base_url:
             kwargs["base_url"] = config.llm.base_url
         self.client = openai.AsyncOpenAI(**kwargs)
