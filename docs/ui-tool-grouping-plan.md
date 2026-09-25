@@ -135,9 +135,15 @@ the reader sees "what the model said" → "what it did", matching opencode's flo
 - [x] CSS: removed `.tool-panel*`; added `.tool-call-stack`; `.tool-call` standalone border/radius
 - [x] One-line preview (`args → output`) always visible; full detail in body revealed on expand (`.tool-call.open`)
 - [x] `normalizeArgs`/`snippet`/`applyToolCallRender`/`matchToolCall` helpers; results update by stable id
-- [ ] Manual smoke test (stream a tool-using turn; reload session) — needs browser
+- [x] Manual smoke test (Chromium headless, real index.html + app.js) — PASS (2026-09-25):
+      MID_ACTIVE=1 / MID_HISTORY=0 mid-run; FINAL_ACTIVE=0 / FINAL_HISTORY=2 after endRun;
+      summary flushed to main flow (MAIN_FLOW_ASSISTANTS=1); per-step previews render
+      (`read`→`shell`); hasFollowUpContent()=true. Harness in /tmp/harness/{stub_inline.js,
+      drive_inline.js, gen.py, run_smoke.py} (ephemeral — rebuild with gen.py).
+- [x] Docker smoke test (build codeassist:ui-smoke, run container, curl /health + static
+      assets 200, drive container-served app.js headless) — PASS (2026-09-25): identical DOM
+      assertions to local run. Container serves byte-identical app.js (68711 bytes).
 - [x] Full backend suite passes (635)
-- [ ] Commit
 
 ## Open Questions
 
@@ -214,5 +220,10 @@ Files: `codeassist/static/app.js`, `codeassist/static/style.css`. Backend unchan
       /tmp/harness/{stub_inline.js,drive_inline.js,gen.py}.
 - [x] Fixed hasFollowUpContent() selector (`.message.assistant` never matched — role
       lives in a child `.message-role`; work steps are nested in .work-block, not
-      direct #messages children). Continue button now shows after done.
+       direct #messages children). Continue button now shows after done.
 - [x] Phase 2 commit (4d26ccf)
+- [x] Smoke test re-verified 2026-09-25: local Chromium headless AND Docker container
+      (codeassist:ui-smoke, byte-identical app.js) both PASS identical assertions
+      (MID_ACTIVE=1, FINAL_HISTORY=2, MAIN_FLOW_ASSISTANTS=1, HAS_FOLLOWUP=true).
+- [ ] Commit + push the re-verification (plan-doc status update only; app.js/style.css
+      unchanged since 4d26ccf/c9574ce).
