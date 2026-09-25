@@ -751,60 +751,23 @@ body {
 }
 
 /* Tool display */
-.tool-panel {
-    max-width: 800px;
-    margin: 12px auto;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.tool-panel-header {
-    padding: 8px 12px;
-    background: var(--bg-tertiary);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--yellow);
-    cursor: pointer;
-    user-select: none;
+/* Inline per-call tool blocks within an assistant turn. Each .tool-call is its
+   own collapsible block (collapsed by default via .tool-call-body { display:none });
+   the stack spaces them through the message flow, attached to the turn's prose so
+   a call correlates with the action that triggered it. See
+   docs/ui-tool-grouping-plan.md. */
+.tool-call-stack {
+    margin-top: 8px;
     display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.tool-panel-header::before {
-    content: '\25B6';
-    font-size: 8px;
-    transition: transform 0.15s;
-}
-
-.tool-panel-header.open::before {
-    transform: rotate(90deg);
-}
-
-.tool-panel-body {
-    display: none;
-}
-
-.tool-panel-body.open {
-    display: block;
-}
-
-.tool-panel-body .tool-call {
-    max-width: none;
-    margin: 0;
-    border: none;
-    border-radius: 0;
-    border-top: 1px solid var(--border);
-}
-
-.tool-panel-body .tool-call:first-child {
-    border-top: none;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .tool-call {
     background: var(--bg-secondary);
     overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 6px;
 }
 
 .tool-call-header {

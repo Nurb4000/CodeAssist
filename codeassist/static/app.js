@@ -56,7 +56,10 @@ let reconnectTimer = null;
 // connection warm so the UI doesn't flash "Disconnected - reconnecting".
 let pingTimer = null;
 const PING_INTERVAL_MS = 20000;
-let currentToolPanel = null;
+// Each assistant turn renders its tool calls inline (collapsed by default) in
+// this per-turn stack, attached to the turn's prose so a call correlates with the
+// action that triggered it. See docs/ui-tool-grouping-plan.md.
+let currentToolStack = null;
 let toolCallCount = 0;
 let currentReasoningEl = null;
 
@@ -466,7 +469,7 @@ async function deleteSession(id) {
 async function loadMessages() {
     const msgs = await api('GET', `/api/sessions/${currentSessionId}/messages`);
     messagesEl.innerHTML = '';
-    currentToolPanel = null;
+    currentToolStack = null;
     toolCallCount = 0;
     currentContentEl = null;
     currentReasoningEl = null;
@@ -485,9 +488,8 @@ async function loadMessages() {
             const hasTools = !!m.tool_calls;
             const hasReasoning = !!m.reasoning_content;
             if (hasTools) {
-                if (!currentToolPanel) {
+                if (!currentToolStack) {
                     startAssistantMessage();
-                    currentToolPanel.style.display = '';
                 }
                 if (hasReasoning) appendReasoningToCurrent(m.reasoning_content);
                 if (hasContent) {
@@ -495,7 +497,7 @@ async function loadMessages() {
                 }
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
                 for (const tc of tcs) {
-                    appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '');
+                    appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '', tc.id);
                 }
             } else if (hasContent) {
                 finalizeToolPanel();
@@ -507,7 +509,7 @@ async function loadMessages() {
                 appendReasoningToCurrent(m.reasoning_content);
             }
         } else if (m.role === 'tool') {
-            updateLastToolResult(m.content);
+            updateToolResult(m.tool_call_id, m.content);
         }
     }
     finalizeToolPanel();
@@ -571,24 +573,19 @@ function startAssistantMessage() {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
+    // Prose first, then an inline stack of per-call collapsible tool blocks so
+    // each call sits directly under the action that triggered it (see
+    // docs/ui-tool-grouping-plan.md). No shared panel wrapper.
     div.innerHTML =
         `<div class="message-role assistant">CodeAssist</div>` +
         `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
-        `<div class="tool-panel"></div><div class="message-content"></div>`;
+        `<div class="message-content"></div>` +
+        `<div class="tool-call-stack"></div>`;
     messagesEl.appendChild(div);
     currentContentEl = div.querySelector('.message-content');
-    currentToolPanel = div.querySelector('.tool-panel');
+    currentToolStack = div.querySelector('.tool-call-stack');
     currentReasoningEl = div.querySelector('.thinking-content');
     toolCallCount = 0;
-    const header = document.createElement('div');
-    header.className = 'tool-panel-header';
-    const panel = currentToolPanel;
-    header.onclick = () => {
-        header.classList.toggle('open');
-        panel.querySelector('.tool-panel-body')?.classList.toggle('open');
-    };
-    currentToolPanel.appendChild(header);
-    currentToolPanel.style.display = 'none';
     return currentContentEl;
 }
 
@@ -637,7 +634,7 @@ function appendReasoningToCurrent(text) {
     applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
 }
 
-function appendToolCall(name, args, output) {
+function appendToolCall(name, args, output, id) {
     let argsStr = args;
     if (typeof args === 'object') {
         argsStr = JSON.stringify(args, null, 2);
@@ -645,37 +642,25 @@ function appendToolCall(name, args, output) {
         try { argsStr = JSON.stringify(JSON.parse(args), null, 2); } catch {}
     }
 
-    // Ensure we have a message and panel
-    if (!currentToolPanel) {
+    // Ensure we have a message and inline stack
+    if (!currentToolStack) {
         startAssistantMessage();
     }
 
-    // Show the panel on first tool call
-    if (toolCallCount === 0) {
-        currentToolPanel.style.display = '';
-    }
-
     toolCallCount++;
-    const header = currentToolPanel.querySelector('.tool-panel-header');
-    header.textContent = `Tool calls (${toolCallCount})`;
-
-    // Ensure body exists
-    let body = currentToolPanel.querySelector('.tool-panel-body');
-    if (!body) {
-        body = document.createElement('div');
-        body.className = 'tool-panel-body';
-        currentToolPanel.appendChild(body);
-    }
+    // Stable id so a later tool_result can update this exact call inline.
+    const callId = id != null ? String(id) : `tc-${toolCallCount}`;
 
     const div = document.createElement('div');
     div.className = 'tool-call';
+    div.dataset.callId = callId;
     div.innerHTML = `
         <div class="tool-call-header">${escapeHtml(name)}</div>
         <div class="tool-call-body">
             <div class="tool-call-args">${escapeHtml(argsStr)}</div>
-            ${output ? `<div class="tool-result-label">Output</div><div class="tool-call-output">${highlightToolOutput(output)}</div>` : ''}
+            ${output ? renderToolResult(output) : ''}
         </div>`;
-    body.appendChild(div);
+    currentToolStack.appendChild(div);
 
     div.querySelector('.tool-call-header').onclick = () => {
         div.querySelector('.tool-call-header').classList.toggle('open');
@@ -683,32 +668,45 @@ function appendToolCall(name, args, output) {
     };
 
     scrollToBottom();
+    return div;
+}
+
+function renderToolResult(output) {
+    const isError = output && output.startsWith('Error');
+    return `<div class="tool-result-label">Output</div><div class="tool-call-output${isError ? ' error' : ''}">${highlightToolOutput(output)}</div>`;
 }
 
 function finalizeToolPanel() {
-    // Don't null out — panel persists in the message DOM
-    // Just reset the tracking variables so next turn creates fresh
-    currentToolPanel = null;
+    // Don't null out — the message (and its inline tool calls) persist in the
+    // DOM. Just reset tracking so the next turn builds fresh inline blocks.
+    currentToolStack = null;
     toolCallCount = 0;
 }
 
-function updateLastToolResult(output) {
-    if (!currentToolPanel) return;
-    const body = currentToolPanel.querySelector('.tool-panel-body');
-    if (!body) return;
-    const toolCalls = body.querySelectorAll('.tool-call');
-    if (toolCalls.length === 0) return;
-    const last = toolCalls[toolCalls.length - 1];
-    const lastBody = last.querySelector('.tool-call-body');
-    if (!lastBody.querySelector('.tool-call-output')) {
-        const label = document.createElement('div');
-        label.className = 'tool-result-label';
-        label.textContent = 'Output';
-        lastBody.appendChild(label);
-        const outputDiv = document.createElement('div');
-        outputDiv.className = 'tool-call-output' + (output && output.startsWith('Error') ? ' error' : '');
-        outputDiv.innerHTML = highlightToolOutput(output);
-        lastBody.appendChild(outputDiv);
+// Update the tool call matching `id` (by stable id, else the most recent one)
+// with a freshly computed result. Keeps live results and history reload in sync.
+function updateToolResult(id, output) {
+    if (!currentToolStack) return;
+    let target = null;
+    if (id != null) {
+        for (const c of currentToolStack.querySelectorAll('.tool-call')) {
+            if (c.dataset.callId === String(id)) { target = c; break; }
+        }
+    }
+    if (!target) target = currentToolStack.querySelector('.tool-call');
+    if (!target) return;
+    let body = target.querySelector('.tool-call-body');
+    if (!body) {
+        body = document.createElement('div');
+        body.className = 'tool-call-body';
+        target.appendChild(body);
+    }
+    if (body.querySelector('.tool-call-output')) {
+        const out = body.querySelector('.tool-call-output');
+        out.innerHTML = highlightToolOutput(output);
+        out.className = 'tool-call-output' + (output && output.startsWith('Error') ? ' error' : '');
+    } else {
+        body.insertAdjacentHTML('beforeend', renderToolResult(output));
     }
 }
 
@@ -1127,11 +1125,11 @@ function connectWS() {
             maybeScrollToBottom();
         } else if (data.type === 'tool_call') {
             hideProgress();
-            appendToolCall(data.name, data.arguments, '');
+            appendToolCall(data.name, data.arguments, '', data.id);
             showProgress(`Executing ${data.name}...`);
         } else if (data.type === 'tool_result') {
             hideProgress();
-            updateLastToolResult(data.output);
+            updateToolResult(data.id, data.output);
             maybeScrollToBottom();
         } else if (data.type === 'context') {
             updateContextUsage(data.tokens, data.usage_pct, data.severity);
@@ -1179,7 +1177,7 @@ function connectWS() {
         } else if (data.type === 'done') {
             hideProgress();
             finalizeToolPanel();
-            if (textBuffer || messagesEl.querySelectorAll('.tool-panel').length > 0) {
+            if (textBuffer || messagesEl.querySelectorAll('.tool-call').length > 0) {
                 showContinueButton();
             }
             // Show clear "done" indicator
