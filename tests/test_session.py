@@ -432,7 +432,7 @@ class TestPinning:
             )
             await db.commit()
 
-        # Re-run init_db -> should migrate 9 -> 10.
+        # Re-run init_db -> migrates 9 all the way to the current schema version.
         await init_db()
 
         async with smod.get_db() as db:
@@ -443,7 +443,8 @@ class TestPinning:
             )
             version = (await vcur.fetchone())[0]
 
-        assert version == "10"
+        # v10 adds reasoning_content; the DB advances past it to the current version.
+        assert version == "11"
         assert "reasoning_content" in cols
 
         # The pre-existing message is preserved (column is nullable, not dropped).

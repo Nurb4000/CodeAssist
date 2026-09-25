@@ -6,7 +6,7 @@ import pytest
 
 from codeassist.agent import (
     CONFIRM_TOOLS,
-    MAX_RESEARCH_NUDGES,
+    MAX_CONTINUATION_NUDGES,
     SESSION_TRUST,
     Agent,
 )
@@ -371,14 +371,18 @@ class TestAgentRun:
         assert last.kwargs["content"] is None
 
 
-class TestAgentResearchOnlyNudge:
-    """The loop must not mark a turn complete when the model stops after only
-    research (read/grep/webfetch/...) with no concrete change. It should nudge
-    the model to continue, then stop once real progress is made or the nudge
-    budget is exhausted."""
+class TestAgentContinuationNudge:
+    """The loop must not mark a turn complete when the model stops after using
+    tools but before the task is actually done. It should nudge the model to
+    continue, then stop once the model gives a final answer or the nudge budget
+    is exhausted. The nudge fires even after productive tools have run (progress
+    does not imply the task is complete)."""
 
     @pytest.mark.asyncio
-    async def test_nudges_then_completes_once_progress_made(self, agent, mock_session):
+    async def test_nudges_after_progress_now_fires(self, agent, mock_session):
+        """A premature stop after productive tools used to be treated as done
+        because the nudge was gated on no progress. It must now be nudged to
+        continue, and the run completes once the model finishes."""
         with patch("codeassist.agent.build_openai_messages") as mock_build, \
              patch("codeassist.agent.check_context_limit") as mock_ctx, \
              patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
@@ -391,32 +395,31 @@ class TestAgentResearchOnlyNudge:
             mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
             agent.config.agent.max_iterations = 20
             agent.config.tools.tool_output_max_tokens = 1000000  # avoid MagicMock compare in truncate_tool_result
-            agent._trust_all = True  # skip confirm dialogs for read/documentation
+            agent._trust_all = True  # skip confirm dialogs for the tools used
             agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
             agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
 
-            async def turn_research():
-                yield ToolCall(id="c1", name="read", arguments={"path": "/tmp/x"})
+            async def turn_work():
+                yield ToolCall(id="c1", name="shell", arguments={"command": "pytest"})
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
-            async def turn_summary():
-                yield TextDelta("That's all I found.")
+            async def turn_premature():
+                yield TextDelta("All tests pass. Now let me probe edge cases.")
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
-            async def turn_document():
-                yield ToolCall(id="c2", name="documentation", arguments={})
+            async def turn_probe():
+                yield ToolCall(id="c2", name="shell", arguments={"command": "python repro.py"})
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
-            async def turn_done():
-                yield TextDelta("Wrote the docs.")
+            async def turn_final():
+                yield TextDelta("Found 3 FORTH semantics bugs.")
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
-            turns = [
-                turn_research(),
-                turn_summary(),
-                turn_document(),
-                turn_done(),
-            ]
+            async def turn_confirm():
+                yield TextDelta("Task complete.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            turns = [turn_work(), turn_premature(), turn_probe(), turn_final(), turn_confirm()]
             calls = {"n": 0}
 
             async def fake_stream(messages, openai_tools):
@@ -431,13 +434,13 @@ class TestAgentResearchOnlyNudge:
             async for event in agent.run("implement X"):
                 events.append(event)
 
-            # research -> summary(nudge#1) -> document(progress) -> done
-            assert calls["n"] == 4
-            assert agent._research_only_nudges == 1
-            assert agent._run_progress_made is True
+            # work -> premature(nudge#1) -> probe -> final(nudge#2) -> confirm(done)
+            assert calls["n"] == 5
+            assert agent._continuation_nudges == 2
             assert agent._run_used_tools is True
             types = [e.type for e in events]
             assert "done" in types
+            assert "incomplete" not in types
             assert "error" not in types
 
     @pytest.mark.asyncio
@@ -453,7 +456,7 @@ class TestAgentResearchOnlyNudge:
             }
             mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
             agent.config.agent.max_iterations = 20
-            agent.config.tools.tool_output_max_tokens = 1000000  # avoid MagicMock compare in truncate_tool_result
+            agent.config.tools.tool_output_max_tokens = 1000000
             agent._trust_all = True  # skip confirm dialogs for grep
             agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
             agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
@@ -468,16 +471,16 @@ class TestAgentResearchOnlyNudge:
                 async def gen():
                     # Distinct text each time so the repetition guard (3 identical
                     # responses) does not fire before the nudge budget is spent.
-                    yield TextDelta(f"Still researching — finding {i}.")
+                    yield TextDelta(f"Still going — check {i}.")
                     yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
                 return gen()
 
             # Alternate research/summary repeatedly. Each summary is preceded by
             # a research turn (tools used), so the model keeps getting pushed
-            # until the nudge budget (MAX_RESEARCH_NUDGES) is spent, at which
+            # until the nudge budget (MAX_CONTINUATION_NUDGES) is spent, at which
             # point the run is flagged incomplete rather than "done".
             turns = []
-            for i in range(MAX_RESEARCH_NUDGES + 1):
+            for i in range(MAX_CONTINUATION_NUDGES + 1):
                 turns.append(make_research(i))
                 turns.append(make_summary(i))
             calls = {"n": 0}
@@ -494,20 +497,21 @@ class TestAgentResearchOnlyNudge:
             async for event in agent.run("implement X"):
                 events.append(event)
 
-            # research/summary x6 = 12 stream calls; 6 research-stops, the last
-            # one exhausting the 5-nudge budget and emitting "incomplete".
+            # research/summary x6 = 12 stream calls; the last summary exhausts the
+            # 5-nudge budget and emits "incomplete" instead of finishing.
             assert calls["n"] == 12
-            assert agent._research_only_nudges == MAX_RESEARCH_NUDGES
-            assert agent._run_progress_made is False
+            assert agent._continuation_nudges == MAX_CONTINUATION_NUDGES
+            assert agent._run_used_tools is True
             types = [e.type for e in events]
             assert "incomplete" in types
             assert "done" not in types
 
     @pytest.mark.asyncio
     async def test_accepts_plain_answer_after_first_nudge(self, agent, mock_session):
-        """A model that answers (no further tools) after the first, gentle nudge
-        is respected — the loop finishes normally rather than being forced to
-        keep working. This is what lets a legitimate research-only question end."""
+        """A model that gives a final answer (no further tools) after the first,
+        gentle nudge is respected — the loop finishes normally rather than being
+        forced to keep working. This is what lets a legitimate research-only
+        question end."""
         with patch("codeassist.agent.build_openai_messages") as mock_build, \
              patch("codeassist.agent.check_context_limit") as mock_ctx, \
              patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
@@ -528,11 +532,15 @@ class TestAgentResearchOnlyNudge:
                 yield ToolCall(id="c1", name="read", arguments={"path": "/tmp/x"})
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
+            async def turn_summary():
+                yield TextDelta("That's all I found.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
             async def turn_answer():
                 yield TextDelta("The file contains a TODO list.")
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
-            turns = [turn_research(), turn_answer()]
+            turns = [turn_research(), turn_summary(), turn_answer()]
             calls = {"n": 0}
 
             async def fake_stream(messages, openai_tools):
@@ -547,10 +555,177 @@ class TestAgentResearchOnlyNudge:
             async for event in agent.run("implement X"):
                 events.append(event)
 
-            # One gentle nudge, model answers without doing more work -> done.
-            assert calls["n"] == 2
-            assert agent._research_only_nudges == 1
+            # research -> summary(nudge#1, escape hatch) -> answer(final, done).
+            assert calls["n"] == 3
+            assert agent._continuation_nudges == 1
             assert agent._since_nudge_tools is False
             types = [e.type for e in events]
             assert "done" in types
             assert "incomplete" not in types
+            assert "incomplete" not in types
+
+
+class TestAgentStepLimit:
+    """When an agent reaches its per-agent step budget, tools are disabled and
+    the model is asked for a structured wrap-up (what was done, what remains,
+    what to do next) instead of stopping abruptly or declaring a false 'done'.
+    This mirrors opencode's per-agent 'steps' limit."""
+
+    @pytest.mark.asyncio
+    async def test_last_step_disables_tools_and_injects_wrapup(self, agent, mock_session):
+        """On the final allowed step the loop passes tools=None and appends the
+        maximum-steps wrap-up prompt; the model's summary becomes the final
+        output and the run ends with 'done'."""
+        agent.max_steps = 2  # wrap up on the 2nd turn
+        agent.config.agent.max_iterations = 10
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "implement X"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            async def turn_work():
+                yield ToolCall(id="c1", name="shell", arguments={"command": "pytest"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            async def turn_wrapup():
+                yield TextDelta("Summary: 2 of 3 tasks done. Remaining: probe edge cases.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            turns = [turn_work(), turn_wrapup()]
+            calls = {"n": 0}
+            seen = {}
+
+            async def fake_stream(messages, openai_tools):
+                g = turns[calls["n"]]
+                seen["openai_tools"] = openai_tools
+                users = [m for m in messages if m.get("role") == "user"]
+                seen["last_user"] = users[-1]["content"] if users else None
+                calls["n"] += 1
+                async for ev in g:
+                    yield ev
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("implement X"):
+                events.append(event)
+
+            assert calls["n"] == 2
+            # Tools disabled on the wrap-up turn and the prompt injected.
+            assert seen["openai_tools"] is None
+            assert "MAXIMUM STEPS REACHED" in (seen["last_user"] or "")
+            types = [e.type for e in events]
+            assert "done" in types
+            assert "error" not in types
+            assert "incomplete" not in types
+
+    @pytest.mark.asyncio
+    async def test_steps_fall_back_to_max_iterations_when_unset(self, agent, mock_session):
+        """With no per-agent step budget the wrap-up fires on the last global
+        iteration, still disabling tools."""
+        agent.max_steps = None
+        agent.config.agent.max_iterations = 2
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "implement X"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            async def turn_work():
+                yield ToolCall(id="c1", name="shell", arguments={"command": "pytest"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            async def turn_wrapup():
+                yield TextDelta("Final summary after hitting the cap.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            turns = [turn_work(), turn_wrapup()]
+            calls = {"n": 0}
+            last_tools = {}
+
+            async def fake_stream(messages, openai_tools):
+                g = turns[calls["n"]]
+                last_tools["v"] = openai_tools
+                calls["n"] += 1
+                async for ev in g:
+                    yield ev
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("implement X"):
+                events.append(event)
+
+            assert calls["n"] == 2
+            assert last_tools["v"] is None
+            types = [e.type for e in events]
+            assert "done" in types
+            assert "error" not in types
+
+    @pytest.mark.asyncio
+    async def test_steps_capped_by_max_iterations(self, agent, mock_session):
+        """A per-agent budget larger than the global cap is clamped to the cap."""
+        agent.max_steps = 999
+        agent.config.agent.max_iterations = 1
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "implement X"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            async def turn_wrapup():
+                yield TextDelta("Summary on the very first (and last) step.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            turns = [turn_wrapup()]
+            calls = {"n": 0}
+            last_tools = {}
+
+            async def fake_stream(messages, openai_tools):
+                g = turns[calls["n"]]
+                last_tools["v"] = openai_tools
+                calls["n"] += 1
+                async for ev in g:
+                    yield ev
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("implement X"):
+                events.append(event)
+
+            assert calls["n"] == 1
+            assert last_tools["v"] is None
+            types = [e.type for e in events]
+            assert "done" in types

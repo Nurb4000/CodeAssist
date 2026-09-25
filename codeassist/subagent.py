@@ -140,7 +140,7 @@ class SubagentManager:
 
             # Run the agent
             from codeassist.agent import Agent
-            sub_agent = Agent(config, child_session, tools_registry, system_prompt)
+            sub_agent = Agent(config, child_session, tools_registry, system_prompt, max_steps=agent_config.steps)
 
             # Inject the prompt as a user message and run
             result_parts = []

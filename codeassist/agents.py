@@ -84,6 +84,7 @@ class AgentConfig:
         instructions: str | None = None,
         model: str | None = None,
         max_iterations: int | None = None,
+        steps: int | None = None,
         permissions: dict[str, list[str]] | None = None,
     ):
         self.name = name
@@ -91,6 +92,10 @@ class AgentConfig:
         self.instructions = instructions or ""
         self.model = model
         self.max_iterations = max_iterations
+        # Graceful step budget: when the agent reaches this many tool-use turns it
+        # disables tools and asks the model for a structured summary of what remains
+        # (opencode's per-agent "steps"). None falls back to the global cap.
+        self.steps = steps
         self.permissions = self._parse_permissions(permissions or {})
 
     def _parse_permissions(self, perm_config: dict) -> AgentPermissions:
@@ -112,6 +117,7 @@ class AgentConfig:
             "instructions": self.instructions or "",
             "model": self.model,
             "max_iterations": self.max_iterations,
+            "steps": self.steps,
         }
 
     def get_system_prompt(self) -> str:
@@ -156,6 +162,7 @@ class AgentManager:
                     instructions=db_agent.get("instructions"),
                     model=db_agent.get("model"),
                     max_iterations=db_agent.get("max_iterations"),
+                    steps=db_agent.get("steps"),
                     permissions=json.loads(db_agent.get("permissions", "{}")) if db_agent.get("permissions") else {},
                 )
                 self._agents[db_agent["name"]] = config
@@ -167,6 +174,7 @@ class AgentManager:
             self._agents["default"] = AgentConfig(
                 name="CodeAssist",
                 description="Default development agent with full tool access.",
+                steps=40,
                 permissions={
                     "read": ["allow"],
                     "write": ["confirm"],
@@ -186,6 +194,7 @@ class AgentManager:
                 name="Research",
                 description="Read-only research agent. Gathers information without modifying code. "
                            "Use for answering questions, finding documentation, and troubleshooting.",
+                steps=25,
                 instructions=(
                     "You are a research assistant. You can read files, search code, and browse the web, "
                     "but you MUST NOT modify any files. When you need to share findings, present them "
@@ -212,6 +221,7 @@ class AgentManager:
                 name="Review",
                 description="Code review agent. Analyzes code for issues, suggests improvements, "
                            "and produces structured reviews. Read-only — never modifies files.",
+                steps=25,
                 instructions=(
                     "You are a code review assistant. When reviewing code:\n"
                     "1. Read the target files and understand the changes\n"
@@ -241,6 +251,7 @@ class AgentManager:
             self._agents["build"] = AgentConfig(
                 name="Build",
                 description="Primary build agent with full tool access. Executes plans, writes code, runs tests.",
+                steps=60,
                 instructions=(
                     "You are the build agent. You have full access to all tools. "
                     "Your job is to execute tasks, write code, and implement features. "
@@ -265,6 +276,7 @@ class AgentManager:
             self._agents["general"] = AgentConfig(
                 name="General",
                 description="General-purpose subagent for multi-step task execution. Has full tool access but cannot spawn subagents.",
+                steps=40,
                 instructions=(
                     "You are a general-purpose subagent. Execute the given task thoroughly. "
                     "You have access to most tools but CANNOT use 'task' or 'todowrite' — "
@@ -289,6 +301,7 @@ class AgentManager:
             self._agents["explore"] = AgentConfig(
                 name="Explore",
                 description="Fast read-only subagent for codebase exploration. Use for parallel discovery tasks.",
+                steps=15,
                 instructions=(
                     "You are an explore subagent. Your job is to quickly gather information about the codebase. "
                     "You can ONLY use read-only tools: read, glob, grep, directory, symbol_search, lsp. "
@@ -343,6 +356,7 @@ class AgentManager:
                 "instructions": config.instructions,
                 "model": config.model,
                 "max_iterations": config.max_iterations,
+                "steps": config.steps,
                 "builtin": key in BUILTIN_AGENT_KEYS,
             }
             for key, config in self._agents.items()
@@ -365,6 +379,7 @@ class AgentManager:
                 instructions=kwargs.get("instructions"),
                 model=kwargs.get("model"),
                 max_iterations=kwargs.get("max_iterations"),
+                steps=kwargs.get("steps"),
                 permissions=kwargs.get("permissions", {}),
             )
         except Exception as e:  # noqa: BLE001
@@ -392,7 +407,7 @@ class AgentManager:
         if name not in self._agents:
             raise ValueError(f"Agent '{name}' not found")
         config = self._agents[name]
-        allowed = {"description", "instructions", "model", "max_iterations"}
+        allowed = {"description", "instructions", "model", "max_iterations", "steps"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         for key, value in updates.items():
             setattr(config, key, value)

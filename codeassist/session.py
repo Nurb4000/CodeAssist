@@ -180,6 +180,10 @@ async def init_db():
             await _add_v10_tables(db)
             current_version = 10
 
+        if current_version < 11:
+            await _add_v11_tables(db)
+            current_version = 11
+
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
             (str(current_version),)
@@ -225,6 +229,7 @@ async def _add_v2_tables(db):
             instructions TEXT,
             model TEXT,
             max_iterations INTEGER,
+            steps INTEGER,
             permissions TEXT,
             enabled INTEGER DEFAULT 1,
             created_at TEXT,
@@ -566,6 +571,15 @@ async def _add_v10_tables(db):
     rows = await cursor.fetchall()
     if not any(r["name"] == "reasoning_content" for r in rows):
         await db.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT")
+        await db.commit()
+
+
+async def _add_v11_tables(db):
+    """Add per-agent step limit (graceful step-budget wrap-up)."""
+    cursor = await db.execute("PRAGMA table_info(agents)")
+    rows = await cursor.fetchall()
+    if not any(r["name"] == "steps" for r in rows):
+        await db.execute("ALTER TABLE agents ADD COLUMN steps INTEGER")
         await db.commit()
 
 
@@ -1004,15 +1018,16 @@ class Agent:
         instructions: str | None = None,
         model: str | None = None,
         max_iterations: int | None = None,
+        steps: int | None = None,
         permissions: dict[str, list[str]] | None = None,
     ) -> "Agent":
         aid = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO agents (id, name, description, instructions, model, max_iterations, permissions, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (aid, name, description, instructions, model, max_iterations, json.dumps(permissions or {}), now, now),
+                "INSERT INTO agents (id, name, description, instructions, model, max_iterations, steps, permissions, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (aid, name, description, instructions, model, max_iterations, steps, json.dumps(permissions or {}), now, now),
             )
             await db.commit()
         return cls(aid)
@@ -1050,7 +1065,7 @@ class Agent:
                 return dict(row)
         return {}
 
-    _ALLOWED_UPDATE_FIELDS = {"name", "description", "instructions", "model", "max_iterations", "permissions"}  # noqa: RUF012
+    _ALLOWED_UPDATE_FIELDS = {"name", "description", "instructions", "model", "max_iterations", "steps", "permissions"}  # noqa: RUF012
 
     async def update(self, **kwargs):
         now = datetime.now(UTC).isoformat()

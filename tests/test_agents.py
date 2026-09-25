@@ -157,6 +157,18 @@ class TestAgentConfig:
         
         assert config.model == "gpt-4o-mini"
 
+    def test_agent_steps_defaults_to_none(self):
+        """Without a step budget the agent falls back to the global cap."""
+        config = AgentConfig(name="stepless-agent")
+        assert config.steps is None
+
+    def test_agent_steps_serialized_in_to_dict(self):
+        """The per-agent step budget is exposed via to_dict so it can be edited
+        and persisted through the API."""
+        config = AgentConfig(name="bounded-agent", steps=12)
+        assert config.steps == 12
+        assert config.to_dict()["steps"] == 12
+
 
 class TestAgentManager:
     """Test agent manager."""
@@ -191,6 +203,25 @@ class TestAgentManager:
         agents = manager.list_agents()
         names = [a["name"] for a in agents]
         assert "custom-agent" in names
+
+    @pytest.mark.asyncio
+    async def test_builtin_agents_have_default_step_budgets(self):
+        """Built-in agents seed with a per-agent step budget so each mode wraps
+        up at a sensible point (read-only modes earlier, build later)."""
+        manager = AgentManager()
+        await manager.initialize()
+
+        by_key = {key: cfg.steps for key, cfg in manager._agents.items()}
+        # The six primary modes each seed with an integer step budget.
+        assert set(by_key) >= {"default", "research", "review", "build", "general", "explore"}
+        for key in {"default", "research", "review", "build", "general", "explore"}:
+            assert isinstance(by_key[key], int), f"{key} missing a step budget"
+        # Read-only modes get a smaller budget than the long-running build agent.
+        assert by_key["explore"] < by_key["build"]
+        assert by_key["research"] < by_key["build"]
+        # The budget surfaces through list_agents() too.
+        listed = {a["id"]: a["steps"] for a in manager.list_agents()}
+        assert listed["build"] == by_key["build"]
 
     @pytest.mark.asyncio
     async def test_get_agent(self):

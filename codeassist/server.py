@@ -632,7 +632,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     if task_tool and hasattr(task_tool, "configure"):
         task_tool.configure(session_id, cfg, tools)
 
-    agent = Agent(cfg, session, tools, system_prompt)
+    agent = Agent(cfg, session, tools, system_prompt, max_steps=agent_config_obj.steps)
     agent_task: asyncio.Task | None = None
 
     # Tell the client which agent is active for this session (agent switcher).

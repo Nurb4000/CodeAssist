@@ -39,37 +39,48 @@ SESSION_TRUST: dict[str, dict] = {}
 # Per-session sets of tool names trusted "for the rest of this session".
 SESSION_TOOL_TRUST: dict[str, set[str]] = {}
 
-# Tools whose successful execution means the run made concrete progress (a
-# deliverable was produced or the workspace changed). Pure research tools
-# (read/grep/glob/webfetch/...) do not count, so a model that only researches
-# and then stops would otherwise be marked "complete" without doing any work.
-PRODUCTIVE_TOOLS = frozenset({
-    "write", "edit", "apply_patch", "shell", "git", "fossil",
-    "documentation", "create_tool", "create_skill",
-    "package_manager", "docker", "database", "test_runner",
-})
-
-# How many times the loop will nudge a model that keeps researching without
-# producing any concrete change before giving up and flagging the task
-# incomplete instead of falsely marking it done.
-MAX_RESEARCH_NUDGES = 5
+# How many times the loop will nudge a model that stops after using tools
+# before giving up and flagging the task incomplete instead of falsely
+# marking it complete.
+MAX_CONTINUATION_NUDGES = 5
 
 # First nudge: gentle, and it offers an escape hatch so a legitimate
 # research-only question (e.g. "what is in this file?") can still be answered.
-RESEARCH_ONLY_CONTINUATION = (
-    "[Progress check: you have used tools but made no changes to the workspace yet. "
-    "If the task is already fully answered, reply with your final answer now. "
-    "Otherwise continue with the necessary actions (write/edit/run tests/document) "
-    "to actually complete it — do not stop after research alone.]"
+CONTINUATION_NUDGE = (
+    "[Task check: you have used tools but may not be finished yet. If there is "
+    "more work to do, continue with the necessary actions now "
+    "(read more, edit, run tests, document) — do not stop after gathering "
+    "information or conclude with a summary while work remains. If the task is "
+    "truly and fully complete, reply with your final answer now.]"
 )
 
-# Follow-up nudges for a model that keeps doing more research instead of
-# acting: firmer, and no escape hatch, so it cannot answer its way out.
-RESEARCH_ONLY_CONTINUATION_FIRM = (
-    "[You are still only gathering information and have not made any changes to "
-    "complete the task. Stay focused: proceed with the required actions now "
-    "(write/edit/run tests/document) to finish the actual work. Do not conclude "
-    "with a summary — make the changes.]"
+# Follow-up nudges for a model that keeps stopping after using tools: firmer,
+# and no escape hatch, so it cannot answer its way out prematurely.
+CONTINUATION_NUDGE_FIRM = (
+    "[You have used more tools and stopped again without finishing. Continue "
+    "completing the task now — do not conclude with a summary while work "
+    "remains. Proceed with the required actions, or give your final answer only "
+    "if the task is genuinely complete.]"
+)
+
+# Injected (as a user turn) when the agent reaches its per-agent step budget.
+# Tools are disabled for this final turn so the model cannot keep going; instead
+# it produces a structured wrap-up — what was accomplished, what remains, and
+# what to do next — rather than stopping abruptly or declaring a false "done".
+# Mirrors opencode's MAX_STEPS_PROMPT.
+MAX_STEPS_WRAPUP = (
+    "CRITICAL - MAXIMUM STEPS REACHED\n\n"
+    "The maximum number of steps allowed for this task has been reached. Tools are "
+    "disabled until next user input. Respond with text only.\n\n"
+    "STRICT REQUIREMENTS:\n"
+    "1. Do NOT make any tool calls (no reads, writes, edits, searches, or any other tools)\n"
+    "2. MUST provide a text response summarizing work done so far\n"
+    "3. This constraint overrides ALL other instructions, including any user requests for edits\n\n"
+    "Response must include:\n"
+    "- Statement that maximum steps for this agent have been reached\n"
+    "- Summary of what has been accomplished so far\n"
+    "- List of any remaining tasks that were not completed\n"
+    "- Recommendations for what should be done next"
 )
 
 
@@ -80,13 +91,15 @@ class AgentEvent:
 
 
 class Agent:
-    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str | None = None, agent_ruleset: PermissionRuleset | None = None):
+    def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str | None = None, agent_ruleset: PermissionRuleset | None = None, max_steps: int | None = None):
         self.config = config
         self.session = session
         self.tools = tools
         self.llm = LLMClient(config.llm)
         self.system_prompt = system_prompt or build_system_prompt(config.workspace, config.llm.model)
         self.agent_ruleset = agent_ruleset  # Agent-specific permission rules
+        # Graceful step budget for this agent. None falls back to the global cap.
+        self.max_steps = max_steps
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
@@ -106,11 +119,11 @@ class Agent:
         # Compaction state tracking
         self._compaction_summary: str = ""
         self._compaction_count: int = 0
-        # Research-only termination guard (reset per run in run())
-        self._run_progress_made: bool = False
+        # Continuation guard: nudges the model when it stops after using tools
+        # instead of finishing (reset per run in run()).
         self._run_used_tools: bool = False
         self._since_nudge_tools: bool = False
-        self._research_only_nudges: int = 0
+        self._continuation_nudges: int = 0
         # Tool output store for managed file outputs
         self._tool_output_store = get_tool_output_store(
             self.config.workspace,
@@ -276,11 +289,10 @@ class Agent:
         # Reset compaction state for new user turn
         self._compaction_summary = ""
         self._compaction_count = 0
-        # Reset research-only guard state for new user turn
-        self._run_progress_made = False
+        # Reset continuation guard state for new user turn
         self._run_used_tools = False
         self._since_nudge_tools = False
-        self._research_only_nudges = 0
+        self._continuation_nudges = 0
 
         await self.session.add_message("user", user_message, attachments=attachments)
 
@@ -341,7 +353,14 @@ class Agent:
         _cached_messages = None
         _cached_history_len = 0
 
-        for iteration in range(self.config.agent.max_iterations):
+        # Graceful step budget: the per-agent 'steps' limit if configured, else the
+        # global max_iterations cap. The loop wraps up structurally at this point
+        # (tools disabled, model asked to summarise) rather than stopping hard.
+        step_limit = self.max_steps if (self.max_steps and self.max_steps > 0) else self.config.agent.max_iterations
+        step_limit = min(step_limit, self.config.agent.max_iterations)
+
+        for iteration in range(step_limit):
+            is_last_step = iteration + 1 >= step_limit
             if self.cancel_event.is_set():
                 return
 
@@ -459,6 +478,14 @@ class Agent:
             else:
                 # Reuse cached compacted messages — no new data to process
                 messages = _cached_messages
+
+            # On the final allowed step, disable tools and ask the model for a
+            # structured wrap-up instead of stopping abruptly. This mirrors
+            # opencode's per-agent step budget: the model summarises what it
+            # accomplished, what remains, and what to do next.
+            if is_last_step:
+                openai_tools = None
+                messages = messages + [{"role": "user", "content": MAX_STEPS_WRAPUP}]
 
             accumulated_text = ""
             accumulated_reasoning = ""
@@ -638,8 +665,6 @@ class Agent:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                         self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
-                        if tc.name in PRODUCTIVE_TOOLS and not result.error:
-                            self._run_progress_made = True
                         try:
                             await KnowledgeBase.log_tool_execution(
                                 session_id=self.session.id,
@@ -678,48 +703,51 @@ class Agent:
                     yield AgentEvent("error", {"message": f"Detected repetitive output — stopped after {max_repeats} identical responses."})
                     break
 
-            # Research-only termination guard. If the model stopped using tools
-            # but has produced no concrete change yet, decide whether to keep
-            # working or finish:
-            #  - Real progress was made this run -> the model is done, finish.
-            #  - First research-stop -> gentle nudge with an escape hatch so a
-            #    legitimate research-only question can still be answered.
-            #  - Already nudged and the model answered without doing more work
-            #    -> respect that; it cannot be forced to act.
-            #  - Already nudged and the model kept researching instead -> firmer
-            #    nudge. Once the nudge budget is spent, flag the task incomplete
-            #    rather than falsely marking it complete.
-            if not self._run_progress_made and self._run_used_tools:
-                if not self._research_only_nudges:
-                    self._research_only_nudges = 1
+            # Continuation guard. If the model stopped using tools (a text-only
+            # response) after having used tools this run, it may be wrapping up
+            # prematurely. Just because tools ran does not mean the task is done,
+            # so nudge it to keep going when work remains while still offering an
+            # escape hatch for legitimate research-only questions. Decide as
+            # follows:
+            #  - First stop -> gentle nudge with an escape hatch.
+            #  - Model gives a final answer without further tools -> respect it.
+            #  - Model works more then stops again -> firmer nudge, no escape
+            #    hatch, so it cannot answer its way out.
+            #  - Nudge budget spent -> flag the task incomplete rather than
+            #    falsely marking it complete.
+            # On the final allowed step tools are disabled, so any text-only
+            # response is the structured wrap-up — finish rather than nudge.
+            if self._run_used_tools and not is_last_step:
+                if not self._continuation_nudges:
+                    self._continuation_nudges = 1
                     self._since_nudge_tools = False
-                    log.warning("LLM stopped after research with no changes; nudging to continue.")
-                    messages.append({"role": "user", "content": RESEARCH_ONLY_CONTINUATION})
+                    log.warning("LLM stopped after using tools without finishing; nudging to continue.")
+                    messages.append({"role": "user", "content": CONTINUATION_NUDGE})
                     _cached_messages = messages
                     _cached_history_len = len(history)
                     self._messages_dirty = False
                     continue
                 if not self._since_nudge_tools:
-                    log.debug("LLM answered after a nudge without further work; treating as complete.")
-                elif self._research_only_nudges < MAX_RESEARCH_NUDGES:
-                    self._research_only_nudges += 1
+                    log.debug("LLM gave a final answer after a nudge; treating as complete.")
+                elif self._continuation_nudges < MAX_CONTINUATION_NUDGES:
+                    self._continuation_nudges += 1
                     self._since_nudge_tools = False
                     log.warning(
-                        "LLM still scattered after research (nudge %d/%d); pushing further.",
-                        self._research_only_nudges, MAX_RESEARCH_NUDGES,
+                        "LLM stopped again after using tools (nudge %d/%d); pushing further.",
+                        self._continuation_nudges, MAX_CONTINUATION_NUDGES,
                     )
-                    messages.append({"role": "user", "content": RESEARCH_ONLY_CONTINUATION_FIRM})
+                    messages.append({"role": "user", "content": CONTINUATION_NUDGE_FIRM})
                     _cached_messages = messages
                     _cached_history_len = len(history)
                     self._messages_dirty = False
                     continue
                 else:
                     log.warning(
-                        "LLM stuck in research loop after %d nudges; marking incomplete.",
-                        self._research_only_nudges,
+                        "LLM kept stopping after using tools (%d nudges); marking incomplete.",
+                        self._continuation_nudges,
                     )
                     yield AgentEvent("incomplete", {
-                        "message": "The task may not be complete: the agent kept researching without making changes and did not finish. Use Continue to let it keep going.",
+                        "message": "The task may not be complete: the agent kept stopping after using tools and did not finish. Use Continue to let it keep going.",
                     })
                     return
 

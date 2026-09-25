@@ -24,6 +24,7 @@ async def create_agent(body: dict):
         instructions=body.get("instructions"),
         model=body.get("model"),
         max_iterations=body.get("max_iterations"),
+        steps=body.get("steps"),
         permissions=body.get("permissions", {}),
     )
     return agent.to_dict() if hasattr(agent, 'to_dict') else {"name": name}
@@ -42,6 +43,7 @@ async def update_agent(agent_name: str, body: dict):
             instructions=body.get("instructions"),
             model=body.get("model"),
             max_iterations=body.get("max_iterations"),
+            steps=body.get("steps"),
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
