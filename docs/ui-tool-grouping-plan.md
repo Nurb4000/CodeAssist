@@ -80,9 +80,46 @@ Backend (`agent.py`, `session.py`, `tokens.py`, `prompts.py`) — **no changes.*
 5. **`loadMessages()`** — reload path: build each assistant turn with inline
    `.tool-call` blocks (collapsed), then apply `tool` results by id. Reuse the same
    `appendToolCall`/`updateToolResult` helpers so live and persisted render identically.
-6. **`style.css`** — collapse `.tool-panel`/`.tool-panel-body`/`.tool-panel-header`
+6. **`style.css`** — collapse `.tool-panel*`/`.tool-panel-body`/`.tool-panel-header`
    rules (or keep for fallback). Ensure `.tool-call` / `.tool-call-body` default to
    collapsed; add `.tool-call-stack` spacing if needed.
+
+### Phase 2 architecture (confirmed approach)
+
+**State (app.js top):** `pendingUnit` (detached `.message` streaming a turn's leading
+prose/reasoning live), `pendingProseBuf`, `pendingReasonBuf`, `activeStepEl` (committed
+work step in the active zone), `ranTools` (did the previous turn use tools? → new-step
+boundary), `workStepCount`, `workBlockEl`/`workActiveEl`/`workHistoryEl`, `lastUserEl`.
+
+**Turn model:** a *work step* = one tool-using LLM turn. Leading prose/reasoning stream
+into a detached `pendingUnit`; the first `tool_call` **commits** it into the active zone
+(`commitPendingUnit`). Prose arriving after tools ran (`ranTools`) closes the active step
+(moves to collapsed history) and starts a new pending unit. Consecutive tool-only turns
+merge into the open step (no prose boundary). A final prose-only turn is **flushed**
+(`flushPendingToMainFlow`) as a normal assistant message in the main flow.
+
+**Work block** (lazy, inserted after `lastUserEl`): header `Work (N) ▸` toggles history
+collapse only; `.work-active` always visible (the live step); `.work-history` holds
+completed, collapsed steps. Each `.work-step` = header `▸ Step N` (toggles its own open)
++ content(thinking + prose + `.tool-call-stack`).
+
+**Key handlers:** `handleProse` (buffer/stream into pendingUnit, close on `ranTools`),
+`onToolCall` (`ranTools=true`; commit pending if no active step; append call),
+`onToolResult` (update by id in active/pending step), `onReasoning` (stream into
+pendingUnit), `commitPendingUnit`, `closeActiveStep`, `flushPendingToMainFlow`,
+`finalizeState` (replaces `finalizeToolPanel`).
+
+**Reload:** consecutive assistant-with-tools turns merge into one work step;
+assistant-without-tools turns flush to main flow; `tool` results match by id.
+
+**Ordering:** work block inserted right after the user message; main-flow messages
+(summaries/errors/done) appended to end of `messagesEl`. Safe because work steps always
+commit before the final summary flushes; a pre-work error ends the run (no work block).
+
+**No backend changes.** Frontend has no DOM test harness — validate with `node --check`
++ manual browser smoke test (stream a multi-step turn; confirm active step is live +
+expanded, completes → collapsed history, final summary lands in main flow; reload
+reconstructs identically).
 
 **Ordering note:** place tool-call blocks **after** the prose within the message so
 the reader sees "what the model said" → "what it did", matching opencode's flow.
@@ -108,3 +145,74 @@ the reader sees "what the model said" → "what it did", matching opencode's flo
 - Should parallel tool calls within one turn render in call order or grouped?
   (Default: arrival/call order, inline.)
 - Any concern about very long tool-call stacks visually? (Collapse-by-default mitigates.)
+
+---
+
+## Phase 2: Work Block (confirmed 2026-09-25)
+
+Separate **work** (tool-using steps) from **results** (summaries/final prose). Work
+steps live in a dedicated collapsible **Work** block under the user message; results
+stay in the main flow. Lets the user watch the current step without being buried by
+past steps.
+
+### Design (confirmed)
+
+- **Work block** = collapsible section under the user prompt, split into two zones:
+  - **Active zone** (top): the step currently executing, shown **expanded** so you
+    can watch it live. **Always visible while a run is active**, even when the
+    block is collapsed. (Confirmed: active step stays visible; only completed steps
+    hide behind the toggle.)
+  - **History zone** (below): completed work steps, **collapsed by default** — the
+    accumulator you don't have to look at unless you want to.
+- A **step** = one LLM turn that *uses tools* (its prose + tool calls grouped as one
+  unit). Pure-prose turns (summaries, final answer) are NOT work steps — they render
+  in the main flow and never move into the Work block.
+- On completion, a step's DOM unit **moves** from the active zone into the collapsed
+  history zone; the next tool-using turn takes over the active zone.
+- Reload / past sessions: no live run → all work steps collapsed in history, active
+  zone empty. Live "watch it work" only happens during an active run.
+
+### Step-boundary detection (streaming)
+
+Track whether the current step has executed tools since its last prose (`ranTools`).
+- `text_delta`: if `ranTools` is true → a **new step** is starting. Close the active
+  step (collapse + move to history), start a fresh active step, clear `ranTools`.
+  Else append prose to the current active step.
+- `tool_call`: set `ranTools = true`; render the call into the active step's work area.
+- `tool_result`: update the matching call by id in the active step (live).
+- A final prose-only turn (no tools) → renders in main flow, not the Work block.
+
+### Implementation map
+
+Files: `codeassist/static/app.js`, `codeassist/static/style.css`. Backend unchanged.
+
+1. Add `.work-block` container (`.work-active` + `.work-history`) to the user message
+   area, created when the first tool-using step begins (lazy — no block for prose-only
+   sessions). Toggle header "Work (N)" collapses history; active step stays visible.
+2. Introduce `activeStepEl` (current work-step DOM) + `ranTools` flag + `workStepCount`.
+3. Rework `ws.onmessage`:
+   - `text_delta` → new-step close logic (see above); prose for work steps goes into
+     `activeStepEl.prose`, prose for non-work turns goes to main flow.
+   - `tool_call` → ensure an active work step exists (create one if starting fresh),
+     append the call there.
+   - `tool_result` → `updateToolResult` targets `activeStepEl`'s stack.
+4. On step close: move `activeStepEl` from active zone to history zone, collapse it.
+5. `loadMessages()`: group consecutive tool-using assistant turns into Work-block
+   steps (collapsed), prose-only turns into main flow. Reuse `appendToolCall` /
+   `updateToolResult`. Live == persisted.
+6. CSS: `.work-block`, `.work-active`, `.work-history`, active-vs-collapsed states.
+
+### Progress Tracker
+
+- [x] Phase 1 done (inline per-call + one-line preview) — see above
+- [x] Phase 2 design documented (this section)
+- [x] Phase 2 implemented (work block, active/history zones, boundary detection)
+- [x] Phase 2 browser smoke test (Chromium headless, real index.html + app.js):
+      MID_ACTIVE=1 / MID_HISTORY=0 mid-run; FINAL_ACTIVE=0 / FINAL_HISTORY=2 after
+      endRun; summary flushed to main flow (MAIN_FLOW_ASSISTANTS=1); per-step
+      previews render (`read`→`shell`); hasFollowUpContent()=true. See
+      /tmp/harness/{stub_inline.js,drive_inline.js,gen.py}.
+- [x] Fixed hasFollowUpContent() selector (`.message.assistant` never matched — role
+      lives in a child `.message-role`; work steps are nested in .work-block, not
+      direct #messages children). Continue button now shows after done.
+- [x] Phase 2 commit (4d26ccf)

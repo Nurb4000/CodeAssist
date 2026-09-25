@@ -44,24 +44,32 @@ let currentSessionId = null;
 let ws = null;
 let wsConnected = false;
 let isStreaming = false;
-let currentContentEl = null;
 
 // Running token accounting for the sidebar footer (cumulative + rate).
 let tokenState = { total: 0, lastTotal: 0, lastTime: null };
-let textBuffer = '';
-let reasoningBuffer = '';
 let reconnectTimer = null;
 // Keepalive for the idle WebSocket. uvicorn itself never closes an idle socket,
 // but intermediate proxies/browsers sometimes do; a periodic ping keeps the
 // connection warm so the UI doesn't flash "Disconnected - reconnecting".
 let pingTimer = null;
 const PING_INTERVAL_MS = 20000;
-// Each assistant turn renders its tool calls inline (collapsed by default) in
-// this per-turn stack, attached to the turn's prose so a call correlates with the
-// action that triggered it. See docs/ui-tool-grouping-plan.md.
-let currentToolStack = null;
+// Per-run run-state for the work-block streaming model (see
+// docs/ui-tool-grouping-plan.md). toolCallCount gives tool calls a stable fallback
+// id when the backend omits one.
 let toolCallCount = 0;
-let currentReasoningEl = null;
+
+// Phase 2 (see docs/ui-tool-grouping-plan.md): separate "work" (tool-using steps)
+// from "results" (summaries). Leading prose/reasoning of a turn stream live into a
+// detached pendingUnit; the first tool_call commits it into the active work block.
+let pendingUnit = null;
+let pendingProseBuf = '';
+let pendingReasonBuf = '';
+let activeStepEl = null;   // committed work step in the active zone (null when idle)
+let ranTools = false;      // did the previous turn use tools? (new-step boundary)
+let workStepCount = 0;     // completed/committed work steps (for the Work header)
+let workBlockEl = null, workActiveEl = null, workHistoryEl = null;
+let lastUserEl = null;     // anchor the work block under the current user message
+let lastMainMsgEl = null;  // last main-flow (non-work) assistant/user message
 
 marked.setOptions({
     highlight: (code, lang) => {
@@ -469,51 +477,74 @@ async function deleteSession(id) {
 async function loadMessages() {
     const msgs = await api('GET', `/api/sessions/${currentSessionId}/messages`);
     messagesEl.innerHTML = '';
-    currentToolStack = null;
-    toolCallCount = 0;
-    currentContentEl = null;
-    currentReasoningEl = null;
-    textBuffer = '';
-    reasoningBuffer = '';
-    if (msgs.length === 0) {
-        showWelcome();
-        return;
-    }
+    if (workBlockEl) { workBlockEl.remove(); workBlockEl = workActiveEl = workHistoryEl = null; }
+    finalizeState();
+    workStepCount = 0;
+    lastUserEl = null;
+    lastMainMsgEl = null;
+    removeWelcome();
+    if (msgs.length === 0) { showWelcome(); return; }
+
+    // Consecutive prose-only assistant turns accumulate into one summary message
+    // in the main flow; tool-using turns each become a work step.
+    let summaryBuf = { prose: '', reasoning: '' };
+    const flushSummary = () => {
+        if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf = { prose: '', reasoning: '' }; return; }
+        const div = appendAssistantMessage(summaryBuf.prose);
+        if (summaryBuf.reasoning) {
+            const rEl = div.querySelector('.thinking-content');
+            if (rEl) { rEl.textContent = summaryBuf.reasoning; applyThinkingVisibility(div.querySelector('.thinking-block')); }
+        }
+        summaryBuf = { prose: '', reasoning: '' };
+    };
+
     for (const m of msgs) {
         if (m.role === 'user') {
-            finalizeToolPanel();
+            flushSummary();
             appendUserMessage(m.content, m.attachments);
         } else if (m.role === 'assistant') {
-            const hasContent = !!m.content;
-            const hasTools = !!m.tool_calls;
-            const hasReasoning = !!m.reasoning_content;
-            if (hasTools) {
-                if (!currentToolStack) {
-                    startAssistantMessage();
-                }
-                if (hasReasoning) appendReasoningToCurrent(m.reasoning_content);
-                if (hasContent) {
-                    currentContentEl.innerHTML = marked.parse(m.content);
-                }
+            if (m.tool_calls) {
+                flushSummary();
+                const step = openWorkStep(++workStepCount);
+                appendStepProse(step, m.content);
+                if (m.reasoning_content) appendStepReasoning(step, m.reasoning_content);
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
-                for (const tc of tcs) {
-                    appendToolCall(tc.function?.name || tc.name, tc.function?.arguments || '{}', '', tc.id);
-                }
-            } else if (hasContent) {
-                finalizeToolPanel();
-                appendAssistantMessage(m.content);
-                if (hasReasoning) appendReasoningToCurrent(m.reasoning_content);
-            } else if (hasReasoning) {
-                // Pure reasoning turn (e.g. a reasoning model with no answer text).
-                finalizeToolPanel();
-                appendReasoningToCurrent(m.reasoning_content);
+                for (const tc of tcs) appendToolCallTo(step, tc.function?.name || tc.name, tc.function?.arguments || '{}', '', tc.id);
+            } else {
+                summaryBuf.prose += m.content;
+                summaryBuf.reasoning += m.reasoning_content || '';
             }
         } else if (m.role === 'tool') {
-            updateToolResult(m.tool_call_id, m.content);
+            if (activeStepEl) updateToolResultIn(activeStepEl, m.tool_call_id, m.content);
         }
     }
-    finalizeToolPanel();
+    flushSummary();
+    finalizeState();
     scrollToBottom();
+}
+
+// Create and attach a fresh work step to the active zone; returns it.
+function openWorkStep(n) {
+    ensureWorkBlock();
+    const step = createWorkStep(n);
+    step.classList.add('open');
+    workActiveEl.appendChild(step);
+    activeStepEl = step;
+    updateWorkCount();
+    return step;
+}
+
+function appendStepProse(step, prose) {
+    const el = step.querySelector('.work-step-prose');
+    if (el && prose) el.innerHTML = marked.parse(prose);
+}
+
+function appendStepReasoning(step, reasoning) {
+    const rEl = step.querySelector('.thinking-content');
+    if (rEl && reasoning) {
+        rEl.textContent = reasoning;
+        applyThinkingVisibility(step.querySelector('.thinking-block'));
+    }
 }
 
 function showWelcome() {
@@ -552,7 +583,15 @@ function appendUserMessage(text, images = []) {
         if (flex.childElementCount > 0) content.appendChild(flex);
     }
     content.appendChild(document.createTextNode(text));
+    lastMainMsgEl = div;
+    lastUserEl = div;
     messagesEl.appendChild(div);
+}
+
+// Main-flow target for errors/summaries: reuse the latest main message or start a
+// fresh assistant message. Work steps live in the work block, not here.
+function ensureMainMessage() {
+    return lastMainMsgEl || appendAssistantMessage('');
 }
 
 function appendAssistantMessage(text) {
@@ -564,29 +603,10 @@ function appendAssistantMessage(text) {
         `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
         `<div class="message-content"></div>`;
     messagesEl.appendChild(div);
+    lastMainMsgEl = div;
     div.querySelector('.message-content').innerHTML = marked.parse(text);
-    currentReasoningEl = div.querySelector('.thinking-content');
     applyThinkingVisibility(div.querySelector('.thinking-block'));
-}
-
-function startAssistantMessage() {
-    removeWelcome();
-    const div = document.createElement('div');
-    div.className = 'message';
-    // Prose first, then an inline stack of per-call collapsible tool blocks so
-    // each call sits directly under the action that triggered it (see
-    // docs/ui-tool-grouping-plan.md). No shared panel wrapper.
-    div.innerHTML =
-        `<div class="message-role assistant">CodeAssist</div>` +
-        `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
-        `<div class="message-content"></div>` +
-        `<div class="tool-call-stack"></div>`;
-    messagesEl.appendChild(div);
-    currentContentEl = div.querySelector('.message-content');
-    currentToolStack = div.querySelector('.tool-call-stack');
-    currentReasoningEl = div.querySelector('.thinking-content');
-    toolCallCount = 0;
-    return currentContentEl;
+    return div;
 }
 
 // ── Thinking block (collapsible reasoning) ──────────────────────────────────
@@ -626,21 +646,12 @@ function toggleThinking() {
     if (btn) btn.textContent = thinkingVisibility() ? 'Hide thinking' : 'Show thinking';
 }
 
-function appendReasoningToCurrent(text) {
-    if (!currentReasoningEl) startAssistantMessage();
-    // Append to the same wrapped buffer as live streaming so persisted and
-    // live reasoning render identically (one wrapped block, not one <p> each).
-    currentReasoningEl.textContent = (currentReasoningEl.textContent || '') + text;
-    applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
-}
-
-function appendToolCall(name, args, output, id) {
-    const argsStr = normalizeArgs(args);
-    if (!currentToolStack) startAssistantMessage();
+// Build (but don't attach) a single collapsible tool-call block: a one-line
+// always-visible preview ("args → output") plus an expandable body with full
+// args/output. Stable id lets results update this exact call inline.
+function makeToolCall(name, args, output, id) {
     toolCallCount++;
-    // Stable id so a later tool_result can update this exact call inline.
     const callId = id != null ? String(id) : `tc-${toolCallCount}`;
-
     const div = document.createElement('div');
     div.className = 'tool-call';
     div.dataset.callId = callId;
@@ -652,36 +663,32 @@ function appendToolCall(name, args, output, id) {
             <div class="tool-call-output-wrap"></div>
         </div>`;
     div._name = name;
-    div._args = argsStr;
+    div._args = normalizeArgs(args);
     div._output = output || '';
     applyToolCallRender(div);
-
     div.querySelector('.tool-call-header').onclick = () => div.classList.toggle('open');
-    currentToolStack.appendChild(div);
-    scrollToBottom();
     return div;
 }
 
-function normalizeArgs(args) {
-    if (args == null) return '';
-    if (typeof args === 'object') return JSON.stringify(args);
-    if (typeof args === 'string') {
-        try { const p = JSON.parse(args); return typeof p === 'string' ? p : JSON.stringify(p); } catch {}
-        return args;
+// Append a tool call into a specific work step's stack (creating the stack on
+// demand). Shared by live streaming and history reload.
+function appendToolCallTo(step, name, args, output, id) {
+    let stack = step.querySelector('.tool-call-stack');
+    if (!stack) {
+        stack = document.createElement('div');
+        stack.className = 'tool-call-stack';
+        step.querySelector('.work-step-content').appendChild(stack);
     }
-    return String(args);
+    stack.appendChild(makeToolCall(name, args, output, id));
 }
 
-// One-line condensed preview ("args → output") always visible; full detail lives
-// in the body and is revealed on expand. Keeps the transcript readable while still
-// showing what each step did at a glance.
+// One-line condensed preview always visible; full detail revealed on expand.
 function applyToolCallRender(div) {
     div.querySelector('.tool-call-header').textContent = div._name;
     const argsSnip = snippet(div._args, 64);
     const outSnip = div._output ? snippet(div._output.split('\n')[0], 72) : '<no result yet>';
     div.querySelector('.tool-call-preview').textContent = `${argsSnip} → ${outSnip}`;
 
-    // Full detail (body)
     div.querySelector('.tool-call-args').textContent = div._args;
     const outWrap = div.querySelector('.tool-call-output-wrap');
     const isError = div._output.startsWith('Error');
@@ -701,29 +708,199 @@ function snippet(text, maxLen) {
     return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + '…' : oneLine;
 }
 
-function finalizeToolPanel() {
-    // Don't null out — the message (and its inline tool calls) persist in the
-    // DOM. Just reset tracking so the next turn builds fresh inline blocks.
-    currentToolStack = null;
-    toolCallCount = 0;
+function normalizeArgs(args) {
+    if (args == null) return '';
+    if (typeof args === 'object') return JSON.stringify(args);
+    if (typeof args === 'string') {
+        try { const p = JSON.parse(args); return typeof p === 'string' ? p : JSON.stringify(p); } catch {}
+        return args;
+    }
+    return String(args);
 }
 
-function matchToolCall(id) {
-    if (!currentToolStack) return null;
-    if (id == null) return currentToolStack.querySelector('.tool-call');
-    for (const c of currentToolStack.querySelectorAll('.tool-call')) {
+// Locate a tool-call block within a step's stack by stable id (fallback: last).
+function matchToolCallIn(stack, id) {
+    if (!stack) return null;
+    if (id == null) return stack.querySelector('.tool-call');
+    for (const c of stack.querySelectorAll('.tool-call')) {
         if (c.dataset.callId === String(id)) return c;
     }
     return null;
 }
 
-// Update the tool call matching `id` (by stable id, else the most recent one)
-// with a freshly computed result. Keeps live results and history reload in sync.
-function updateToolResult(id, output) {
-    const div = matchToolCall(id);
+// Update the matching tool call in `step` with a freshly computed result.
+function updateToolResultIn(step, id, output) {
+    const div = matchToolCallIn(step.querySelector('.tool-call-stack'), id);
     if (!div) return;
     div._output = output || '';
     applyToolCallRender(div);
+}
+
+function finalizeState() {
+    activeStepEl = null;
+    ranTools = false;
+    pendingUnit = null;
+    pendingProseBuf = '';
+    pendingReasonBuf = '';
+    toolCallCount = 0;
+}
+
+// ── Work block (Phase 2): group tool-using steps apart from summaries ─────────
+// A "work step" is one tool-using LLM turn. Leading prose/reasoning stream live
+// into a detached pendingUnit; the first tool_call commits it into the active
+// zone. Prose arriving after tools ran closes the step into collapsed history.
+// Summaries (prose-only turns) flush into the main flow, never the work block.
+
+function ensureWorkBlock() {
+    if (workBlockEl) return workBlockEl;
+    const block = document.createElement('div');
+    block.className = 'work-block';
+    block.innerHTML =
+        `<div class="work-block-header">Work (<span class="work-count">0</span>) <span class="work-chevron">▸</span></div>` +
+        `<div class="work-active"></div>` +
+        `<div class="work-history"></div>`;
+    block.querySelector('.work-block-header').addEventListener('click', () => {
+        const hidden = block.classList.toggle('history-hidden');
+        block.querySelector('.work-chevron').textContent = hidden ? '▸' : '▾';
+    });
+    workActiveEl = block.querySelector('.work-active');
+    workHistoryEl = block.querySelector('.work-history');
+    (lastUserEl || messagesEl).after(block);
+    workBlockEl = block;
+    return block;
+}
+
+function updateWorkCount() {
+    if (workBlockEl) {
+        const c = workBlockEl.querySelector('.work-count');
+        if (c) c.textContent = workStepCount;
+    }
+}
+
+function createWorkStep(n) {
+    const step = document.createElement('div');
+    step.className = 'work-step';
+    step.dataset.n = n;
+    step.innerHTML =
+        `<div class="work-step-header">▸ Step ${n}</div>` +
+        `<div class="work-step-content"></div>`;
+    step.querySelector('.work-step-header').addEventListener('click', () => step.classList.toggle('open'));
+    return step;
+}
+
+// Detached assistant-message div streaming a turn's leading prose/reasoning live
+// before it is committed into the work block (or flushed to main flow if summary).
+function startPendingUnit() {
+    if (pendingUnit) return pendingUnit;
+    pendingUnit = document.createElement('div');
+    pendingUnit.className = 'message';
+    pendingUnit.innerHTML =
+        `<div class="message-role assistant">CodeAssist</div>` +
+        `<div class="thinking-block ${thinkingHiddenAttr()}"><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
+        `<div class="message-content"></div>`;
+    return pendingUnit;
+}
+
+// Move the pending unit (leading prose/reasoning) into a committed work step in
+// the active zone.
+function commitPendingUnit() {
+    ensureWorkBlock();
+    const step = createWorkStep(++workStepCount);
+    const content = step.querySelector('.work-step-content');
+    if (pendingUnit) {
+        const think = pendingUnit.querySelector('.thinking-block');
+        if (think) content.appendChild(think);
+        const body = pendingUnit.querySelector('.message-content');
+        if (body) content.appendChild(body);
+        pendingUnit.remove();
+        pendingUnit = null;
+        pendingProseBuf = '';
+        pendingReasonBuf = '';
+    }
+    step.classList.add('open');
+    workActiveEl.appendChild(step);
+    activeStepEl = step;
+    updateWorkCount();
+}
+
+// Close the active step: collapse it and move it into the history accumulator.
+function closeActiveStep() {
+    if (!activeStepEl) return;
+    activeStepEl.classList.remove('open');
+    workHistoryEl.appendChild(activeStepEl);
+    activeStepEl = null;
+    updateWorkCount();
+}
+
+// Flush an uncommitted pending unit (a prose-only summary turn) into the main
+// flow as a normal assistant message.
+function flushPendingToMainFlow() {
+    if (!pendingUnit) return;
+    removeWelcome();
+    messagesEl.appendChild(pendingUnit);
+    pendingUnit = null;
+    pendingProseBuf = '';
+    pendingReasonBuf = '';
+}
+
+function handleProse(content) {
+    const isNewTurn = ranTools;
+    ranTools = false;
+    if (isNewTurn) closeActiveStep();   // previous turn used tools → new step
+    const unit = startPendingUnit();
+    pendingProseBuf += content;
+    unit.querySelector('.message-content').innerHTML = marked.parse(pendingProseBuf);
+    maybeScrollToBottom();
+}
+
+function onReasoning(content) {
+    const unit = pendingUnit || startPendingUnit();
+    const rEl = unit.querySelector('.thinking-content');
+    if (rEl) {
+        pendingReasonBuf += content;
+        rEl.textContent = pendingReasonBuf;
+        applyThinkingVisibility(unit.querySelector('.thinking-block'));
+    }
+    maybeScrollToBottom();
+}
+
+function onToolCall(name, args, id) {
+    ranTools = true;
+    if (!activeStepEl) commitPendingUnit();
+    appendToolCallTo(activeStepEl, name, args, '', id);
+    showProgress(`Executing ${name}...`);
+}
+
+function onToolResult(id, output) {
+    if (activeStepEl) updateToolResultIn(activeStepEl, id, output);
+    else if (pendingUnit) {
+        const stack = pendingUnit.querySelector('.tool-call-stack');
+        if (stack) {
+            const div = matchToolCallIn(stack, id);
+            if (div) { div._output = output || ''; applyToolCallRender(div); }
+        }
+    }
+    maybeScrollToBottom();
+}
+
+// End a run: close any active step and flush an uncommitted summary to main flow.
+function endRun() {
+    if (activeStepEl) closeActiveStep();
+    flushPendingToMainFlow();
+    finalizeState();
+}
+
+// Whether there is anything worth offering "Continue" for: at least one work step
+// was committed, or a main-flow assistant message (summary/error) exists.
+function hasFollowUpContent() {
+    if (workStepCount > 0) return true;
+    // Main-flow assistant output (summaries/errors) are direct children of #messages
+    // with an assistant role label. Work steps live inside the work block, not here.
+    const msgs = messagesEl.querySelectorAll(':scope > .message');
+    for (let i = 0; i < msgs.length; i++) {
+        if (msgs[i].querySelector('.message-role.assistant')) return true;
+    }
+    return false;
 }
 
 function removeWelcome() {
@@ -1135,18 +1312,14 @@ function connectWS() {
             setAgentSelection((data.agent && (data.agent.id || data.agent.name)) || data.agent);
         } else if (data.type === 'text_delta') {
             hideProgress();
-            if (!currentContentEl) startAssistantMessage();
-            textBuffer += data.content;
-            currentContentEl.innerHTML = marked.parse(textBuffer);
-            maybeScrollToBottom();
+            handleProse(data.content);
         } else if (data.type === 'tool_call') {
             hideProgress();
-            appendToolCall(data.name, data.arguments, '', data.id);
+            onToolCall(data.name, data.arguments, data.id);
             showProgress(`Executing ${data.name}...`);
         } else if (data.type === 'tool_result') {
             hideProgress();
-            updateToolResult(data.id, data.output);
-            maybeScrollToBottom();
+            onToolResult(data.id, data.output);
         } else if (data.type === 'context') {
             updateContextUsage(data.tokens, data.usage_pct, data.severity);
         } else if (data.type === 'compacted') {
@@ -1161,8 +1334,8 @@ function connectWS() {
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
-            if (!currentContentEl) startAssistantMessage();
-            currentContentEl.innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
+            endRun();
+            ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
             isStreaming = false;
             sendBtn.disabled = false;
@@ -1173,16 +1346,10 @@ function connectWS() {
             inputEl.focus();
         } else if (data.type === 'incomplete') {
             hideProgress();
-            finalizeToolPanel();
-            if (!currentContentEl) startAssistantMessage();
-            currentContentEl.innerHTML += `<p style="color:var(--yellow);margin-top:8px;">⚠ ${escapeHtml(data.message)}</p>`;
+            endRun();
+            ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--yellow);margin-top:8px;">⚠ ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
             showContinueButton();
-
-            currentContentEl = null;
-            currentReasoningEl = null;
-            textBuffer = '';
-            reasoningBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
             sendBtn.style.display = 'flex';
@@ -1192,21 +1359,14 @@ function connectWS() {
             inputEl.focus();
         } else if (data.type === 'done') {
             hideProgress();
-            finalizeToolPanel();
-            if (textBuffer || messagesEl.querySelectorAll('.tool-call').length > 0) {
-                showContinueButton();
-            }
+            endRun();
+            if (hasFollowUpContent()) showContinueButton();
             // Show clear "done" indicator
             const doneDiv = document.createElement('div');
             doneDiv.className = 'message-actions';
             doneDiv.innerHTML = `<span style="color:var(--green);font-size:12px;">&#10003; Complete</span>`;
             messagesEl.appendChild(doneDiv);
             scrollToBottom();
-
-            currentContentEl = null;
-            currentReasoningEl = null;
-            textBuffer = '';
-            reasoningBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
             sendBtn.style.display = 'flex';
@@ -1216,20 +1376,12 @@ function connectWS() {
             inputEl.focus();
         } else if (data.type === 'cancelled') {
             hideProgress();
-            if (!currentContentEl) currentContentEl = startAssistantMessage();
-            currentContentEl.innerHTML += `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Stopped by user</p>`;
+            endRun();
+            ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Stopped by user</p>`;
             scrollToBottom();
         } else if (data.type === 'reasoning') {
             hideProgress();
-            if (!currentReasoningEl) {
-                startAssistantMessage();
-            }
-            // Accumulate deltas into one buffer and render as a single wrapped
-            // block. Previously each delta became its own <p>, so streaming
-            // reasoning rendered as one word per line and was unreadable.
-            reasoningBuffer += data.content;
-            currentReasoningEl.textContent = reasoningBuffer;
-            applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
+            onReasoning(data.content);
             maybeScrollToBottom();
         } else if (data.type === 'finish') {
             const usage = data.usage;

@@ -843,6 +843,75 @@ body {
     letter-spacing: 0.5px;
 }
 
+/* Work block (Phase 2): groups tool-using steps apart from summaries. Inserted
+   under the user message; the active step is always visible, completed steps
+   collapse into history behind the header toggle. See
+   docs/ui-tool-grouping-plan.md. */
+.work-block {
+    margin: 8px 0 12px;
+}
+
+.work-block-header {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--yellow);
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+}
+
+.work-chevron { color: var(--text-muted); font-size: 10px; }
+
+/* History (completed steps) hidden when collapsed; the active step stays visible. */
+.work-block.history-hidden .work-history { display: none; }
+
+.work-active, .work-history {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.work-active { margin: 6px 0; }
+.work-history { margin-top: 6px; }
+
+.work-step {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+/* Highlight the live step so it stands out from the collapsed history. */
+.work-active .work-step { border-left: 3px solid var(--yellow); }
+
+.work-step-header {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--yellow);
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-tertiary);
+}
+
+.work-step-header::before {
+    content: '\25B6';
+    font-size: 8px;
+    transition: transform 0.15s;
+}
+
+.work-step.open .work-step-header::before { transform: rotate(90deg); }
+
+/* Completed steps hide their detail until expanded. */
+.work-step:not(.open) .work-step-content { display: none; }
+
 /* Thinking indicator */
 .thinking {
     color: var(--text-muted);
