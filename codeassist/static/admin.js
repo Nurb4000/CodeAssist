@@ -317,12 +317,14 @@ async function loadAgents() {
                     { key: 'instructions', label: 'Instructions', type: 'textarea', value: a.instructions || '' },
                     { key: 'model', label: 'Model', type: 'text', value: a.model || '' },
                     { key: 'max_iterations', label: 'Max iterations', type: 'number', value: a.max_iterations ?? '' },
+                    { key: 'steps', label: 'Step budget', type: 'number', value: a.steps ?? '' },
                 ], async (p) => {
                     await api('PATCH', `/api/agents/${encodeURIComponent(a.id)}`, {
                         description: p.description || null,
                         instructions: p.instructions || null,
                         model: p.model || null,
                         max_iterations: p.max_iterations,
+                        steps: p.steps,
                     });
                 })));
             actions.appendChild(delButton(a.id, 'Delete', (id) => api('DELETE', `/api/agents/${encodeURIComponent(id)}`)));

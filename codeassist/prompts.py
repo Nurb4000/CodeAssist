@@ -71,41 +71,29 @@ TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Write tool automatically backs up existing files to .bak before overwriting
 - Grep supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
 
-SUMMARY_TEMPLATE = """You are summarizing a conversation between a user and an AI coding assistant.
-Your job is to create a concise summary that preserves all important context so the assistant can continue working seamlessly.
+SUMMARY_TEMPLATE = """You are summarizing a conversation so the NEXT turn of this same assistant can continue without losing track. The reader only sees this summary plus recent context, so anything you do not state here is lost. Keep it progress-anchored and terse (bullets, not prose).
 
-## Summary Guidelines
-- Capture the user's original request and any clarifications
-- List key decisions made and their rationale
-- Summarize code changes: which files were modified, what was changed, and why
-- Note any errors encountered and how they were resolved
-- Preserve important file paths, function names, and technical details
-- Track the current state of multi-step tasks
-- Include any pending work or next steps
+## Objective
+- One or two sentences on what the user is trying to accomplish.
 
-## Format
-Use this structure:
-```
-## Context
-[Brief description of what the user asked for]
+## Work State
+### Completed
+- Finished work, verified facts, or changes made; use "(none)" if nothing is done yet.
 
-## Actions Taken
-[Numbered list of significant actions, file changes, tool usage]
+### Active
+- Current in-progress work, partial changes, or investigation state; use "(none)".
+
+### Blocked
+- Blockers, failing commands, or unknowns that must be resolved before continuing; use "(none)".
 
 ## Key Findings & Decisions
-[Important discoveries, design decisions, technical choices]
+- Important discoveries, design decisions, constraints, and rationale. Preserve exact file paths, symbols, commands, and error strings.
 
-## Errors & Resolutions
-[Any errors and how they were fixed]
+## Next Move
+1. The immediate concrete action to take next (or "(none)").
+2. The follow-up action if the first is known (or "(none)").
 
-## Current State
-[What's done, what remains, where we left off]
-
-## Next Steps
-[What should happen next, if anything]
-```
-
-Be concise but thorough. The summary will be injected back into the conversation context."""
+Carry forward objectives, constraints, and decisions even when the recent context does not mention them. Where the summary and recent context conflict, the recent context wins: state the corrected fact and drop the old claim."""
 
 COMPACTION_USER_PROMPT = """Summarize the following conversation history. Previous summary (if any):
 

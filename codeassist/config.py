@@ -60,7 +60,11 @@ class ToolConfig:
     webfetch_max_chars: int = 30000
     websearch_max_chars: int = 30000
     websearch_engine: str = "duckduckgo"
-    tool_output_max_tokens: int = 4000
+    # Tokens of a single tool result kept in the conversation. Kept lean on
+    # purpose: oversized tool outputs (grep/read/shell dumps) fill context fast
+    # and make the model lose track mid-run. opencode caps this at ~2k chars;
+    # 2000 tokens is a middle ground that stays focused while preserving detail.
+    tool_output_max_tokens: int = 2000
 
 
 @dataclass

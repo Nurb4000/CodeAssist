@@ -91,6 +91,9 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
     {"key": "tools.max_output_chars", "section": "tools", "field": "max_output_chars", "type": "int",
      "label": "Max output chars", "description": "Truncation limit for tool output.",
      "group": "Tools", "restart_required": False},
+    {"key": "tools.tool_output_max_tokens", "section": "tools", "field": "tool_output_max_tokens", "type": "int",
+     "label": "Tool output tokens in context", "description": "Max tokens of each tool result kept in the conversation. Lower keeps the model focused (less wandering); raise for large outputs you need to see fully.",
+     "group": "Tools", "restart_required": False},
 
     # --- Features (subsystems init at boot; toggles need a restart) ---
     {"key": "mcp.enabled", "section": "mcp", "field": "enabled", "type": "bool",
@@ -139,6 +142,7 @@ _CONSTRAINTS: dict[str, dict] = {
     "agent.max_iterations": {"min": 1},
     "tools.shell_timeout": {"min": 1},
     "tools.max_output_chars": {"min": 1},
+    "tools.tool_output_max_tokens": {"min": 1},
 }
 for _spec in SETTINGS_CATALOG:
     _spec.update(_CONSTRAINTS.get(_spec["key"], {}))

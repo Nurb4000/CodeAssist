@@ -64,6 +64,23 @@ async def test_apply_ignores_invalid_values():
 
 
 @pytest.mark.asyncio
+async def test_tool_output_max_tokens_applies_and_ignores_invalid():
+    """The tool-output-in-context budget is tunable from settings. A valid value
+    applies; a non-numeric override is ignored so the default stays in place."""
+    await _init()
+    await settings_store.set("tools.tool_output_max_tokens", "1500")
+    cfg = Config()
+    await apply_settings_overrides(cfg)
+    assert cfg.tools.tool_output_max_tokens == 1500
+
+    # Non-int override is coerced to None and skipped, leaving the default.
+    await settings_store.set("tools.tool_output_max_tokens", "not-a-number")
+    cfg2 = Config()
+    await apply_settings_overrides(cfg2)
+    assert cfg2.tools.tool_output_max_tokens == 2000
+
+
+@pytest.mark.asyncio
 async def test_clear_restores_file_value(monkeypatch):
     # Isolate from any ambient config.toml so reset targets the dataclass
     # default (""), not a base file value. clear_override reads Config.load().
