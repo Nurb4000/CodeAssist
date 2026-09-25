@@ -652,6 +652,26 @@ function bindSettingsActions() {
             setStatus(e.message, true);
         }
     };
+
+    // Local/custom backends (e.g. llama.cpp) often need no auth. When the user
+    // switches to 'custom', default the API key to none: clear the field and
+    // drop any stale saved override so an old key isn't sent as a Bearer header
+    // against a no-auth backend (which 401s and feels like the key is required).
+    const providerSelect = document.getElementById('set-llm.provider');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', async () => {
+            if (providerSelect.value !== 'custom') return;
+            const keyInput = document.getElementById('set-llm.api_key');
+            if (keyInput) keyInput.value = '';
+            try {
+                await api('DELETE', '/api/settings/llm.api_key');
+                await loadSettings();
+                setStatus('API key cleared for custom (local) backend — connection uses no auth. Enter a key above if your backend requires one.');
+            } catch (e) {
+                setStatus(e.message, true);
+            }
+        });
+    }
 }
 
 async function bindCreate(idPrefix, buildBody) {
