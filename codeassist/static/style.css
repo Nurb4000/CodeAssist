@@ -789,17 +789,29 @@ body {
     transition: transform 0.15s;
 }
 
-.tool-call-header.open::before {
+.tool-call.open .tool-call-header::before {
     transform: rotate(90deg);
+}
+
+/* One-line condensed "args → output" summary, always visible until expanded. */
+.tool-call-preview {
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-top: 1px solid var(--border);
 }
 
 .tool-call-body {
     display: none;
-    padding: 12px;
+    padding: 4px 12px 12px;
     font-size: 13px;
 }
 
-.tool-call-body.open { display: block; }
+.tool-call.open .tool-call-body { display: block; }
 
 .tool-call-args {
     color: var(--text-secondary);

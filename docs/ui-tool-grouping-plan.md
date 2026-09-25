@@ -42,7 +42,7 @@ opencode-style per-call collapse, but folded so it is not messy.
 | Reload from history | `app.js` `loadMessages()` (466) | For each assistant msg with tools: `startAssistantMessage()` → `appendToolCall(...)` per tc; for `tool` msgs: `updateLastToolResult()`. |
 | Styles | `style.css` `.tool-panel` (754), `.tool-call` (805) | Shared panel box + per-call blocks inside it. |
 
-State vars: `currentContentEl`, `currentToolPanel`, `currentReasoningEl`,
+State vars: `currentContentEl`, `currentToolStack`, `currentReasoningEl`,
 `toolCallCount` (app.js top).
 
 ## Target State
@@ -54,6 +54,9 @@ State vars: `currentContentEl`, `currentToolPanel`, `currentReasoningEl`,
   is its own expand/collapse block attached to the turn's text.
 - Tool results update their **corresponding** `.tool-call` inline (by matching the
   `tool_call_id`, not "last one").
+- Each call shows a **one-line always-visible preview** (`args → output`) and
+  reveals full args/output in an expandable body. This keeps the transcript
+  readable (no 500-line dumps) while still showing what each step did at a glance.
 - Optional per-message "expand/collapse all" affordance on the turn (nice-to-have,
   not required for v1).
 
@@ -92,7 +95,9 @@ the reader sees "what the model said" → "what it did", matching opencode's flo
 - [x] `updateToolResult(id, output)` matches by id (falls back to most recent)
 - [x] `finalizeToolPanel()` resets `currentToolStack`
 - [x] `loadMessages()` reload path: per-call blocks + result-by-id (live == persisted)
-- [x] CSS: removed `.tool-panel*`; added `.tool-call-stack`; `.tool-call` standalone border/radius; collapse-by-default via existing `.tool-call-body { display:none }`
+- [x] CSS: removed `.tool-panel*`; added `.tool-call-stack`; `.tool-call` standalone border/radius
+- [x] One-line preview (`args → output`) always visible; full detail in body revealed on expand (`.tool-call.open`)
+- [x] `normalizeArgs`/`snippet`/`applyToolCallRender`/`matchToolCall` helpers; results update by stable id
 - [ ] Manual smoke test (stream a tool-using turn; reload session) — needs browser
 - [x] Full backend suite passes (635)
 - [ ] Commit

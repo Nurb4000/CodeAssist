@@ -635,18 +635,8 @@ function appendReasoningToCurrent(text) {
 }
 
 function appendToolCall(name, args, output, id) {
-    let argsStr = args;
-    if (typeof args === 'object') {
-        argsStr = JSON.stringify(args, null, 2);
-    } else if (typeof args === 'string') {
-        try { argsStr = JSON.stringify(JSON.parse(args), null, 2); } catch {}
-    }
-
-    // Ensure we have a message and inline stack
-    if (!currentToolStack) {
-        startAssistantMessage();
-    }
-
+    const argsStr = normalizeArgs(args);
+    if (!currentToolStack) startAssistantMessage();
     toolCallCount++;
     // Stable id so a later tool_result can update this exact call inline.
     const callId = id != null ? String(id) : `tc-${toolCallCount}`;
@@ -656,24 +646,59 @@ function appendToolCall(name, args, output, id) {
     div.dataset.callId = callId;
     div.innerHTML = `
         <div class="tool-call-header">${escapeHtml(name)}</div>
+        <div class="tool-call-preview"></div>
         <div class="tool-call-body">
-            <div class="tool-call-args">${escapeHtml(argsStr)}</div>
-            ${output ? renderToolResult(output) : ''}
+            <div class="tool-call-args"></div>
+            <div class="tool-call-output-wrap"></div>
         </div>`;
+    div._name = name;
+    div._args = argsStr;
+    div._output = output || '';
+    applyToolCallRender(div);
+
+    div.querySelector('.tool-call-header').onclick = () => div.classList.toggle('open');
     currentToolStack.appendChild(div);
-
-    div.querySelector('.tool-call-header').onclick = () => {
-        div.querySelector('.tool-call-header').classList.toggle('open');
-        div.querySelector('.tool-call-body').classList.toggle('open');
-    };
-
     scrollToBottom();
     return div;
 }
 
-function renderToolResult(output) {
-    const isError = output && output.startsWith('Error');
-    return `<div class="tool-result-label">Output</div><div class="tool-call-output${isError ? ' error' : ''}">${highlightToolOutput(output)}</div>`;
+function normalizeArgs(args) {
+    if (args == null) return '';
+    if (typeof args === 'object') return JSON.stringify(args);
+    if (typeof args === 'string') {
+        try { const p = JSON.parse(args); return typeof p === 'string' ? p : JSON.stringify(p); } catch {}
+        return args;
+    }
+    return String(args);
+}
+
+// One-line condensed preview ("args → output") always visible; full detail lives
+// in the body and is revealed on expand. Keeps the transcript readable while still
+// showing what each step did at a glance.
+function applyToolCallRender(div) {
+    div.querySelector('.tool-call-header').textContent = div._name;
+    const argsSnip = snippet(div._args, 64);
+    const outSnip = div._output ? snippet(div._output.split('\n')[0], 72) : '<no result yet>';
+    div.querySelector('.tool-call-preview').textContent = `${argsSnip} → ${outSnip}`;
+
+    // Full detail (body)
+    div.querySelector('.tool-call-args').textContent = div._args;
+    const outWrap = div.querySelector('.tool-call-output-wrap');
+    const isError = div._output.startsWith('Error');
+    let outEl = outWrap.querySelector('.tool-call-output');
+    if (!outEl) {
+        outEl = document.createElement('div');
+        outEl.className = 'tool-call-output' + (isError ? ' error' : '');
+        outWrap.appendChild(outEl);
+    } else {
+        outEl.className = 'tool-call-output' + (isError ? ' error' : '');
+    }
+    outEl.innerHTML = highlightToolOutput(div._output);
+}
+
+function snippet(text, maxLen) {
+    const oneLine = String(text ?? '').replace(/\s+/g, ' ').trim();
+    return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + '…' : oneLine;
 }
 
 function finalizeToolPanel() {
@@ -683,31 +708,22 @@ function finalizeToolPanel() {
     toolCallCount = 0;
 }
 
+function matchToolCall(id) {
+    if (!currentToolStack) return null;
+    if (id == null) return currentToolStack.querySelector('.tool-call');
+    for (const c of currentToolStack.querySelectorAll('.tool-call')) {
+        if (c.dataset.callId === String(id)) return c;
+    }
+    return null;
+}
+
 // Update the tool call matching `id` (by stable id, else the most recent one)
 // with a freshly computed result. Keeps live results and history reload in sync.
 function updateToolResult(id, output) {
-    if (!currentToolStack) return;
-    let target = null;
-    if (id != null) {
-        for (const c of currentToolStack.querySelectorAll('.tool-call')) {
-            if (c.dataset.callId === String(id)) { target = c; break; }
-        }
-    }
-    if (!target) target = currentToolStack.querySelector('.tool-call');
-    if (!target) return;
-    let body = target.querySelector('.tool-call-body');
-    if (!body) {
-        body = document.createElement('div');
-        body.className = 'tool-call-body';
-        target.appendChild(body);
-    }
-    if (body.querySelector('.tool-call-output')) {
-        const out = body.querySelector('.tool-call-output');
-        out.innerHTML = highlightToolOutput(output);
-        out.className = 'tool-call-output' + (output && output.startsWith('Error') ? ' error' : '');
-    } else {
-        body.insertAdjacentHTML('beforeend', renderToolResult(output));
-    }
+    const div = matchToolCall(id);
+    if (!div) return;
+    div._output = output || '';
+    applyToolCallRender(div);
 }
 
 function removeWelcome() {
