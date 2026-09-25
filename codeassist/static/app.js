@@ -523,27 +523,62 @@ async function loadMessages() {
     scrollToBottom();
 }
 
-// Create and attach a fresh work step to the active zone; returns it.
+// Create and attach a fresh work step to the active zone; returns it. Steps are
+// collapsed by default (matching the live path); reload has no live step, so all
+// reloaded steps start collapsed in the work block.
 function openWorkStep(n) {
     ensureWorkBlock();
     const step = createWorkStep(n);
-    step.classList.add('open');
     workActiveEl.appendChild(step);
     activeStepEl = step;
     updateWorkCount();
     return step;
 }
 
+// Lazily build the same inner structure the live path produces inside a step:
+// a `.thinking-block` (when reasoning exists) followed by a `.message-content`
+// (the turn's prose). Reload must match live so persisted and streaming render
+// identically.
+function workStepContent(step) {
+    let c = step.querySelector(':scope > .work-step-content');
+    if (!c) {
+        c = document.createElement('div');
+        c.className = 'work-step-content';
+        step.appendChild(c);
+    }
+    return c;
+}
+
+function workStepThinkingEl(step) {
+    const existing = step.querySelector(':scope > .work-step-content > .thinking-block');
+    if (existing) return existing;
+    const e = document.createElement('div');
+    e.className = 'thinking-block ' + thinkingHiddenAttr();
+    e.innerHTML =
+        `<details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details>`;
+    workStepContent(step).appendChild(e);
+    return e;
+}
+
+function workStepMessageEl(step) {
+    const existing = step.querySelector(':scope > .work-step-content > .message-content');
+    if (existing) return existing;
+    const e = document.createElement('div');
+    e.className = 'message-content';
+    workStepContent(step).appendChild(e);
+    return e;
+}
+
 function appendStepProse(step, prose) {
-    const el = step.querySelector('.work-step-prose');
-    if (el && prose) el.innerHTML = marked.parse(prose);
+    if (prose) workStepMessageEl(step).innerHTML = marked.parse(prose);
 }
 
 function appendStepReasoning(step, reasoning) {
-    const rEl = step.querySelector('.thinking-content');
-    if (rEl && reasoning) {
+    const thinkingEl = workStepThinkingEl(step);
+    const rEl = thinkingEl.querySelector('.thinking-content');
+    if (reasoning && rEl) {
         rEl.textContent = reasoning;
-        applyThinkingVisibility(step.querySelector('.thinking-block'));
+        applyThinkingVisibility(thinkingEl);
     }
 }
 
@@ -824,6 +859,8 @@ function commitPendingUnit() {
 }
 
 // Close the active step: collapse it and move it into the history accumulator.
+// Work steps are collapsed by default; the header toggle still lets a user
+// expand an individual step, and the Work header collapses the whole history.
 function closeActiveStep() {
     if (!activeStepEl) return;
     activeStepEl.classList.remove('open');

@@ -225,5 +225,18 @@ Files: `codeassist/static/app.js`, `codeassist/static/style.css`. Backend unchan
 - [x] Smoke test re-verified 2026-09-25: local Chromium headless AND Docker container
       (codeassist:ui-smoke, byte-identical app.js) both PASS identical assertions
       (MID_ACTIVE=1, FINAL_HISTORY=2, MAIN_FLOW_ASSISTANTS=1, HAS_FOLLOWUP=true).
-- [ ] Commit + push the re-verification (plan-doc status update only; app.js/style.css
-      unchanged since 4d26ccf/c9574ce).
+- [x] Fixed work-step prose/reasoning loss on reload: `appendStepProse` queried a
+      nonexistent `.work-step-prose`; steps now build the same `.thinking-block` +
+      `.message-content` structure the live path produces (helpers
+      `workStepContent/workStepThinkingEl/workStepMessageEl`). Prose is present in the
+      DOM on reload; empty assistant content creates no stray divs.
+- [x] Collapsed-by-default made consistent (live == reload): completed steps collapse
+      (`closeActiveStep` drops `.open`) and reloaded steps start collapsed
+      (`openWorkStep` no longer forces `.open`). The live active step stays expanded so
+      you can watch it; the Work header still collapses the whole history zone and each
+      step header toggles its own open state.
+- [x] Verified live vs reload render identically via headless Chromium screenshots + DOM
+      dumps (expanded steps show prose + per-call previews; real empty-content sessions
+      render one clean collapsed step). Work steps stay nested in `.work-block` (a single
+      `#messages` child between the user msg and the summary).
+- [x] Commit + push 2026-09-25: app.js prose + collapse-consistency fixes.
