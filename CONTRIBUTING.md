@@ -40,7 +40,7 @@ codeassist/          # Core application package
 ├── routes/          # REST API endpoints
 tools/               # Tool implementations (read, write, edit, shell, etc.)
 tests/               # Test suite
-.codeassist/skills/  # Built-in skill definitions
+codeassist/skills/  # Built-in skill definitions
 codeassist/static/   # Web UI assets
 ```
 
@@ -98,7 +98,7 @@ Tests use a separate SQLite database (`data/codeassist_test.db`) and isolated te
 
 ## Adding a New Skill
 
-1. Create a markdown file in `.codeassist/skills/` with YAML frontmatter:
+1. Create a markdown file in `runtime/skills/` with YAML frontmatter:
    ```markdown
    ---
    name: my-skill

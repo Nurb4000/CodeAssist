@@ -12,7 +12,6 @@ config.toml~
 .coverage
 .pytest_cache/
 htmlcov/
-.codeassist/snapshot/
 
 # Internal-only planning / review / test-log docs. Kept on disk under .internal/
 # for local context but NEVER pushed to GitHub (contains internal refs, LAN IPs,

@@ -433,7 +433,7 @@ Both show the platform's flexibility for any domain where consistent, structured
 
 **Creating custom skills:**
 
-Add markdown files to `.codeassist/skills/` with this structure:
+Add markdown files to `runtime/skills/` with this structure:
 
 ```markdown
 ---
@@ -518,10 +518,11 @@ CodeAssist/
 │   ├── git_snapshot.py      # Auto-commit for safe experimentation
 │   ├── docker_tool.py       # Container management
 │   └── image_analyze.py     # Vision-capable image analysis
-├── .codeassist/             # Skills and plugins
-│   └── skills/              # Skill markdown files
+├── runtime/                   # User-created content (gitignored at runtime)
+│   ├── skills/                # Custom skill markdown files
+│   └── custom_tools/          # Custom tool Python files
 ├── codeassist/static/        # Web UI
-├── tests/                   # Test suite (198 tests)
+├── tests/                   # Test suite (635 tests)
 ├── Dockerfile               # Container image definition
 ├── docker-compose.yml       # One-command Docker startup
 ├── config.toml              # Your config (gitignored)

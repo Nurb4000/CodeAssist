@@ -231,7 +231,7 @@ Each registry tab lists items in a table with an **Add/Create** form and per-ite
 | **MCP servers** | **Add** a server (name + config JSON). **Edit** any server via a modal (name, config, enabled toggle). **Delete** with confirmation. Requires MCP enabled in config. |
 | **LSP servers** | **Add** a server (name, command, args JSON, languages JSON). **Edit** via modal (name, command, args, languages, enabled). **Delete** with confirmation. |
 | **Plugins** | Read-only listing (name, version, enabled). Plugins load from disk; manage them by editing the plugin files and using **Reload**. |
-| **Custom tools** | Listing of tools discovered in `.codeassist/custom_tools/`. **Reload custom tools** to re-scan the directory without restart. |
+| **Custom tools** | Listing of tools discovered in `runtime/custom_tools/`. **Reload custom tools** to re-scan the directory without restart. |
 | **Agents** | View agents (key, name, description, model). **Create** a custom agent (key, description, model, instructions). **Edit** custom agents via modal (description, instructions, model, max iterations). **Delete** custom agents with confirmation. Built-in agents (`default`, `research`, `review`, `build`, …) are marked `built-in` and cannot be edited or deleted. |
 
 The edit modal is a reusable inline dialog: fill in the fields, click **Save**, and the registry
@@ -272,7 +272,7 @@ inspect and govern what the agent may do:
 | **Security Scan** | Scan custom tools for dangerous patterns (network access, subprocess calls, file writes, …) |
 | **Usage Stats** | Tool usage statistics |
 
-Custom tools are Python files in `.codeassist/custom_tools/` and are scanned for risky behavior
+Custom tools are Python files in `runtime/custom_tools/` and are scanned for risky behavior
 before you trust them. Built-in tools (`read`, `write`, `edit`, `shell`, `git`, `grep`, `webfetch`,
 `todo`, and more) are documented in the README's "Built-in tools" table.
 
@@ -287,7 +287,7 @@ Skills are reusable, guided workflows invoked from chat:
 
 Built-in coding skills (code-review, refactor, debug, test, explain, document, optimize, clean,
 security, convert, generate, migrate, lint) and non-coding examples (music, imagegen) ship with
-CodeAssist. Add your own as markdown files in `.codeassist/skills/` — see the README's "Skills"
+CodeAssist. Add your own as markdown files in `runtime/skills/` — see the README's "Skills"
 section for the frontmatter format. Custom and auto-created skills appear in the Admin page under
 **Skills**.
 

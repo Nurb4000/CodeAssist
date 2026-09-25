@@ -234,10 +234,10 @@ min_confidence = 0.7           # Threshold for auto-creation
 
 ### Custom Tools Directory
 
-Custom tools are stored in `.codeassist/custom_tools/`:
+Custom tools are stored in `runtime/custom_tools/`:
 
 ```python
-# .codeassist/custom_tools/my_tool.py
+# runtime/custom_tools/my_tool.py
 TOOLS = {
     "my_tool": {
         "name": "my_tool",
