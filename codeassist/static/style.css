@@ -718,10 +718,10 @@ body {
     color: var(--text-muted);
     font-style: italic;
     line-height: 1.5;
+    /* Reasoning is accumulated into a single buffer; preserve whitespace
+       and wrap long lines instead of collapsing them onto one word per line. */
+    white-space: pre-wrap;
 }
-
-.thinking-block .thinking-content p { margin-bottom: 8px; }
-.thinking-block .thinking-content p:last-child { margin-bottom: 0; }
 
 .footer-toggle {
     margin-top: 6px;

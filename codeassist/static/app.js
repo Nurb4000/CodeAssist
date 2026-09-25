@@ -49,6 +49,7 @@ let currentContentEl = null;
 // Running token accounting for the sidebar footer (cumulative + rate).
 let tokenState = { total: 0, lastTotal: 0, lastTime: null };
 let textBuffer = '';
+let reasoningBuffer = '';
 let reconnectTimer = null;
 // Keepalive for the idle WebSocket. uvicorn itself never closes an idle socket,
 // but intermediate proxies/browsers sometimes do; a periodic ping keeps the
@@ -470,6 +471,7 @@ async function loadMessages() {
     currentContentEl = null;
     currentReasoningEl = null;
     textBuffer = '';
+    reasoningBuffer = '';
     if (msgs.length === 0) {
         showWelcome();
         return;
@@ -629,9 +631,9 @@ function toggleThinking() {
 
 function appendReasoningToCurrent(text) {
     if (!currentReasoningEl) startAssistantMessage();
-    const p = document.createElement('p');
-    p.textContent = text;
-    currentReasoningEl.appendChild(p);
+    // Append to the same wrapped buffer as live streaming so persisted and
+    // live reasoning render identically (one wrapped block, not one <p> each).
+    currentReasoningEl.textContent = (currentReasoningEl.textContent || '') + text;
     applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
 }
 
@@ -717,6 +719,17 @@ function removeWelcome() {
 
 function scrollToBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// Auto-scroll during streaming only when the viewer is already pinned to the
+// bottom. If the user has scrolled up (e.g. to read thinking mid-run) we leave
+// them there instead of yanking the view back down on every event.
+function maybeScrollToBottom() {
+    const threshold = 140;
+    const atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight <= threshold;
+    if (atBottom) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
 }
 
 function escapeHtml(text) {
@@ -1111,7 +1124,7 @@ function connectWS() {
             if (!currentContentEl) startAssistantMessage();
             textBuffer += data.content;
             currentContentEl.innerHTML = marked.parse(textBuffer);
-            scrollToBottom();
+            maybeScrollToBottom();
         } else if (data.type === 'tool_call') {
             hideProgress();
             appendToolCall(data.name, data.arguments, '');
@@ -1119,7 +1132,7 @@ function connectWS() {
         } else if (data.type === 'tool_result') {
             hideProgress();
             updateLastToolResult(data.output);
-            scrollToBottom();
+            maybeScrollToBottom();
         } else if (data.type === 'context') {
             updateContextUsage(data.tokens, data.usage_pct, data.severity);
         } else if (data.type === 'compacted') {
@@ -1155,6 +1168,7 @@ function connectWS() {
             currentContentEl = null;
             currentReasoningEl = null;
             textBuffer = '';
+            reasoningBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
             sendBtn.style.display = 'flex';
@@ -1178,6 +1192,7 @@ function connectWS() {
             currentContentEl = null;
             currentReasoningEl = null;
             textBuffer = '';
+            reasoningBuffer = '';
             isStreaming = false;
             sendBtn.disabled = false;
             sendBtn.style.display = 'flex';
@@ -1195,11 +1210,13 @@ function connectWS() {
             if (!currentReasoningEl) {
                 startAssistantMessage();
             }
-            const p = document.createElement('p');
-            p.textContent = data.content;
-            currentReasoningEl.appendChild(p);
+            // Accumulate deltas into one buffer and render as a single wrapped
+            // block. Previously each delta became its own <p>, so streaming
+            // reasoning rendered as one word per line and was unreadable.
+            reasoningBuffer += data.content;
+            currentReasoningEl.textContent = reasoningBuffer;
             applyThinkingVisibility(currentReasoningEl.closest('.message')?.querySelector('.thinking-block'));
-            scrollToBottom();
+            maybeScrollToBottom();
         } else if (data.type === 'finish') {
             const usage = data.usage;
             if (usage) {

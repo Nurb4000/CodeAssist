@@ -729,3 +729,61 @@ class TestAgentStepLimit:
             assert last_tools["v"] is None
             types = [e.type for e in events]
             assert "done" in types
+
+    @pytest.mark.asyncio
+    async def test_stops_at_step_budget_when_model_keeps_working(self, agent, mock_session):
+        """A model that keeps calling tools every turn (wandering) must still
+        terminate at its per-agent step budget, not run out to the global
+        max_iterations cap. This is what makes 'never finishes / high GPU' stop."""
+        agent.max_steps = 3  # build-style budget; global cap is much higher
+        agent.config.agent.max_iterations = 100
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "implement X"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            async def turn_work():
+                yield ToolCall(id="c1", name="shell", arguments={"command": "echo"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            async def turn_wrapup():
+                yield TextDelta("Reached the step budget; here is what remains.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            # Two working turns then the forced wrap-up on the 3rd (last) step.
+            turns = [turn_work(), turn_work(), turn_wrapup()]
+            calls = {"n": 0}
+            tool_states = []
+
+            async def fake_stream(messages, openai_tools):
+                tool_states.append(openai_tools)
+                g = turns[calls["n"]]
+                calls["n"] += 1
+                async for ev in g:
+                    yield ev
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("implement X"):
+                events.append(event)
+
+            # Exactly 3 turns ran (the budget), not the 100 global cap. The final
+            # turn had tools disabled so the model could only summarise.
+            assert calls["n"] == 3
+            assert len(tool_states) == 3
+            assert tool_states[-1] is None
+            types = [e.type for e in events]
+            assert "done" in types
+            assert "error" not in types
