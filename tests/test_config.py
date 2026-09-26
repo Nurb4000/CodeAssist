@@ -15,7 +15,7 @@ class TestConfig:
         assert config.llm.model == ""  # no baked-in model default; UI-configured
         assert config.server.host == "127.0.0.1"
         assert config.server.port == 8090
-        assert config.agent.max_iterations == 100
+        assert config.agent.max_iterations == 150
         assert config.tools.shell_timeout == 120
 
     def test_load_config_from_file(self, tmp_path):
