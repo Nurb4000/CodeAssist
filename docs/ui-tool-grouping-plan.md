@@ -249,4 +249,20 @@ Files: `codeassist/static/app.js`, `codeassist/static/style.css`. Backend unchan
       dumps (expanded steps show prose + per-call previews; real empty-content sessions
       render one clean collapsed step). Work steps stay nested in `.work-block` (a single
       `#messages` child between the user msg and the summary).
-- [x] Commit + push 2026-09-25: app.js prose + collapse-consistency fixes.
+- [x] Work section collapsed by default (2026-09-26): `.work-block` now starts with the
+      `history-hidden` class, so `.work-history` (completed steps) is hidden behind the
+      header until expanded — matches the "collapsed by default" ask. The live active step
+      lives outside the block and stays visible regardless.
+- [x] Past-thinking container (Question 3, 2026-09-26): current/active reasoning stays
+      visible (expanded) in the active step; once a step completes its `.thinking-block`
+      is MOVED into a dedicated collapsed `.thinking-history` container
+      (`ensurePastThinkingContainer` / `archiveThinking`), mirroring the work-block
+      active/history split. Reload archives each completed step's reasoning via
+      `makeThinkingBlock` + `appendStepReasoning`. Live == reload verified headless
+      (2 archived entries, count header = 2, 0 inline thinking in completed steps,
+      container collapsed by default). CSS in style.css (`.thinking-history`,
+      `.past-thinking-entry`).
+- [x] Commit + push 2026-09-26: app.js work-section-collapsed-by-default + past-thinking
+      container; config timeout default 360 -> 900 (config.py dataclass + Config.load
+      fallback, config.example.toml, config.docker.toml); tests test_llm/test_config/
+      test_settings; .internal/STATUS.md.

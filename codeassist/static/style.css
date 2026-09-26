@@ -912,6 +912,42 @@ body {
 /* Completed steps hide their detail until expanded. */
 .work-step:not(.open) .work-step-content { display: none; }
 
+/* Past thinking container (Question 3): holds completed steps' reasoning,
+   collapsed by default, kept separate from the active step's visible reasoning.
+   Mirrors the work-block active/history split. */
+.thinking-history {
+    margin: 6px 0;
+}
+.thinking-history-header {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+}
+.thinking-history-chevron { color: var(--text-muted); font-size: 10px; }
+.thinking-history.history-hidden .past-thinking-list { display: none; }
+.past-thinking-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+    padding-left: 6px;
+    border-left: 2px solid var(--border);
+}
+.past-thinking-entry .thinking-content {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 4px 8px;
+}
+
 /* Thinking indicator */
 .thinking {
     color: var(--text-muted);

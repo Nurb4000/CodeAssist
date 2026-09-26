@@ -38,7 +38,7 @@ class TestLLMClientInit:
         """Test initialization with API key."""
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
             LLMClient(llm_config)
-            mock_openai.assert_called_once_with(api_key="test-key", timeout=360)
+            mock_openai.assert_called_once_with(api_key="test-key", timeout=900)
 
     def test_init_without_api_key_uses_placeholder(self, monkeypatch):
         """A no-auth backend (empty key, no env var) must still construct. The
@@ -48,7 +48,7 @@ class TestLLMClientInit:
         config = LLMConfig(provider="openai", model="gpt-4o")  # api_key == ""
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
             LLMClient(config)
-            mock_openai.assert_called_once_with(api_key="sk-no-auth", timeout=360)
+            mock_openai.assert_called_once_with(api_key="sk-no-auth", timeout=900)
 
     def test_init_prefers_env_var_over_placeholder(self, monkeypatch):
         """When no key is configured but OPENAI_API_KEY is set, use it rather
@@ -57,7 +57,7 @@ class TestLLMClientInit:
         config = LLMConfig(provider="openai", model="gpt-4o")
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
             LLMClient(config)
-            mock_openai.assert_called_once_with(api_key="from-env", timeout=360)
+            mock_openai.assert_called_once_with(api_key="from-env", timeout=900)
 
     def test_init_with_base_url(self, llm_config):
         """Test initialization with custom base URL."""
@@ -65,7 +65,7 @@ class TestLLMClientInit:
         with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
             LLMClient(llm_config)
             mock_openai.assert_called_once_with(
-                api_key="test-key", base_url="https://custom.api.com/v1", timeout=360
+                api_key="test-key", base_url="https://custom.api.com/v1", timeout=900
             )
 
     def test_init_with_custom_timeout(self):

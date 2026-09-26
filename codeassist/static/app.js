@@ -68,6 +68,10 @@ let activeStepEl = null;   // committed work step in the active zone (null when 
 let ranTools = false;      // did the previous turn use tools? (new-step boundary)
 let workStepCount = 0;     // completed/committed work steps (for the Work header)
 let workBlockEl = null, workActiveEl = null, workHistoryEl = null;
+// Dedicated container for *past* reasoning. The active step keeps its reasoning
+// visible inline; once a step completes its thinking-block is moved here (collapsed
+// by default), mirroring the work-block active/history split. See Question 3.
+let pastThinkingEl = null, pastThinkingListEl = null, pastThinkingCount = 0;
 let lastUserEl = null;     // anchor the work block under the current user message
 let lastMainMsgEl = null;  // last main-flow (non-work) assistant/user message
 
@@ -575,12 +579,59 @@ function appendStepProse(step, prose) {
 }
 
 function appendStepReasoning(step, reasoning) {
-    const thinkingEl = workStepThinkingEl(step);
-    const rEl = thinkingEl.querySelector('.thinking-content');
-    if (reasoning && rEl) {
-        rEl.textContent = reasoning;
-        applyThinkingVisibility(thinkingEl);
-    }
+    // Reloaded steps are already completed, so their reasoning is archived into
+    // the past-thinking container (collapsed) rather than rendered inline.
+    if (reasoning) archiveThinking(makeThinkingBlock(reasoning));
+}
+
+// Build a collapsed thinking-block from a reasoning string (used on reload).
+function makeThinkingBlock(reasoningText) {
+    const el = document.createElement('div');
+    el.className = 'thinking-block past-thinking-entry';
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = thinkingSummaryText();
+    const content = document.createElement('div');
+    content.className = 'thinking-content';
+    content.textContent = reasoningText;
+    details.appendChild(summary);
+    details.appendChild(content);
+    el.appendChild(details);
+    return el;
+}
+
+// Move a thinking-block out of a completed step and into the past-thinking
+// container, collapsed by default. Returns the moved element (or null).
+function archiveThinking(thinkEl) {
+    if (!thinkEl || !thinkEl.querySelector) return null;
+    const container = ensurePastThinkingContainer();
+    thinkEl.classList.add('past-thinking-entry');
+    const details = thinkEl.querySelector('details');
+    if (details) details.removeAttribute('open'); // past reasoning collapsed
+    pastThinkingListEl.appendChild(thinkEl);
+    pastThinkingCount++;
+    const countEl = container.querySelector('.past-thinking-count');
+    if (countEl) countEl.textContent = pastThinkingCount;
+    return thinkEl;
+}
+
+// Lazily create the "Past thinking" container, a collapsible section that sits
+// after the active step (like the work block). Collapsed by default.
+function ensurePastThinkingContainer() {
+    if (pastThinkingEl) return pastThinkingEl;
+    const c = document.createElement('div');
+    c.className = 'thinking-history history-hidden';
+    c.innerHTML =
+        `<div class="thinking-history-header">🧏 Past thinking (<span class="past-thinking-count">0</span>) <span class="thinking-history-chevron">▸</span></div>` +
+        `<div class="past-thinking-list"></div>`;
+    c.querySelector('.thinking-history-header').addEventListener('click', () => {
+        const hidden = c.classList.toggle('history-hidden');
+        c.querySelector('.thinking-history-chevron').textContent = hidden ? '▸' : '▾';
+    });
+    pastThinkingListEl = c.querySelector('.past-thinking-list');
+    (workActiveEl || workBlockEl || lastUserEl || messagesEl).after(c);
+    pastThinkingEl = c;
+    return c;
 }
 
 function showWelcome() {
@@ -790,7 +841,10 @@ function finalizeState() {
 function ensureWorkBlock() {
     if (workBlockEl) return workBlockEl;
     const block = document.createElement('div');
-    block.className = 'work-block';
+    // Collapsed by default: completed steps in .work-history stay hidden behind
+    // the header until the user expands it. The live active step lives outside
+    // this block and stays visible regardless.
+    block.className = 'work-block history-hidden';
     block.innerHTML =
         `<div class="work-block-header">Work (<span class="work-count">0</span>) <span class="work-chevron">▸</span></div>` +
         `<div class="work-history"></div>`;
@@ -850,7 +904,14 @@ function commitPendingUnit() {
     const content = step.querySelector('.work-step-content');
     if (pendingUnit) {
         const think = pendingUnit.querySelector('.thinking-block');
-        if (think) content.appendChild(think);
+        if (think) {
+            content.appendChild(think);
+            // Current reasoning stays visible while this step is live.
+            if (thinkingVisibility()) {
+                const d = think.querySelector('details');
+                if (d) d.setAttribute('open', '');
+            }
+        }
         const body = pendingUnit.querySelector('.message-content');
         if (body) content.appendChild(body);
         pendingUnit.remove();
@@ -870,6 +931,10 @@ function commitPendingUnit() {
 function closeActiveStep() {
     if (!activeStepEl) return;
     activeStepEl.classList.remove('open');
+    // Archive this step's reasoning into the past-thinking container (collapsed);
+    // the completed step keeps its prose + tool calls but no longer shows thinking.
+    const think = activeStepEl.querySelector('.thinking-block');
+    if (think) archiveThinking(think);
     workHistoryEl.appendChild(activeStepEl);
     activeStepEl = null;
     updateWorkCount();

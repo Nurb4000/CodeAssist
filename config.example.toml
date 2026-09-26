@@ -26,9 +26,9 @@ base_url = ""
 vision = false
 
 # Seconds without LLM output before the request/stream is treated as timed out.
-# Default 360 (triple the historical 120) to accommodate slower hardware;
+# Default 900 (7.5x the historical 120) to accommodate slower hardware;
 # tune from the admin UI under Settings > LLM if needed.
-timeout = 360
+timeout = 900
 
 [llm.parameters]
 temperature = 0.0

@@ -86,8 +86,8 @@ context_window = 64000
         assert config.llm.context_window == 64000
 
     def test_llm_timeout_default_and_override(self, tmp_path):
-        """LLM stream timeout defaults to 360s and is overridable from [llm]."""
-        assert Config.load("/nonexistent/config.toml").llm.timeout == 360
+        """LLM stream timeout defaults to 900s and is overridable from [llm]."""
+        assert Config.load("/nonexistent/config.toml").llm.timeout == 900
 
         config_file = tmp_path / "config.toml"
         config_file.write_text("""

@@ -190,12 +190,12 @@ def test_delete_resets_trust_all_session(live_client):
 def test_put_llm_timeout_applies_live_and_rejects_low(live_client):
     from codeassist import server
 
-    # Listed as a normal int setting with a sensible default (360 = 3x the
+    # Listed as a normal int setting with a sensible default (900 = 7.5x the
     # historical 120, for slower hardware).
     listed = live_client.get("/api/settings").json()["settings"]
     item = next(s for s in listed if s["key"] == "llm.timeout")
     assert item["group"] == "LLM"
-    assert item["value"] == 360
+    assert item["value"] == 900
     assert item["source"] == "file"
 
     # PUT applies live.

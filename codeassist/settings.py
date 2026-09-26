@@ -56,7 +56,7 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
      "label": "Vision capable", "description": "Manual override; auto-detected otherwise.",
      "group": "LLM", "restart_required": False},
     {"key": "llm.timeout", "section": "llm", "field": "timeout", "type": "int",
-     "label": "LLM timeout (s)", "description": "Seconds without LLM output before the request is aborted. Raise for slower hardware (default 360).",
+     "label": "LLM timeout (s)", "description": "Seconds without LLM output before the request is aborted. Raise for slower hardware (default 900).",
      "group": "LLM", "restart_required": False},
 
     # --- Server ---
