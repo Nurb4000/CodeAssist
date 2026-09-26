@@ -523,13 +523,14 @@ async function loadMessages() {
     scrollToBottom();
 }
 
-// Create and attach a fresh work step to the active zone; returns it. Steps are
-// collapsed by default (matching the live path); reload has no live step, so all
-// reloaded steps start collapsed in the work block.
+// Create a fresh work step during reload and drop it straight into the collapsed
+// history zone. Reload has no live run, so there is no active step: every step is
+// a completed one living inside the (collapsed) work block. `activeStepEl` still
+// points at the newest step so its tool results match by id. Returns the step.
 function openWorkStep(n) {
     ensureWorkBlock();
     const step = createWorkStep(n);
-    workActiveEl.appendChild(step);
+    workHistoryEl.appendChild(step);
     activeStepEl = step;
     updateWorkCount();
     return step;
@@ -792,15 +793,20 @@ function ensureWorkBlock() {
     block.className = 'work-block';
     block.innerHTML =
         `<div class="work-block-header">Work (<span class="work-count">0</span>) <span class="work-chevron">▸</span></div>` +
-        `<div class="work-active"></div>` +
         `<div class="work-history"></div>`;
     block.querySelector('.work-block-header').addEventListener('click', () => {
         const hidden = block.classList.toggle('history-hidden');
         block.querySelector('.work-chevron').textContent = hidden ? '▸' : '▾';
     });
-    workActiveEl = block.querySelector('.work-active');
     workHistoryEl = block.querySelector('.work-history');
-    (lastUserEl || messagesEl).after(block);
+    // The current (active) step lives OUTSIDE the collapsible work block so it
+    // stays visible even when the work section is collapsed by default. Completed
+    // steps move into .work-history (inside the block) and are hidden on collapse.
+    (lastUserEl || messagesEl).after(block); // attach the block into the flow first
+    const active = document.createElement('div'); // then .after() has a real parent
+    active.className = 'work-active';
+    block.after(active); // active step container is a sibling right after the block
+    workActiveEl = active;
     workBlockEl = block;
     return block;
 }

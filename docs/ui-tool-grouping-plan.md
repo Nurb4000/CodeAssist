@@ -235,6 +235,16 @@ Files: `codeassist/static/app.js`, `codeassist/static/style.css`. Backend unchan
       (`openWorkStep` no longer forces `.open`). The live active step stays expanded so
       you can watch it; the Work header still collapses the whole history zone and each
       step header toggles its own open state.
+- [x] Fixed active-step placement (2026-09-25): the active/current step container
+      (`.work-active`) now lives OUTSIDE the collapsible `.work-block` as a sibling that
+      follows it, so it stays visible even when the work section is collapsed by default.
+      `ensureWorkBlock()` attaches `.work-block` first, then appends `.work-active` after
+      it (`.after()` needs a live parent). Completed steps still move into
+      `.work-history` (inside the block) on `closeActiveStep`, so they hide with the
+      collapse. Reload drops completed steps straight into `.work-history` (`openWorkStep`
+      no longer uses the active zone). Verified headless: active step visible while work
+      section collapsed; on completion it moves in and hides (0 steps visible); summary
+      stays in main flow. Reload: 2 steps in collapsed history + prose present.
 - [x] Verified live vs reload render identically via headless Chromium screenshots + DOM
       dumps (expanded steps show prose + per-call previews; real empty-content sessions
       render one clean collapsed step). Work steps stay nested in `.work-block` (a single
