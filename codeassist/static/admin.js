@@ -167,10 +167,13 @@ function openEditModal(title, fields, onSubmit) {
         }
     };
 
-    editModalEl = card;
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.appendChild(card);
+    // Track the backdrop (not the nested card) so closeEditModal() removes the
+    // whole overlay — removing just the card would leave the grey backdrop stuck
+    // on body and freeze the screen until a refresh.
+    editModalEl = backdrop;
     backdrop.addEventListener('click', (e) => {
         if (e.target === backdrop) closeEditModal();
     });
@@ -314,12 +317,14 @@ async function loadAgents() {
                 ], async (p) => {
                     await api('PATCH', `/api/agents/${encodeURIComponent(a.id)}`, { steps: p.steps });
                 })));
+            actions.appendChild(stepChip(a));
             const label = document.createElement('span');
             label.className = 'admin-muted';
             label.textContent = 'built-in';
             actions.appendChild(label);
         } else {
             const actions = tr.lastElementChild;
+            actions.appendChild(stepChip(a));
             actions.appendChild(editButton('Edit', () =>
                 openEditModal(`Agent: ${a.name}`, [
                     { key: 'description', label: 'Description', type: 'textarea', value: a.description || '' },
@@ -340,6 +345,15 @@ async function loadAgents() {
         }
         tbody.appendChild(tr);
     }
+}
+
+// Small muted chip showing an agent's current step budget so it's visible at a
+// glance without opening the edit modal.
+function stepChip(a) {
+    const chip = document.createElement('span');
+    chip.className = 'admin-muted';
+    chip.textContent = 'Steps: ' + (a.steps != null ? a.steps : '—');
+    return chip;
 }
 
 async function loadAll() {
