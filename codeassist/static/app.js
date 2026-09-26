@@ -468,6 +468,7 @@ async function switchSession(id) {
 }
 
 async function deleteSession(id) {
+    if (!window.confirm('Delete this session? This cannot be undone.')) return;
     await api('DELETE', `/api/sessions/${id}`);
     if (currentSessionId === id) {
         currentSessionId = null;
