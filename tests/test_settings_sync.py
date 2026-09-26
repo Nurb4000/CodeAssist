@@ -86,6 +86,7 @@ def test_get_reports_ui_source_after_put(settings_env):
         ({"llm.context_window": 0}, "context window"),
         ({"llm.base_url": "ftp://evil"}, "Base URL"),
         ({"llm.model": ""}, "Model"),
+        ({"agent.steps": 0}, "steps"),
     ],
 )
 def test_put_rejects_invalid_values(settings_env, payload, snippet):
@@ -146,3 +147,25 @@ def test_validate_setting_table():
     assert validate_setting(BY_KEY["llm.base_url"], "notaurl") is not None
     assert validate_setting(BY_KEY["llm.provider"], "openai") is None
     assert validate_setting(BY_KEY["llm.provider"], "nope") is not None
+
+
+def test_agent_steps_applies_live(settings_env):
+    """The default-agent step budget is a live, DB-overridable setting."""
+    from codeassist import server
+
+    client, _ = settings_env
+    # Defaults to the code/dataclass default (50) with no file/DB override.
+    listed = {s["key"]: s for s in client.get("/api/settings").json()["settings"]}
+    assert listed["agent.steps"]["value"] == 50
+    assert listed["agent.steps"]["group"] == "Agent"
+
+    # PUT applies live onto the running config.
+    r = client.put("/api/settings", json={"agent.steps": 120})
+    assert r.status_code == 200, r.text
+    assert r.json()["applied"] == ["agent.steps"]
+    assert server.get_config().agent.steps == 120
+
+    # And is reported as a UI (DB) source, overridable again.
+    listed = {s["key"]: s for s in client.get("/api/settings").json()["settings"]}
+    assert listed["agent.steps"]["source"] == "ui"
+    assert listed["agent.steps"]["value"] == 120

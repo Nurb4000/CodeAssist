@@ -254,8 +254,8 @@ async def _init_subsystems(cfg: Config):
     tools = create_registry(cfg.workspace, cfg.tools, mcp_client, skill_registry, plugin_registry, lsp_client)
 
 
-async def init_agents():
-    await agent_manager.initialize()
+async def init_agents(cfg):
+    await agent_manager.initialize(cfg)
 
 async def _merged_mcp_servers(cfg: Config) -> dict:
     """MCP server registry passed to the client at boot.
@@ -359,7 +359,7 @@ async def lifespan(app: FastAPI):
     from .settings import apply_settings_overrides
     await apply_settings_overrides(cfg)
     await _init_subsystems(cfg)
-    await init_agents()
+    await init_agents(cfg)
     await init_mcp()
     await init_skills()
     await init_plugins()

@@ -8,6 +8,10 @@ log = logging.getLogger(__name__)
 # Agents reseeded by initialize(); they're always present and cannot be deleted.
 BUILTIN_AGENT_KEYS = {"default", "research", "review", "build", "general", "explore", "compaction"}
 
+# Fallback step budget for the built-in default agent when no config is supplied
+# (e.g. unit tests). Kept in sync with the global `agent.steps` config default.
+_DEFAULT_AGENT_STEPS = 50
+
 
 class Permission:
     """Represents a permission for an agent."""
@@ -150,8 +154,14 @@ class AgentManager:
         self._agents: dict[str, AgentConfig] = {}
         self._default_agent_name = "default"
 
-    async def initialize(self):
-        """Initialize agents from database and defaults."""
+    async def initialize(self, cfg=None):
+        """Initialize agents from database and defaults.
+
+        When ``cfg`` is provided the built-in default agent's step budget reads
+        from ``cfg.agent.steps`` (the tunable global default, overridable via the
+        admin Settings UI / config.toml). Callers without a config (tests) fall
+        back to ``_DEFAULT_AGENT_STEPS``.
+        """
         # Load agents from database
         try:
             db_agents = await AgentRecord.list_all()
@@ -169,12 +179,18 @@ class AgentManager:
         except Exception as e:  # noqa: BLE001
             log.error("Failed to load agents from database: %s", e)
 
+        # Default agent step budget: tunable global (cfg.agent.steps) with a
+        # module fallback for config-less callers (tests).
+        default_steps = _DEFAULT_AGENT_STEPS
+        if cfg is not None:
+            default_steps = int(getattr(cfg.agent, "steps", 0) or _DEFAULT_AGENT_STEPS)
+
         # Add default agent if not exists
         if "default" not in self._agents:
             self._agents["default"] = AgentConfig(
                 name="CodeAssist",
                 description="Default development agent with full tool access.",
-                steps=40,
+                steps=default_steps,
                 permissions={
                     "read": ["allow"],
                     "write": ["confirm"],

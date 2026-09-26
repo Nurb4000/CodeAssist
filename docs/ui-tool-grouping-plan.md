@@ -258,10 +258,22 @@ Files: `codeassist/static/app.js`, `codeassist/static/style.css`. Backend unchan
       is MOVED into a dedicated collapsed `.thinking-history` container
       (`ensurePastThinkingContainer` / `archiveThinking`), mirroring the work-block
       active/history split. Reload archives each completed step's reasoning via
-      `makeThinkingBlock` + `appendStepReasoning`. Live == reload verified headless
-      (2 archived entries, count header = 2, 0 inline thinking in completed steps,
-      container collapsed by default). CSS in style.css (`.thinking-history`,
-      `.past-thinking-entry`).
+       `makeThinkingBlock` + `appendStepReasoning`. Live == reload verified headless
+       (2 archived entries, count header = 2, 0 inline thinking in completed steps,
+       container collapsed by default). CSS in style.css (`.thinking-history`,
+       `.past-thinking-entry`).
+- [x] Step-budget headroom + GUI override (2026-09-26): the binding cap is the
+       per-agent `steps` budget (graceful wrap-up), NOT `max_iterations` (hard
+       backstop) — loop uses min(steps, max_iterations). Built-in agents hardcode
+       their own `steps` (default 40, research 25, build 60, explore 15, …), so
+       raising `max_iterations` alone never added headroom. Changes: default agent
+       `steps` 40 -> 50; added tunable global `agent.steps` to the settings catalog
+       (Settings > Agent, number input, min 1, live/no-restart) wired through
+       `apply_settings_overrides` -> `initialize(cfg)` -> default agent;
+       `max_iterations` default 150 -> 200 (generous backstop above steps); removed
+       hardcoded `max_iterations = 100` from config.docker.toml + config.example.toml
+       (that TOML hardcode is why the GUI still showed 100 after a rebuild). Tests:
+       test_config default assertions, test_settings_sync live roundtrip + 422 on 0.
 - [x] Commit + push 2026-09-26: app.js work-section-collapsed-by-default + past-thinking
       container; config timeout default 360 -> 900 (config.py dataclass + Config.load
       fallback, config.example.toml, config.docker.toml); tests test_llm/test_config/

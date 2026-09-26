@@ -80,9 +80,14 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
     {"key": "agent.default_agent", "section": "agent", "field": "default_agent", "type": "str",
      "label": "Default agent", "description": "Agent key used for new sessions.",
      "group": "Agent", "restart_required": False},
-    {"key": "agent.max_iterations", "section": "agent", "field": "max_iterations", "type": "int",
-     "label": "Max iterations", "description": "Tool-call loop budget per turn.",
-     "group": "Agent", "restart_required": False},
+     {"key": "agent.max_iterations", "section": "agent", "field": "max_iterations", "type": "int",
+      "label": "Max iterations", "description": "Hard global cap on tool-call turns (backstop above the graceful step budget).",
+      "group": "Agent", "restart_required": False},
+     {"key": "agent.steps", "section": "agent", "field": "steps", "type": "int",
+      "label": "Default agent steps",
+      "description": "Graceful wrap-up point for the default agent: after this many tool-using turns the model is asked to summarise rather than hard-stopping. Raise for larger projects (per-mode agents keep their own budgets).",
+      "group": "Agent", "restart_required": False},
+
 
     # --- Tools ---
     {"key": "tools.shell_timeout", "section": "tools", "field": "shell_timeout", "type": "int",
@@ -140,6 +145,7 @@ _CONSTRAINTS: dict[str, dict] = {
     "llm.timeout": {"min": 5},
     "server.port": {"min": 1, "max": 65535},
     "agent.max_iterations": {"min": 1},
+    "agent.steps": {"min": 1},
     "tools.shell_timeout": {"min": 1},
     "tools.max_output_chars": {"min": 1},
     "tools.tool_output_max_tokens": {"min": 1},

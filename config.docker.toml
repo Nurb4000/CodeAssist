@@ -31,7 +31,6 @@ port = 8090
 workspace = "/workspace"
 
 [agent]
-max_iterations = 100
 name = "CodeAssist"
 default_agent = "default"
 
