@@ -32,17 +32,23 @@ async def create_agent(body: dict):
 
 @router.patch("/{agent_name}")
 async def update_agent(agent_name: str, body: dict):
-    """Update a custom agent's editable fields (description/model/instructions/max_iterations)."""
+    """Update an agent's editable fields.
+
+    Custom agents expose every field; built-in agents only expose the per-agent
+    step budget (their permissions/instructions are code-defined). Built-in
+    edits persist as a keyed DB override so they survive restarts.
+    """
     from codeassist.agents import BUILTIN_AGENT_KEYS, agent_manager
-    if agent_name in BUILTIN_AGENT_KEYS:
-        raise HTTPException(status_code=400, detail=f"Built-in agent '{agent_name}' is not editable (built-in)")
+    is_builtin = agent_name in BUILTIN_AGENT_KEYS
     try:
         await agent_manager.update_agent(
             agent_name,
-            description=body.get("description"),
-            instructions=body.get("instructions"),
-            model=body.get("model"),
-            max_iterations=body.get("max_iterations"),
+            **({} if is_builtin else {
+                "description": body.get("description"),
+                "instructions": body.get("instructions"),
+                "model": body.get("model"),
+                "max_iterations": body.get("max_iterations"),
+            }),
             steps=body.get("steps"),
         )
     except ValueError as e:

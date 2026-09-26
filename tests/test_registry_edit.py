@@ -145,10 +145,21 @@ class TestAgentRoutes:
         assert agents["edit-me"]["description"] == "updated desc"
         assert agents["edit-me"]["model"] == "gpt-4o-mini"
 
-    def test_patch_builtin_agent_400(self, live_client):
-        r = live_client.patch("/api/agents/default", json={"description": "nope"})
-        assert r.status_code == 400
-        assert "built-in" in r.json()["detail"].lower()
+    def test_patch_builtin_agent_steps(self, live_client):
+        """Built-in agents expose only the tunable step budget; other fields are
+        ignored. The edit persists so it can be re-applied on restart."""
+        r = live_client.patch("/api/agents/default", json={"steps": 77})
+        assert r.status_code == 200, r.text
+
+        agents = {a["id"]: a for a in live_client.get("/api/agents").json()}
+        assert agents["default"]["steps"] == 77
+
+        # Non-editable fields are dropped, not applied.
+        r = live_client.patch("/api/agents/default", json={"steps": 80, "description": "nope"})
+        assert r.status_code == 200, r.text
+        agents = {a["id"]: a for a in live_client.get("/api/agents").json()}
+        assert agents["default"]["steps"] == 80
+        assert agents["default"]["description"].startswith("Default development")
 
     def test_patch_unknown_agent_404(self, live_client):
         r = live_client.patch("/api/agents/no-such-agent", json={"description": "x"})

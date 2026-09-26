@@ -305,10 +305,19 @@ async function loadAgents() {
             `<td>${escapeHtml(a.model || '')}</td>` +
             `<td></td>`);
         if (a.builtin) {
+            const actions = tr.lastElementChild;
+            // Built-ins expose only the tunable per-agent step budget; their
+            // permissions/instructions are code-defined and not editable.
+            actions.appendChild(editButton('Edit', () =>
+                openEditModal(`Agent: ${a.name}`, [
+                    { key: 'steps', label: 'Step budget', type: 'number', value: a.steps ?? '' },
+                ], async (p) => {
+                    await api('PATCH', `/api/agents/${encodeURIComponent(a.id)}`, { steps: p.steps });
+                })));
             const label = document.createElement('span');
             label.className = 'admin-muted';
             label.textContent = 'built-in';
-            tr.lastElementChild.appendChild(label);
+            actions.appendChild(label);
         } else {
             const actions = tr.lastElementChild;
             actions.appendChild(editButton('Edit', () =>

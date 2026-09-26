@@ -154,43 +154,44 @@ class AgentManager:
         self._agents: dict[str, AgentConfig] = {}
         self._default_agent_name = "default"
 
-    async def initialize(self, cfg=None):
+    async def initialize(self):
         """Initialize agents from database and defaults.
 
-        When ``cfg`` is provided the built-in default agent's step budget reads
-        from ``cfg.agent.steps`` (the tunable global default, overridable via the
-        admin Settings UI / config.toml). Callers without a config (tests) fall
-        back to ``_DEFAULT_AGENT_STEPS``.
+        Custom agents (and any built-in budget overrides seeded into the DB via
+        the admin Agents tab) load from ``agents``; unspecified built-ins fall
+        back to their code defaults. Per-agent step-budget overrides for
+        built-ins are applied after seeding so the code-defined permissions and
+        instructions always win.
         """
-        # Load agents from database
+        # Load agents from database, separating built-in budget overrides from
+        # ordinary custom-agent rows (identified by the registry ``key`` column).
+        builtin_budget_overrides: dict[str, dict] = {}
         try:
             db_agents = await AgentRecord.list_all()
             for db_agent in db_agents:
-                config = AgentConfig(
-                    name=db_agent["name"],
-                    description=db_agent.get("description"),
-                    instructions=db_agent.get("instructions"),
-                    model=db_agent.get("model"),
-                    max_iterations=db_agent.get("max_iterations"),
-                    steps=db_agent.get("steps"),
-                    permissions=json.loads(db_agent.get("permissions", "{}")) if db_agent.get("permissions") else {},
-                )
-                self._agents[db_agent["name"]] = config
+                reg_key = db_agent.get("key")
+                if reg_key and reg_key in BUILTIN_AGENT_KEYS:
+                    builtin_budget_overrides[reg_key] = {"steps": db_agent.get("steps")}
+                else:
+                    config = AgentConfig(
+                        name=db_agent["name"],
+                        description=db_agent.get("description"),
+                        instructions=db_agent.get("instructions"),
+                        model=db_agent.get("model"),
+                        max_iterations=db_agent.get("max_iterations"),
+                        steps=db_agent.get("steps"),
+                        permissions=json.loads(db_agent.get("permissions", "{}")) if db_agent.get("permissions") else {},
+                    )
+                    self._agents[db_agent["name"]] = config
         except Exception as e:  # noqa: BLE001
             log.error("Failed to load agents from database: %s", e)
-
-        # Default agent step budget: tunable global (cfg.agent.steps) with a
-        # module fallback for config-less callers (tests).
-        default_steps = _DEFAULT_AGENT_STEPS
-        if cfg is not None:
-            default_steps = int(getattr(cfg.agent, "steps", 0) or _DEFAULT_AGENT_STEPS)
 
         # Add default agent if not exists
         if "default" not in self._agents:
             self._agents["default"] = AgentConfig(
                 name="CodeAssist",
                 description="Default development agent with full tool access.",
-                steps=default_steps,
+                steps=_DEFAULT_AGENT_STEPS,
                 permissions={
                     "read": ["allow"],
                     "write": ["confirm"],
@@ -349,9 +350,20 @@ class AgentManager:
                     "You are a compaction agent. Your ONLY job is to summarize conversation history. "
                     "You do NOT have access to tools. You receive a conversation transcript and must produce "
                     "a concise summary preserving key decisions, code changes, errors, and their resolutions."
-                ),
-                permissions={},
-            )
+                 ),
+                 permissions={},
+             )
+
+        # Apply any persisted per-agent step-budget overrides for built-ins. These
+        # were created via the admin Agents tab and take precedence over the
+        # code-defined defaults (permissions/instructions always come from code).
+        for reg_key, overrides in builtin_budget_overrides.items():
+            agent_cfg = self._agents.get(reg_key)
+            if agent_cfg is None:
+                continue
+            steps = overrides.get("steps")
+            if steps is not None:
+                agent_cfg.steps = int(steps)
 
     def get_agent(self, name: str) -> AgentConfig | None:
         """Get an agent by name."""
@@ -419,23 +431,58 @@ class AgentManager:
             log.error("Failed to delete agent from database: %s", e)
 
     async def update_agent(self, name: str, **kwargs):
-        """Update a custom agent's editable fields (description/model/instructions/max_iterations)."""
+        """Update an agent's editable fields.
+
+        Custom agents expose every field; built-in agents only expose the
+        per-agent step budget (their permissions/instructions are code-defined
+        and must not drift). Built-in edits persist as a keyed override row so
+        they survive restarts and are re-applied over the code defaults.
+        """
+        is_builtin = name in BUILTIN_AGENT_KEYS
         if name not in self._agents:
             raise ValueError(f"Agent '{name}' not found")
         config = self._agents[name]
-        allowed = {"description", "instructions", "model", "max_iterations", "steps"}
+
+        if is_builtin:
+            allowed = {"steps"}
+        else:
+            allowed = {"description", "instructions", "model", "max_iterations", "steps"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
-        for key, value in updates.items():
-            setattr(config, key, value)
+        for field, value in updates.items():
+            setattr(config, field, value)
 
         # Persist to database.
         try:
-            record = await AgentRecord.get_by_name(name)
-            if record:
-                await record.update(**updates)
+            if is_builtin:
+                await self._persist_builtin_override(name, config)
+            else:
+                record = await AgentRecord.get_by_name(name)
+                if record:
+                    await record.update(**updates)
         except Exception as e:  # noqa: BLE001
             log.error("Failed to persist agent changes for '%s': %s", name, e)
         return config
+
+    async def _persist_builtin_override(self, reg_key: str, config: "AgentConfig") -> None:
+        """Upsert a built-in agent's tunable budget as a keyed override row.
+
+        The row reuses the built-in's display ``name`` but is identified by its
+        registry ``key`` so ``initialize()`` can match it back and apply it over
+        the code-defined defaults.
+        """
+        existing = await AgentRecord.get_by_key(reg_key)
+        if existing:
+            await existing.update(steps=config.steps)
+        else:
+            await AgentRecord.create(
+                name=config.name,
+                description=config.description,
+                instructions=config.instructions,
+                model=config.model,
+                max_iterations=config.max_iterations,
+                steps=config.steps,
+                key=reg_key,
+            )
 
 
 # Singleton instance

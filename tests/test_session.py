@@ -443,9 +443,17 @@ class TestPinning:
             )
             version = (await vcur.fetchone())[0]
 
-        # v10 adds reasoning_content; the DB advances past it to the current version.
-        assert version == "11"
+        # v10 adds reasoning_content; the DB advances past it (and v11/v12) to the
+        # current schema version with no data loss.
+        assert version == "12"
         assert "reasoning_content" in cols
+
+        # v11 adds agents.steps and v12 adds agents.key (built-in budget overrides).
+        async with smod.get_db() as adb:
+            cur = await adb.execute("PRAGMA table_info(agents)")
+            agent_cols = [r[1] for r in await cur.fetchall()]
+            assert "steps" in agent_cols
+            assert "key" in agent_cols
 
         # The pre-existing message is preserved (column is nullable, not dropped).
         msgs = await s.get_messages()

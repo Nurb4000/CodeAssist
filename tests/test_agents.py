@@ -224,6 +224,34 @@ class TestAgentManager:
         assert listed["build"] == by_key["build"]
 
     @pytest.mark.asyncio
+    async def test_builtin_step_override_applied_on_reinit(self):
+        """A persisted per-agent step override for a built-in is re-applied after a
+        fresh manager init — this is how the admin Agents tab tunes built-ins."""
+        from codeassist.session import Agent as AgentRecord, init_db
+
+        await init_db()  # create schema/tables
+
+        await AgentRecord.create(
+            name="CodeAssist",
+            description="Default development agent with full tool access.",
+            instructions="",
+            model=None,
+            max_iterations=None,
+            steps=99,
+            key="default",
+            permissions="{}",
+        )
+
+        manager = AgentManager()
+        await manager.initialize()
+        default = manager.get_agent("default")
+        assert default is not None
+        assert default.steps == 99
+        # Code-defined identity + permissions are preserved; only the budget changed.
+        assert default.name == "CodeAssist"
+        assert "read" in default.permissions.get_allowed_tools()
+
+    @pytest.mark.asyncio
     async def test_get_agent(self):
         """Test getting an agent by name."""
         manager = AgentManager()

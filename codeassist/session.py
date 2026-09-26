@@ -184,6 +184,10 @@ async def init_db():
             await _add_v11_tables(db)
             current_version = 11
 
+        if current_version < 12:
+            await _add_v12_tables(db)
+            current_version = 12
+
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
             (str(current_version),)
@@ -225,6 +229,11 @@ async def _add_v2_tables(db):
         CREATE TABLE IF NOT EXISTS agents (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
+            -- Registry key for built-in agents whose per-agent budget has been
+            -- overridden in the DB (e.g. "default", "research"). NULL for custom
+            -- agents, which are identified by name. Lets initialize() tell a
+            -- built-in override apart from an ordinary custom agent.
+            key TEXT,
             description TEXT,
             instructions TEXT,
             model TEXT,
@@ -580,6 +589,16 @@ async def _add_v11_tables(db):
     rows = await cursor.fetchall()
     if not any(r["name"] == "steps" for r in rows):
         await db.execute("ALTER TABLE agents ADD COLUMN steps INTEGER")
+        await db.commit()
+
+
+async def _add_v12_tables(db):
+    """Add a registry-key column so per-agent budget overrides for built-ins can
+    be persisted without colliding with custom-agent identities."""
+    cursor = await db.execute("PRAGMA table_info(agents)")
+    rows = await cursor.fetchall()
+    if not any(r["name"] == "key" for r in rows):
+        await db.execute("ALTER TABLE agents ADD COLUMN key TEXT")
         await db.commit()
 
 
@@ -1020,17 +1039,25 @@ class Agent:
         max_iterations: int | None = None,
         steps: int | None = None,
         permissions: dict[str, list[str]] | None = None,
+        key: str | None = None,
     ) -> "Agent":
         aid = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO agents (id, name, description, instructions, model, max_iterations, steps, permissions, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (aid, name, description, instructions, model, max_iterations, steps, json.dumps(permissions or {}), now, now),
+                "INSERT INTO agents (id, name, key, description, instructions, model, max_iterations, steps, permissions, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (aid, name, key, description, instructions, model, max_iterations, steps, json.dumps(permissions or {}), now, now),
             )
             await db.commit()
         return cls(aid)
+
+    @classmethod
+    async def get_by_key(cls, key: str) -> "Agent | None":
+        async with get_db() as db:
+            cursor = await db.execute("SELECT id FROM agents WHERE key = ? AND enabled = 1", (key,))
+            row = await cursor.fetchone()
+            return cls(row[0]) if row else None
 
     @classmethod
     async def list_all(cls) -> list[dict]:

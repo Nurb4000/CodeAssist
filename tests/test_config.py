@@ -16,7 +16,6 @@ class TestConfig:
         assert config.server.host == "127.0.0.1"
         assert config.server.port == 8090
         assert config.agent.max_iterations == 200
-        assert config.agent.steps == 50
         assert config.tools.shell_timeout == 120
 
     def test_load_config_from_file(self, tmp_path):

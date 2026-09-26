@@ -42,14 +42,10 @@ class ServerConfig:
 
 @dataclass
 class AgentConfig:
-    # Graceful wrap-up happens at the per-agent `steps` budget; max_iterations is
-    # the hard global backstop. Kept well above the default steps budget so the
-    # graceful wrap-up always binds first (never a blunt hard stop).
+    # Hard global backstop on tool-call turns per turn. The graceful per-agent
+    # step budget (see agents.py) binds first; this only fires if an agent is
+    # edited past the cap. Kept generous so it never truncates a normal run.
     max_iterations: int = 200
-    # Default step budget applied to the built-in "default" agent. Specialised
-    # built-in agents (research/build/…) set their own budgets explicitly; this
-    # is the tunable global default (see settings catalog `agent.steps`).
-    steps: int = 50
     name: str = "CodeAssist"
     default_agent: str = "default"
     subagent_depth: int = 1  # Max nested subagent depth (0 = no subagents)
@@ -226,7 +222,6 @@ class Config:
             ),
             agent=AgentConfig(
                 max_iterations=raw.get("agent", {}).get("max_iterations", 200),
-                steps=raw.get("agent", {}).get("steps", 50),
                 name=raw.get("agent", {}).get("name", "CodeAssist"),
                 default_agent=raw.get("agent", {}).get("default_agent", "default"),
                 subagent_depth=raw.get("agent", {}).get("subagent_depth", 1),
