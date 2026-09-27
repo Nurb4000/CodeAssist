@@ -230,3 +230,51 @@ class TestPermissionConfigDefaults:
         """Default permissions mode prompts for confirmation (safest default)."""
         config = Config()
         assert config.permissions.trust_all == "ask"
+
+    def test_model_omitted_stays_blank(self, tmp_path):
+        """A [llm] block without `model` must not fall back to a hardcoded
+        default. Blank means "not configured yet" and the UI prompts for it —
+        silently substituting a model would hide a misconfiguration."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[llm]
+provider = "openai"
+api_key = "test-key"
+""")
+
+        assert Config.load(config_file).llm.model == ""
+
+    def test_embedding_model_from_llm_section(self, tmp_path):
+        """README.md documents embedding_model under [llm]."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[llm]
+provider = "openai"
+embedding_model = "text-embedding-3-small"
+""")
+
+        assert Config.load(config_file).llm.embedding_model == "text-embedding-3-small"
+
+    def test_embedding_model_from_parameters_section(self, tmp_path):
+        """config.example.toml documents it under [llm.parameters] instead —
+        both documented placements must actually work."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[llm]
+provider = "openai"
+
+[llm.parameters]
+embedding_model = "text-embedding-3-large"
+""")
+
+        assert Config.load(config_file).llm.embedding_model == "text-embedding-3-large"
+
+    def test_embedding_model_defaults_blank(self, tmp_path):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[llm]
+provider = "openai"
+model = "some-model"
+""")
+
+        assert Config.load(config_file).llm.embedding_model == ""

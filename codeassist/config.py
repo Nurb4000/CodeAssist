@@ -203,7 +203,9 @@ class Config:
         config = cls(
             llm=LLMConfig(
                 provider=llm_raw.get("provider", "openai"),
-                model=llm_raw.get("model", "gpt-4o"),
+                # No baked-in default: match LLMConfig.model and the documented
+                # "blank until configured in the UI" policy at config.py:16-19.
+                model=llm_raw.get("model", ""),
                 api_key=api_key,
                 base_url=llm_raw.get("base_url", ""),
                 temperature=params.get("temperature", 0.0),
@@ -211,6 +213,9 @@ class Config:
                 context_window=params.get("context_window", 128000),
                 frequency_penalty=params.get("frequency_penalty", 0.0),
                 presence_penalty=params.get("presence_penalty", 0.0),
+                # Documented in two places (config.example.toml puts it under
+                # [llm.parameters], README.md under [llm]); accept either.
+                embedding_model=llm_raw.get("embedding_model") or params.get("embedding_model", ""),
                 vision=llm_raw.get("vision", False),
                 timeout=llm_raw.get("timeout", 900),
             ),
