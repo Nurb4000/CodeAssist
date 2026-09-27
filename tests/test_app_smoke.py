@@ -385,3 +385,47 @@ def test_ws_switch_agent_rebuilds_permissions(live_client, monkeypatch):
     assert built[-1].check("write") == "deny"
     assert built[-1].check("test_runner") == "deny"
     assert built[-1].check("read") == "allow"
+
+
+def test_static_work_block_lifecycle_guards(live_client):
+    """The work-block lifecycle must not collapse or drop content mid-turn.
+
+    These are static assertions, not behavioural tests -- the project has no JS
+    test runner. They pin the three regressions behind "the sections move
+    around before they should", "actions blink and disappear" and "tool use is
+    sometimes not logged":
+      * a step that closes mid-run must stay expanded and visible;
+      * a tool result must be matched across every step, not just the active one;
+      * the Work section may only auto-collapse once the run ends.
+    """
+    js = live_client.get("/static/app.js").text
+    css = live_client.get("/static/style.css").text
+
+    # A closed step stays visible while the run is live.
+    assert "if (!runActive) activeStepEl.classList.remove('open');" in js
+    # Results are routed to the step that owns the call, wherever it lives now.
+    assert "function findStepForToolCall(id)" in js
+    assert "const step = findStepForToolCall(id);" in js
+    # Auto-collapse happens in endRun(), gated on the run being over.
+    assert "runActive = false;\n    finalizeState();" in js
+    assert "if (!workBlockUserToggled && workBlockEl)" in js
+    # Working indicator: a pulsing stop button plus a cue by the mode selector.
+    assert "stopBtn.classList.add('busy')" in js
+    assert "document.body.classList.add('is-working')" in js
+    assert "#stop-btn.busy" in css and "stop-pulse" in css
+    assert "body.is-working .mode-dot" in css
+
+
+def test_static_busy_state_has_single_owner(live_client):
+    """The in-flight UI state must be reset in one place.
+
+    It was copy-pasted across five exit paths, which is how the cancel button
+    and the busy indicator could disagree with the real run state.
+    """
+    js = live_client.get("/static/app.js").text
+    assert "function setBusy(busy)" in js
+    # No exit path should hand-roll the send/stop/input dance any more.
+    assert js.count("sendBtn.style.display = 'flex';") == 1, "setBusy() should own this"
+    assert js.count("stopBtn.style.display = 'none';") == 1
+    assert js.count("inputEl.disabled = false;") == 0, "setBusy() should own this"
+    assert "setAttachmentUiBusy(busy);" in js

@@ -1465,6 +1465,38 @@ body {
 
 #stop-btn:hover { background: #da3633; }
 
+/* Working indicator: while a turn streams, the stop button pulses so there is
+   an unambiguous "busy" cue even when no progress bar is on screen (e.g. while
+   a confirmation dialog or a long tool call is pending). */
+#stop-btn.busy {
+    animation: stop-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes stop-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.55); }
+    50%      { box-shadow: 0 0 0 7px rgba(218, 54, 51, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #stop-btn.busy { animation: none; box-shadow: 0 0 0 3px rgba(218, 54, 51, 0.35); }
+}
+
+/* Secondary cue next to the mode selector, so the busy state is visible even
+   when the composer is scrolled out of view. */
+body.is-working .mode-dot {
+    background: var(--yellow);
+    animation: mode-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mode-dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.75); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.is-working .mode-dot { animation: none; }
+}
+
 /* Welcome */
 .welcome {
     text-align: center;

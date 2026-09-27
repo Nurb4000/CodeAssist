@@ -65,6 +65,8 @@ let pendingUnit = null;
 let pendingProseBuf = '';
 let pendingReasonBuf = '';
 let activeStepEl = null;   // committed work step in the active zone (null when idle)
+let runActive = false;     // a turn is streaming: keep finished steps visible
+let workBlockUserToggled = false; // user opened/closed the Work section by hand
 let ranTools = false;      // did the previous turn use tools? (new-step boundary)
 let workStepCount = 0;     // completed/committed work steps (for the Work header)
 let runWasRefused = false; // last turn was stopped by a provider safety filter
@@ -843,15 +845,20 @@ function finalizeState() {
 function ensureWorkBlock() {
     if (workBlockEl) return workBlockEl;
     const block = document.createElement('div');
-    // Collapsed by default: completed steps in .work-history stay hidden behind
-    // the header until the user expands it. The live active step lives outside
-    // this block and stays visible regardless.
+    // Collapsed between runs: completed steps in .work-history stay hidden behind
+    // the header until the user expands it. While a run is in progress the block
+    // is force-shown (see setWorkHistoryVisible) so steps closing mid-turn do not
+    // blink out of existence. The live active step lives outside this block and
+    // stays visible regardless.
     block.className = 'work-block history-hidden';
     block.innerHTML =
         `<div class="work-block-header">Work (<span class="work-count">0</span>) <span class="work-chevron">▸</span></div>` +
         `<div class="work-history"></div>`;
     block.querySelector('.work-block-header').addEventListener('click', () => {
         const hidden = block.classList.toggle('history-hidden');
+        // Respect an explicit manual toggle: neither the mid-run force-show nor
+        // endRun() should override a section the user opened or closed on purpose.
+        workBlockUserToggled = true;
         block.querySelector('.work-chevron').textContent = hidden ? '▸' : '▾';
     });
     workHistoryEl = block.querySelector('.work-history');
@@ -868,10 +875,19 @@ function ensureWorkBlock() {
 }
 
 function updateWorkCount() {
+    if (runActive && !workBlockUserToggled) setWorkHistoryVisible(true);
     if (workBlockEl) {
         const c = workBlockEl.querySelector('.work-count');
         if (c) c.textContent = workStepCount;
     }
+}
+
+// Show/hide the completed-step history without clobbering a manual toggle.
+function setWorkHistoryVisible(visible) {
+    if (!workBlockEl) return;
+    workBlockEl.classList.toggle('history-hidden', !visible);
+    const chev = workBlockEl.querySelector('.work-chevron');
+    if (chev) chev.textContent = visible ? '▾' : '▸';
 }
 
 function createWorkStep(n) {
@@ -932,7 +948,11 @@ function commitPendingUnit() {
 // expand an individual step, and the Work header collapses the whole history.
 function closeActiveStep() {
     if (!activeStepEl) return;
-    activeStepEl.classList.remove('open');
+    // Stay expanded while the run is live. Collapsing here made a step vanish
+    // the moment the model narrated past it, because the step moved into
+    // .work-history which is display:none between runs -- so tool output
+    // appeared to blink out and then reappear in a different position.
+    if (!runActive) activeStepEl.classList.remove('open');
     // Archive this step's reasoning into the past-thinking container (collapsed);
     // the completed step keeps its prose + tool calls but no longer shows thinking.
     const think = activeStepEl.querySelector('.thinking-block');
@@ -982,21 +1002,48 @@ function onToolCall(name, args, id) {
 }
 
 function onToolResult(id, output) {
-    if (activeStepEl) updateToolResultIn(activeStepEl, id, output);
-    else if (pendingUnit) {
+    // Results can arrive after their step already closed (the model narrating
+    // past a tool call moves the step into history), so looking only at
+    // activeStepEl silently dropped them. Search every step, newest first.
+    const step = findStepForToolCall(id);
+    if (step) {
+        updateToolResultIn(step, id, output);
+    } else if (pendingUnit) {
         const stack = pendingUnit.querySelector('.tool-call-stack');
         if (stack) {
             const div = matchToolCallIn(stack, id);
             if (div) { div._output = output || ''; applyToolCallRender(div); }
         }
     }
+    if (pendingUnit) updateToolResultIn(pendingUnit, id, output);
     maybeScrollToBottom();
+}
+
+// Locate the work step (or pending unit) that owns tool call `id`, searching
+// most-recent-first so a duplicate id in an older step cannot win.
+function findStepForToolCall(id) {
+    if (!id) return null;
+    const candidates = [];
+    if (activeStepEl) candidates.push(activeStepEl);
+    if (workActiveEl) candidates.push(...workActiveEl.querySelectorAll('.work-step'));
+    if (workHistoryEl) candidates.push(...workHistoryEl.querySelectorAll('.work-step'));
+    for (const el of candidates) {
+        if (matchToolCallIn(el.querySelector('.tool-call-stack'), id)) return el;
+    }
+    return null;
 }
 
 // End a run: close any active step and flush an uncommitted summary to main flow.
 function endRun() {
     if (activeStepEl) closeActiveStep();
     flushPendingToMainFlow();
+    // The run is over, so finished steps may collapse into the Work section --
+    // but only if the user has not opened it deliberately.
+    if (!workBlockUserToggled && workBlockEl) {
+        setWorkHistoryVisible(false);
+        workHistoryEl.querySelectorAll('.work-step.open').forEach((el) => el.classList.remove('open'));
+    }
+    runActive = false;
     finalizeState();
 }
 
@@ -1447,13 +1494,7 @@ function connectWS() {
             endRun();
             ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
-            isStreaming = false;
-            sendBtn.disabled = false;
-            sendBtn.style.display = 'flex';
-            stopBtn.style.display = 'none';
-            inputEl.disabled = false;
-            setAttachmentUiBusy(false);
-            inputEl.focus();
+            setBusy(false);
         } else if (data.type === 'refusal') {
             // Distinct from 'error': a refusal is a provider policy decision,
             // not a malfunction, and retrying the same request won't help. Show
@@ -1476,26 +1517,14 @@ function connectWS() {
                     ${suggestions ? `<ul style="margin:8px 0 0;padding-left:18px;font-size:13px;">${suggestions}</ul>` : ''}
                 </div>`;
             scrollToBottom();
-            isStreaming = false;
-            sendBtn.disabled = false;
-            sendBtn.style.display = 'flex';
-            stopBtn.style.display = 'none';
-            inputEl.disabled = false;
-            setAttachmentUiBusy(false);
-            inputEl.focus();
+            setBusy(false);
         } else if (data.type === 'incomplete') {
             hideProgress();
             endRun();
             ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--yellow);margin-top:8px;">⚠ ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
             showContinueButton();
-            isStreaming = false;
-            sendBtn.disabled = false;
-            sendBtn.style.display = 'flex';
-            stopBtn.style.display = 'none';
-            inputEl.disabled = false;
-            setAttachmentUiBusy(false);
-            inputEl.focus();
+            setBusy(false);
         } else if (data.type === 'done') {
             hideProgress();
             endRun();
@@ -1511,13 +1540,7 @@ function connectWS() {
             }
             runWasRefused = false;
             scrollToBottom();
-            isStreaming = false;
-            sendBtn.disabled = false;
-            sendBtn.style.display = 'flex';
-            stopBtn.style.display = 'none';
-            inputEl.disabled = false;
-            setAttachmentUiBusy(false);
-            inputEl.focus();
+            setBusy(false);
         } else if (data.type === 'cancelled') {
             hideProgress();
             endRun();
@@ -1549,12 +1572,7 @@ function connectWS() {
         wsConnected = false;
         if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         updateConnectionStatus('disconnected');
-        if (!isStreaming) {
-            sendBtn.disabled = false;
-            sendBtn.style.display = 'flex';
-            stopBtn.style.display = 'none';
-            inputEl.disabled = false;
-        }
+        if (!isStreaming) setBusy(false);
         // Don't reconnect on4001 (auth failure) or intentional close
         if (event.code === 4001) {
             updateConnectionStatus('error');
@@ -1614,12 +1632,7 @@ function sendMessage() {
         return;
     }
 
-    isStreaming = true;
-    sendBtn.disabled = true;
-    sendBtn.style.display = 'none';
-    stopBtn.style.display = 'flex';
-    inputEl.disabled = true;
-    setAttachmentUiBusy(true);
+    setBusy(true);
     inputEl.value = '';
     inputEl.style.height = 'auto';
 
@@ -1628,6 +1641,10 @@ function sendMessage() {
     appendUserMessage(text, [...files.map(f => ({ attachment_type: 'text', file_name: f.name })), ...images]);
     clearPendingImages();
     hideContinueButton();
+    // A new turn: show finished steps as they close, and let endRun() decide
+    // whether to collapse them again.
+    workBlockUserToggled = false;
+    runActive = true;
     showProgress('Thinking...');
     ws.send(JSON.stringify({ type: 'user_message', content: text, images, files }));
 }
@@ -1667,6 +1684,29 @@ let progressEl = null;
 let progressShowTime = 0;
 let progressMinTimer = null;
 let continueBtnContainer = null;
+
+// Single owner of the in-flight UI state. Previously the reset (send/stop
+// button, input, attachments) was copy-pasted into five exit paths, which is
+// how the cancel button and indicator could disagree with the actual run state.
+function setBusy(busy) {
+    isStreaming = busy;
+    if (busy) {
+        sendBtn.disabled = true;
+        sendBtn.style.display = 'none';
+        stopBtn.style.display = 'flex';
+        stopBtn.classList.add('busy');
+        document.body.classList.add('is-working');
+    } else {
+        sendBtn.disabled = false;
+        sendBtn.style.display = 'flex';
+        stopBtn.style.display = 'none';
+        stopBtn.classList.remove('busy');
+        document.body.classList.remove('is-working');
+    }
+    inputEl.disabled = busy;
+    setAttachmentUiBusy(busy);
+    if (!busy) inputEl.focus();
+}
 
 function showProgress(status) {
     // Always remove any existing progress bar immediately
