@@ -329,16 +329,12 @@ def test_ws_review_agent_receives_enforced_ruleset(live_client, monkeypatch):
     monkeypatch.setattr(agent_mod, "Agent", spy)
 
     sid = f"review-ruleset-{uuid.uuid4()}"
-    # Persist the choice, then reconnect: the agent (and its ruleset) is built
-    # once per connection, so a mid-connection switch is not picked up until the
-    # next connect.
+    # No reconnect: the switch must take effect within this same connection.
     with live_client.websocket_connect(f"/ws/{sid}") as ws:
-        _drain_until(ws, "active_agent")
+        assert _drain_until(ws, "active_agent")["agent"]["id"] == "default"
         ws.send_json({"type": "switch_agent", "agent_name": "review"})
         _drain_until(ws, "agent_switched")
 
-    with live_client.websocket_connect(f"/ws/{sid}") as ws:
-        assert _drain_until(ws, "active_agent")["agent"]["id"] == "review"
         ws.send_json({"type": "user_message", "content": "review this change"})
         _drain_until(ws, "error")  # the stubbed LLM raises
 
@@ -348,3 +344,44 @@ def test_ws_review_agent_receives_enforced_ruleset(live_client, monkeypatch):
     assert ruleset.check("write") == "deny"
     assert ruleset.check("apply_patch") == "deny"
     assert ruleset.check("read") == "allow"
+
+
+def test_ws_switch_agent_rebuilds_permissions(live_client, monkeypatch):
+    """`switch_agent` must rebuild the agent, not just swap its prompt.
+
+    Regression: the handler mutated `agent.system_prompt` in place, so the new
+    agent's permission ruleset and step budget were never applied -- switching
+    into the read-only review agent kept the previous agent's write access.
+    """
+    import uuid
+
+    import codeassist.agent as agent_mod
+    import codeassist.llm as llm_mod
+
+    async def _stub_stream(self, *args, **kwargs):
+        raise ConnectionError("stubbed LLM for test")
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    built: list = []
+    real_agent_cls = agent_mod.Agent
+
+    def spy(*args, **kwargs):
+        built.append(kwargs.get("agent_ruleset"))
+        return real_agent_cls(*args, **kwargs)
+
+    monkeypatch.setattr(agent_mod, "Agent", spy)
+
+    sid = f"switch-perms-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        _drain_until(ws, "active_agent")
+        assert built[-1].check("edit") == "confirm", "default agent confirms writes"
+
+        ws.send_json({"type": "switch_agent", "agent_name": "review"})
+        _drain_until(ws, "agent_switched")
+
+    assert len(built) == 2, "switching must construct a new Agent"
+    assert built[-1].check("edit") == "deny", "review must deny edits after a switch"
+    assert built[-1].check("write") == "deny"
+    assert built[-1].check("test_runner") == "deny"
+    assert built[-1].check("read") == "allow"

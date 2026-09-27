@@ -574,12 +574,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     session = await Session.get_or_create(session_id)
 
     # Get current agent: per-session choice (agent switcher), defaulting to config.
-    current_agent_name = await session.get_agent_name() or cfg.agent.default_agent
+    async def resolve_agent_name() -> str:
+        """Re-read the session's agent choice. Called per turn so a mid-connection
+        ``switch_agent`` takes effect immediately instead of at the next connect."""
+        name = await session.get_agent_name() or cfg.agent.default_agent
+        if agent_manager.get_agent(name) is None:
+            # Stored agent no longer exists (deleted since); fall back to default.
+            name = cfg.agent.default_agent
+        return name
+
+    current_agent_name = await resolve_agent_name()
     agent_config_obj = agent_manager.get_agent(current_agent_name)
-    if agent_config_obj is None:
-        # Stored agent no longer exists (deleted since); fall back to default.
-        current_agent_name = cfg.agent.default_agent
-        agent_config_obj = agent_manager.get_agent(current_agent_name)
 
     # Discover and load project instructions (AGENTS.md, CLAUDE.md, etc.)
     discoverer = get_instruction_discoverer()
@@ -590,32 +595,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     )
     instructions_text = discoverer.get_combined_content(instruction_sources)
 
-    # Build system prompt with instructions injected
-    from codeassist.prompts import build_system_prompt
-    base_prompt = agent_config_obj.get_system_prompt() if agent_config_obj else "You are a helpful coding assistant."
-    system_prompt = build_system_prompt(
-        workspace=cfg.workspace,
-        model_id=cfg.llm.model,
-        features={
-            "mcp_enabled": cfg.mcp.enabled,
-            "skills_enabled": cfg.skills.enabled,
-            "plugins_enabled": cfg.plugins.enabled,
-            "lsp_enabled": cfg.lsp.enabled,
-            "git_enabled": cfg.git.enabled,
-        },
-        instructions=instructions_text if instructions_text else None,
-    )
-    # Prepend agent-specific description/instructions
-    if agent_config_obj:
-        agent_header = agent_config_obj.get_system_prompt()
-        if agent_header and agent_header != base_prompt:
-            system_prompt = agent_header + "\n\n" + system_prompt
-
-    # Inject skill guidance into system prompt (if skills are enabled)
-    if skill_registry and cfg.skills.enabled:
-        skill_guidance = skill_registry.get_instructions()
-        if skill_guidance:
-            system_prompt += "\n\n" + skill_guidance
+    features = {
+        "mcp_enabled": cfg.mcp.enabled,
+        "skills_enabled": cfg.skills.enabled,
+        "plugins_enabled": cfg.plugins.enabled,
+        "lsp_enabled": cfg.lsp.enabled,
+        "git_enabled": cfg.git.enabled,
+    }
 
     # Use the global tools registry (supports dynamic reloading)
     if tools is None:
@@ -632,18 +618,45 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     if task_tool and hasattr(task_tool, "configure"):
         task_tool.configure(session_id, cfg, tools)
 
-    # Pass the active agent's permission map so the loop actually enforces it.
-    # Omitting this left every agent's deny/allow list unenforced (it only ever
-    # reached the system prompt), which is how the read-only review agent could
-    # write code.
-    agent = Agent(
-        cfg,
-        session,
-        tools,
-        system_prompt,
-        agent_ruleset=(agent_config_obj.permissions.to_ruleset() if agent_config_obj else None),
-        max_steps=agent_config_obj.steps if agent_config_obj else None,
-    )
+    def build_agent(agent_name: str):
+        """Build a fresh Agent for `agent_name`.
+
+        Called once per turn rather than once per connection: previously the
+        system prompt, step budget and permission ruleset were all frozen at
+        connect time, so a mid-connection `switch_agent` was acknowledged but
+        only took effect on the next connect.
+
+        The permission ruleset is passed through so the loop actually enforces
+        it -- omitting it left every agent's deny/allow list unenforced (it only
+        ever reached the system prompt), which is how the read-only review
+        agent could write code.
+        """
+        from codeassist.prompts import build_system_prompt
+
+        config_obj = agent_manager.get_agent(agent_name)
+        prompt = build_system_prompt(
+            workspace=cfg.workspace,
+            model_id=cfg.llm.model,
+            features=features,
+            instructions=instructions_text or None,
+        )
+        if config_obj:
+            agent_header = config_obj.get_system_prompt()
+            if agent_header:
+                prompt = agent_header + "\n\n" + prompt
+        if skill_registry and cfg.skills.enabled:
+            prompt += "\n\n" + skill_registry.get_instructions()
+
+        return Agent(
+            cfg,
+            session,
+            tools,
+            prompt,
+            agent_ruleset=(config_obj.permissions.to_ruleset() if config_obj else None),
+            max_steps=config_obj.steps if config_obj else None,
+        )
+
+    agent = build_agent(current_agent_name)
     agent_task: asyncio.Task | None = None
 
     # Tell the client which agent is active for this session (agent switcher).
@@ -655,10 +668,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             "agent": _agent_info,
         })
 
-    async def run_agent_task(message: str, attachments: list | None = None):
+    async def run_agent_task(runner, message: str, attachments: list | None = None):
+        """Relay one turn. `runner` is passed explicitly rather than closed over
+        so a turn always uses the agent that was current when it was queued."""
         nonlocal agent_task
         try:
-            async for event in agent.run(message, attachments or None):
+            async for event in runner.run(message, attachments or None):
                 await websocket.send_json({
                     "type": event.type,
                     **event.data,
@@ -704,7 +719,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     continue
 
                 attachments = images + files
-                agent_task = asyncio.create_task(run_agent_task(content, attachments))
+                # Re-resolve the agent every turn so a `switch_agent` issued
+                # earlier in this same connection takes effect now.
+                active_name = await resolve_agent_name()
+                if active_name != current_agent_name:
+                    current_agent_name = active_name
+                    agent = build_agent(active_name)
+                agent_task = asyncio.create_task(run_agent_task(agent, content, attachments))
 
             elif data.get("type") == "cancel":
                 if agent_task and not agent_task.done():
@@ -780,24 +801,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await session.set_agent_name(agent_name)
                     current_agent_name = agent_name
 
-                    # Rebuild the system prompt for the new agent (mirrors connect path).
-                    new_base_prompt = new_config.get_system_prompt() if new_config else "You are a helpful coding assistant."
-                    new_header = new_config.get_system_prompt() if new_config else None
-                    new_system_prompt = build_system_prompt(
-                        workspace=cfg.workspace,
-                        model_id=cfg.llm.model,
-                        features={
-                            "mcp_enabled": cfg.mcp.enabled,
-                            "skills_enabled": cfg.skills.enabled,
-                            "plugins_enabled": cfg.plugins.enabled,
-                            "lsp_enabled": cfg.lsp.enabled,
-                            "git_enabled": cfg.git.enabled,
-                        },
-                        instructions=instructions_text if instructions_text else None,
-                    )
-                    if new_header and new_header != new_base_prompt:
-                        new_system_prompt = new_header + "\n\n" + new_system_prompt
-                    agent.system_prompt = new_system_prompt
+                    # Rebuild the agent, not just its system prompt. Mutating
+                    # `agent.system_prompt` in place left the new agent's
+                    # permission ruleset and step budget belonging to the
+                    # previous one, so a switch into a read-only agent kept the
+                    # old agent's write access for that session.
+                    agent = build_agent(agent_name)
 
                     await websocket.send_json({
                         "type": "agent_switched",

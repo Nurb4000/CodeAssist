@@ -299,7 +299,11 @@ class AgentManager:
                     "todo": ["allow"],
                     "symbol_search": ["allow"],
                     "diff_preview": ["allow"],
-                    "test_runner": ["allow"],
+                    # Test runners execute project code and write build/test
+                    # artifacts, which contradicts this agent's "never modifies
+                    # files" contract. Denied for a strict boundary; research and
+                    # explore fall through to the "ask" default instead.
+                    "test_runner": ["deny"],
                     # Explicit rather than relying on the "ask" default: `git
                     # diff` is how this agent reviews a change set, but
                     # checkout/reset/clean discard work, so it must still prompt.
