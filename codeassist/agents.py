@@ -1,12 +1,31 @@
 import json
 import logging
 
+from .permissions import PermissionRule, PermissionRuleset
 from .session import Agent as AgentRecord
 
 log = logging.getLogger(__name__)
 
 # Agents reseeded by initialize(); they're always present and cannot be deleted.
 BUILTIN_AGENT_KEYS = {"default", "research", "review", "build", "general", "explore", "compaction"}
+
+# Tools that can modify the workspace, the repo, or execute code, and that the
+# read-only agents previously did not mention at all. An agent's permission map
+# is an allowlist, so an unlisted tool falls through PermissionRuleset's "ask"
+# default — which means the read-only agents could still reach file mutation
+# behind a single confirmation click, via apply_patch or git_snapshot, and
+# research/review did not even deny `git` (whose checkout/reset/clean discard
+# work). Read-only agents must deny these by name.
+WORKSPACE_MUTATING_TOOLS = (
+    "apply_patch",     # applies unified diffs to source files
+    "package_manager", # installs and runs project code
+    "create_skill",    # writes new skill files
+    "create_tool",     # writes new tool files
+    "docker",          # runs containers
+    "database",        # SQL including UPDATE/DELETE
+    "git_snapshot",    # creates commits
+    "process",         # spawns and stops processes
+)
 
 # Fallback step budget for the built-in default agent when no config is supplied
 # (e.g. unit tests). Kept in sync with the global `agent.steps` config default.
@@ -68,6 +87,23 @@ class AgentPermissions:
     def get_denied_tools(self) -> list[str]:
         """Get list of explicitly denied tools."""
         return [name for name, perm in self._permissions.items() if perm.action == "deny"]
+
+    def to_ruleset(self) -> PermissionRuleset:
+        """Convert to the ``PermissionRuleset`` the agent loop enforces.
+
+        Without this the per-agent permission maps were only ever read to
+        decorate the system prompt ("you are NOT allowed to use X"), never
+        enforced — ``Agent`` was constructed without an ``agent_ruleset``, so
+        every tool fell through to the global ruleset and merely asked.
+        """
+        ruleset = PermissionRuleset()
+        for perm in self._permissions.values():
+            ruleset.add_rule(PermissionRule(
+                tool_name=perm.tool_name,
+                action=perm.action,
+                pattern=perm.scope or "*",
+            ))
+        return ruleset
 
     def to_dict(self) -> dict:
         return {name: perm.to_dict() for name, perm in self._permissions.items()}
@@ -229,6 +265,8 @@ class AgentManager:
                     "todo": ["allow"],
                     "symbol_search": ["allow"],
                     "diff_preview": ["deny"],
+                    "git": ["deny"],
+                    **{t: ["deny"] for t in WORKSPACE_MUTATING_TOOLS},
                 },
             )
 
@@ -252,7 +290,9 @@ class AgentManager:
                     "read": ["allow"],
                     "write": ["deny"],
                     "edit": ["deny"],
-                    "shell": ["confirm"],
+                    # Denied, not "confirm": shell can write files, and this
+                    # agent promises never to modify files.
+                    "shell": ["deny"],
                     "glob": ["allow"],
                     "grep": ["allow"],
                     "webfetch": ["allow"],
@@ -260,6 +300,11 @@ class AgentManager:
                     "symbol_search": ["allow"],
                     "diff_preview": ["allow"],
                     "test_runner": ["allow"],
+                    # Explicit rather than relying on the "ask" default: `git
+                    # diff` is how this agent reviews a change set, but
+                    # checkout/reset/clean discard work, so it must still prompt.
+                    "git": ["confirm"],
+                    **{t: ["deny"] for t in WORKSPACE_MUTATING_TOOLS},
                 },
             )
 
@@ -338,6 +383,7 @@ class AgentManager:
                     "symbol_search": ["allow"],
                     "directory": ["allow"],
                     "lsp": ["allow"],
+                    **{t: ["deny"] for t in WORKSPACE_MUTATING_TOOLS},
                 },
             )
 

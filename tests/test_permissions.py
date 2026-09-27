@@ -142,3 +142,94 @@ class TestPermissionManager:
         assert await pm.check_permission("write", ".env") == "deny"
         assert await pm.check_permission("write", "src/main.py") == "allow"
         assert await pm.check_permission("write", "other/file.txt") == "ask"
+
+
+class TestAgentDenyIsAuthoritative:
+    """An agent's explicit deny must survive global conveniences.
+
+    Regression: a remembered "allow" used to short-circuit check_permission
+    before the agent ruleset was consulted, so ticking "remember" on an edit in
+    the default agent permanently defeated the review agent's "edit": deny —
+    letting a read-only agent write code with no prompt at all.
+    """
+
+    @staticmethod
+    def _review_ruleset():
+        rs = PermissionRuleset()
+        rs.add_default("edit", "deny")
+        rs.add_default("write", "deny")
+        return rs
+
+    @pytest.mark.asyncio
+    async def test_remembered_allow_cannot_override_agent_deny(self):
+        pm = PermissionManager()
+        rs = self._review_ruleset()
+
+        assert await pm.check_permission("edit", "a.py", rs) == "deny"
+        # The user approves an edit in the *default* agent and ticks remember.
+        pm.saved._cache["edit:*"] = "allow"
+
+        assert await pm.check_permission("edit", "a.py", rs) == "deny"
+
+    @pytest.mark.asyncio
+    async def test_remembered_allow_still_applies_without_agent_ruleset(self):
+        """Preferring the user's saved choice is still correct when no agent
+        ruleset is in play — the fix must not disable remembered permissions."""
+        pm = PermissionManager()
+        pm.saved._cache["edit:*"] = "allow"
+        assert await pm.check_permission("edit", "a.py") == "allow"
+
+    @pytest.mark.asyncio
+    async def test_remembered_ask_cannot_override_agent_deny(self):
+        pm = PermissionManager()
+        pm.saved._cache["write:*"] = "ask"
+        assert await pm.check_permission("write", "a.py", self._review_ruleset()) == "deny"
+
+    @pytest.mark.asyncio
+    async def test_agent_allow_still_beats_global_deny_default(self):
+        """Sanity: a permitted tool is still permitted."""
+        pm = PermissionManager()
+        rs = PermissionRuleset()
+        rs.add_default("read", "allow")
+        assert await pm.check_permission("read", "a.py", rs) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_unrelated_tool_unaffected_by_agent_deny(self):
+        """Scoping the deny to one tool must not deny everything."""
+        pm = PermissionManager()
+        rs = self._review_ruleset()
+        assert await pm.check_permission("read", "a.py", rs) == "ask"
+
+    @pytest.mark.asyncio
+    async def test_specific_deny_pattern_respected(self):
+        """A path-scoped deny is also authoritative over a remembered wildcard."""
+        pm = PermissionManager()
+        rs = PermissionRuleset()
+        rs.add_rule(PermissionRule(tool_name="edit", action="deny", pattern="*.env"))
+        pm.saved._cache["edit:*"] = "allow"
+
+        assert await pm.check_permission("edit", "config.env", rs) == "deny"
+        assert await pm.check_permission("edit", "main.py", rs) == "allow"
+
+
+class TestAgentPermissionsToRuleset:
+    """AgentPermissions must produce an enforceable ruleset."""
+
+    def test_round_trips_actions(self):
+        from codeassist.agents import AgentPermissions, Permission
+
+        perms = AgentPermissions([
+            Permission("read", "allow"),
+            Permission("write", "deny"),
+            Permission("shell", "confirm"),
+        ])
+        rs = perms.to_ruleset()
+        assert rs.check("read") == "allow"
+        assert rs.check("write") == "deny"
+        assert rs.check("shell") == "confirm"
+
+    def test_unlisted_tool_still_asks(self):
+        from codeassist.agents import AgentPermissions, Permission
+
+        rs = AgentPermissions([Permission("read", "allow")]).to_ruleset()
+        assert rs.check("apply_patch") == "ask"

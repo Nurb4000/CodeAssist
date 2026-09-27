@@ -632,7 +632,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     if task_tool and hasattr(task_tool, "configure"):
         task_tool.configure(session_id, cfg, tools)
 
-    agent = Agent(cfg, session, tools, system_prompt, max_steps=agent_config_obj.steps)
+    # Pass the active agent's permission map so the loop actually enforces it.
+    # Omitting this left every agent's deny/allow list unenforced (it only ever
+    # reached the system prompt), which is how the read-only review agent could
+    # write code.
+    agent = Agent(
+        cfg,
+        session,
+        tools,
+        system_prompt,
+        agent_ruleset=(agent_config_obj.permissions.to_ruleset() if agent_config_obj else None),
+        max_steps=agent_config_obj.steps if agent_config_obj else None,
+    )
     agent_task: asyncio.Task | None = None
 
     # Tell the client which agent is active for this session (agent switcher).

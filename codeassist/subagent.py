@@ -140,7 +140,17 @@ class SubagentManager:
 
             # Run the agent
             from codeassist.agent import Agent
-            sub_agent = Agent(config, child_session, tools_registry, system_prompt, max_steps=agent_config.steps)
+            sub_agent = Agent(
+                config,
+                child_session,
+                tools_registry,
+                system_prompt,
+                # Enforce the subagent's own permission map; without it a
+                # read-only subagent (explore/research) inherited the parent's
+                # unrestricted access.
+                agent_ruleset=agent_config.permissions.to_ruleset(),
+                max_steps=agent_config.steps,
+            )
 
             # Inject the prompt as a user message and run
             result_parts = []

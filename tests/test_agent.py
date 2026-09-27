@@ -899,3 +899,129 @@ class TestAgentRefusal:
             events.append(event)
 
         assert "refusal" not in [e.type for e in events]
+
+
+class TestAgentRulesetEnforcement:
+    """The agent's own permission map must be enforced by the loop.
+
+    Regression: ``Agent`` was constructed without ``agent_ruleset`` from both
+    ``server.py`` and ``subagent.py``, so every per-agent deny/allow list was
+    inert and the read-only review agent could write code.
+    """
+
+    @staticmethod
+    def _review_agent(mock_config, mock_session, mock_tools):
+        from codeassist.agents import AgentPermissions, Permission
+
+        with patch("codeassist.agent.LLMClient") as mock_llm_client:
+            mock_llm = MagicMock()
+            mock_llm.stream = AsyncMock()
+            mock_llm.format_tools = MagicMock(return_value=None)
+            mock_llm_client.return_value = mock_llm
+            agent = Agent(
+                mock_config,
+                mock_session,
+                mock_tools,
+                system_prompt="review",
+                agent_ruleset=AgentPermissions([
+                    Permission("read", "allow"),
+                    Permission("edit", "deny"),
+                    Permission("write", "deny"),
+                ]).to_ruleset(),
+            )
+            agent.llm = mock_llm
+            return agent
+
+    @pytest.mark.asyncio
+    async def test_deny_without_trust_all(self, mock_config, mock_session, mock_tools):
+        agent = self._review_agent(mock_config, mock_session, mock_tools)
+        assert await agent.get_permission_action("edit", {"file_path": "a.py"}) == "deny"
+        assert await agent.get_permission_action("write", {"file_path": "a.py"}) == "deny"
+
+    @pytest.mark.asyncio
+    async def test_deny_survives_trust_all(self, mock_config, mock_session, mock_tools):
+        """"Trust all tools" is a session-wide convenience; it must not turn a
+        read-only agent into one that can write."""
+        agent = self._review_agent(mock_config, mock_session, mock_tools)
+        agent._trust_all = True
+        assert await agent.get_permission_action("edit", {"file_path": "a.py"}) == "deny"
+        assert await agent.get_permission_action("write", {"file_path": "a.py"}) == "deny"
+
+    @pytest.mark.asyncio
+    async def test_trust_all_still_allows_otherwise(self, mock_config, mock_session, mock_tools):
+        """The fix must not break the feature for non-restricted tools."""
+        agent = self._review_agent(mock_config, mock_session, mock_tools)
+        agent._trust_all = True
+        assert await agent.get_permission_action("read", {"file_path": "a.py"}) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_no_ruleset_preserves_trust_all(self, agent):
+        """An agent constructed with no ruleset (default callers) is unaffected."""
+        agent._trust_all = True
+        assert await agent.get_permission_action("shell", {}) == "allow"
+
+
+class TestBuiltinAgentPermissions:
+    """Read-only agents must deny every workspace-mutating tool by name.
+
+    An unlisted tool falls through to the "ask" default, so anything omitted
+    from these maps was reachable behind a single confirmation click.
+    """
+
+    DENY_ALL = (
+        "write", "edit", "apply_patch", "shell", "git", "git_snapshot",
+        "process", "package_manager", "create_skill", "create_tool",
+        "docker", "database",
+    )
+    # review reviews a change set with `git diff`, but git can also checkout /
+    # reset / clean, so it prompts instead of hard-denying.
+    REVIEW_GIT = "ask"
+
+    @staticmethod
+    def _ruleset(key):
+        import asyncio
+        import sqlite3
+
+        from codeassist.agents import AgentManager
+
+        mgr = AgentManager()
+
+        async def run():
+            try:
+                await asyncio.wait_for(mgr.initialize(), timeout=10)
+            except (sqlite3.Error, OSError):
+                # Built-in agents are seeded in code, so a missing/unmigrated
+                # test database does not affect the permission maps under test.
+                pass
+            return mgr._agents[key].permissions.to_ruleset()
+
+        return asyncio.run(run())
+
+    @staticmethod
+    async def _check(tool, ruleset):
+        from codeassist.permissions import PermissionManager
+
+        return await PermissionManager().check_permission(tool, "", ruleset)
+
+    @pytest.mark.parametrize("key", ["review", "research", "explore"])
+    def test_mutating_tools_denied(self, key):
+        import asyncio
+
+        ruleset = self._ruleset(key)
+        for tool in self.DENY_ALL:
+            expected = self.REVIEW_GIT if (key == "review" and tool == "git") else "deny"
+            action = asyncio.run(self._check(tool, ruleset))
+            assert action == expected, f"{key}: {tool} -> {action}, expected {expected}"
+
+    @pytest.mark.parametrize("key", ["review", "research", "explore"])
+    def test_no_mutating_tool_is_silently_allowed(self, key):
+        """The blunt safety net: nothing mutating may be allowed outright."""
+        ruleset = self._ruleset(key)
+        for tool in self.DENY_ALL:
+            assert ruleset.check(tool) != "allow", f"{key} must not allow {tool}"
+
+    @pytest.mark.parametrize("key", ["review", "research", "explore"])
+    def test_reading_still_allowed(self, key):
+        ruleset = self._ruleset(key)
+        for tool in ["read", "grep", "glob", "webfetch"]:
+            assert ruleset.check(tool) == "allow", f"{key} should still allow {tool}"

@@ -235,12 +235,22 @@ class PermissionManager:
         agent_ruleset: PermissionRuleset | None = None,
     ) -> str:
         """Check if a tool call is allowed. Returns 'allow', 'deny', or 'ask'."""
-        # 1. Check saved permissions first (user's explicit choice)
+        # 1. An agent's explicit deny is authoritative and is evaluated before
+        #    anything else. Previously a remembered "allow" short-circuited to
+        #    "allow" at the top of this function, so ticking "remember" on an
+        #    edit in the default agent permanently defeated a read-only agent's
+        #    "deny" for that tool — the review agent could then write code with
+        #    no prompt at all. A read-only agent's deny is a hard boundary, not
+        #    a default that global preferences get to overrule.
+        if agent_ruleset and agent_ruleset.check(tool_name, file_path) == "deny":
+            return "deny"
+
+        # 2. Check saved permissions (user's explicit choice)
         saved_action = self.saved.check_saved(tool_name, file_path)
         if saved_action and saved_action == "allow":
             return "allow"
 
-        # 2. Check agent-specific ruleset (if provided)
+        # 3. Check agent-specific ruleset (if provided)
         if agent_ruleset:
             agent_action = agent_ruleset.check(tool_name, file_path)
             if agent_action == "deny":
@@ -248,10 +258,10 @@ class PermissionManager:
             if agent_action == "allow" and saved_action is None:
                 return "allow"
 
-        # 3. Check global ruleset
+        # 4. Check global ruleset
         global_action = self.ruleset.check(tool_name, file_path)
 
-        # 4. If saved action exists and differs, prefer saved (unless deny)
+        # 5. If saved action exists and differs, prefer saved (unless deny)
         if saved_action and saved_action != "deny":
             return saved_action
 

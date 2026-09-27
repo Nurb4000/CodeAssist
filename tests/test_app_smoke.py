@@ -301,3 +301,50 @@ def test_agent_management_api(live_client):
     r = live_client.delete("/api/agents/qa-custom")
     assert r.status_code == 200
     assert "qa-custom" not in {a["id"] for a in live_client.get("/api/agents").json()}
+
+def test_ws_review_agent_receives_enforced_ruleset(live_client, monkeypatch):
+    """The active agent's permission map must reach the running Agent.
+
+    Regression: `websocket_endpoint` constructed `Agent(...)` without
+    `agent_ruleset`, so every per-agent deny/allow list was dead config and the
+    read-only review agent could write code.
+    """
+    import uuid
+
+    import codeassist.agent as agent_mod
+    import codeassist.llm as llm_mod
+
+    async def _stub_stream(self, *args, **kwargs):
+        raise ConnectionError("stubbed LLM for test")
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    captured: dict = {}
+    real_agent_cls = agent_mod.Agent
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_agent_cls(*args, **kwargs)
+
+    monkeypatch.setattr(agent_mod, "Agent", spy)
+
+    sid = f"review-ruleset-{uuid.uuid4()}"
+    # Persist the choice, then reconnect: the agent (and its ruleset) is built
+    # once per connection, so a mid-connection switch is not picked up until the
+    # next connect.
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        _drain_until(ws, "active_agent")
+        ws.send_json({"type": "switch_agent", "agent_name": "review"})
+        _drain_until(ws, "agent_switched")
+
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        assert _drain_until(ws, "active_agent")["agent"]["id"] == "review"
+        ws.send_json({"type": "user_message", "content": "review this change"})
+        _drain_until(ws, "error")  # the stubbed LLM raises
+
+    assert "agent_ruleset" in captured, "server did not pass the agent's ruleset"
+    ruleset = captured["agent_ruleset"]
+    assert ruleset.check("edit") == "deny"
+    assert ruleset.check("write") == "deny"
+    assert ruleset.check("apply_patch") == "deny"
+    assert ruleset.check("read") == "allow"

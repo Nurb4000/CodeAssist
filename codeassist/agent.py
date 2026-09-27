@@ -285,6 +285,14 @@ class Agent:
     async def get_permission_action(self, tool_name: str, arguments: dict) -> str:
         """Get the permission action for a tool call. Returns 'allow', 'deny', or 'ask'."""
         file_path = arguments.get("file_path", arguments.get("path", ""))
+        # An agent's explicit deny is a hard boundary, so it is checked before
+        # trust-all. "Trust all tools" is a session-wide convenience and must not
+        # quietly turn a read-only agent (review/research/explore) into one that
+        # can write; otherwise the agent's stated contract ("Read-only — never
+        # modifies files") depends on a global setting the user set for a
+        # different reason.
+        if self.agent_ruleset and self.agent_ruleset.check(tool_name, file_path) == "deny":
+            return "deny"
         if self._trust_all_active():
             return "allow"
         return await permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
