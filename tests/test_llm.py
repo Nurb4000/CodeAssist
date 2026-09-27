@@ -6,7 +6,16 @@ import openai
 import pytest
 
 from codeassist.config import LLMConfig
-from codeassist.llm import Finish, LLMClient, ReasoningDelta, TextDelta, ToolCall, Usage
+from codeassist.llm import (
+    Finish,
+    LLMClient,
+    ModerationBlocked,
+    ReasoningDelta,
+    TextDelta,
+    ToolCall,
+    Usage,
+    classify_moderation_error,
+)
 
 
 @pytest.fixture
@@ -465,3 +474,111 @@ class TestLLMEvents:
         assert len(events) == 1
         assert isinstance(events[0], TextDelta)
         assert events[0].content == "The answer"
+
+
+class TestModerationClassification:
+    """Detection of provider content-moderation blocks."""
+
+    def test_snake_case_code(self):
+        """DashScope-style snake_case code is recognised."""
+        exc = openai.BadRequestError(
+            "Input or output data may contain inappropriate content.",
+            response=MagicMock(status_code=400),
+            body={"code": "data_inspection_failed"},
+        )
+        result = classify_moderation_error(exc)
+        assert result is not None
+        code, explanation = result
+        assert code == "data_inspection_failed"
+        assert "moderation" in explanation.lower()
+
+    def test_camel_case_code_in_prose(self):
+        """Qwen returns CamelCase in some payloads; both spellings must match."""
+        exc = openai.BadRequestError(
+            "Error code: DataInspectionFailed",
+            response=MagicMock(status_code=400),
+            body=None,
+        )
+        result = classify_moderation_error(exc)
+        assert result is not None
+        code, explanation = result
+        assert code == "DataInspectionFailed"
+        assert explanation
+
+    @pytest.mark.parametrize(
+        "raw,expected_fragment",
+        [
+            ("ip_infringement_suspect", "intellectual-property"),
+            ("IPInfringementSuspect", "intellectual-property"),
+            ("custom_role_blocked", "custom moderation policy"),
+            ("CustomRoleBlocked", "custom moderation policy"),
+            ("faq_rule_blocked", "FAQ-rule"),
+            ("FAQRuleBlocked", "FAQ-rule"),
+        ],
+    )
+    def test_all_known_codes(self, raw, expected_fragment):
+        exc = openai.BadRequestError(raw, response=MagicMock(status_code=400), body=None)
+        result = classify_moderation_error(exc)
+        assert result is not None
+        assert expected_fragment in result[1]
+
+    def test_unrelated_bad_request_is_not_moderation(self):
+        """An ordinary 400 must not be mislabelled as a safety block."""
+        exc = openai.BadRequestError(
+            "max_tokens must be greater than 0",
+            response=MagicMock(status_code=400),
+            body={"code": "invalid_parameter"},
+        )
+        assert classify_moderation_error(exc) is None
+
+    def test_non_api_exception(self):
+        assert classify_moderation_error(ValueError("boom")) is None
+
+    def test_modulation_blocked_carries_context(self):
+        err = ModerationBlocked("data_inspection_failed", "blocked", status_code=400)
+        assert err.code == "data_inspection_failed"
+        assert err.status_code == 400
+        assert "data_inspection_failed" in str(err)
+
+
+class TestModerationBlockedOnStream:
+    """A moderation 400 surfaces as ModerationBlocked, not a generic APIError."""
+
+    @pytest.mark.asyncio
+    async def test_raises_moderation_blocked(self, llm_client):
+        async def mock_create(*args, **kwargs):
+            raise openai.BadRequestError(
+                "Input data may contain inappropriate content.",
+                response=MagicMock(status_code=400),
+                body={"code": "data_inspection_failed"},
+            )
+
+        llm_client.client.chat.completions.create = mock_create
+
+        with pytest.raises(ModerationBlocked) as exc_info:
+            async for _ in llm_client.stream([{"role": "user", "content": "go"}]):
+                pass
+
+        assert exc_info.value.code == "data_inspection_failed"
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_moderation_block(self, llm_client):
+        """A 400 is deterministic — retrying only wastes the backoff budget."""
+        attempts = 0
+
+        async def mock_create(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise openai.BadRequestError(
+                "blocked",
+                response=MagicMock(status_code=400),
+                body={"code": "data_inspection_failed"},
+            )
+
+        llm_client.client.chat.completions.create = mock_create
+
+        with pytest.raises(ModerationBlocked):
+            async for _ in llm_client.stream([{"role": "user", "content": "go"}]):
+                pass
+
+        assert attempts == 1

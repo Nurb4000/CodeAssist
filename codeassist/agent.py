@@ -12,7 +12,14 @@ from .capabilities import effective_context_window
 from .config import Config
 from .cost_tracker import CostTracker
 from .knowledge import KnowledgeBase
-from .llm import Finish, LLMClient, ReasoningDelta, TextDelta, ToolCall
+from .llm import (
+    Finish,
+    LLMClient,
+    ModerationBlocked,
+    ReasoningDelta,
+    TextDelta,
+    ToolCall,
+)
 from .permissions import PermissionRuleset, permission_manager
 from .prompts import build_openai_messages, build_system_prompt
 from .session import Session
@@ -82,6 +89,46 @@ MAX_STEPS_WRAPUP = (
     "- List of any remaining tasks that were not completed\n"
     "- Recommendations for what should be done next"
 )
+
+# finish_reason values that mean "a safety layer stopped this generation" rather
+# than "the model ran out of tokens". OpenAI-compatible providers spell this
+# inconsistently, so match the known aliases instead of one vendor's string.
+REFUSAL_FINISH_REASONS = {
+    "content_filter",
+    "output_filter",
+    "sensitive",
+}
+
+# Surfaced verbatim to the user when a refusal fires. Deliberately routes them
+# toward rephrasing or a different model rather than any attempt to talk past
+# the guardrail — the block is the provider's decision, not a bug to route
+# around, and the user is in the best position to judge the request.
+REFUSAL_SUGGESTIONS = (
+    (
+        "Rephrase the request to state the concrete goal and its context "
+        "(for example defensive, debugging, or educational use)."
+    ),
+    (
+        "Switch to a model with lighter guardrails — a code-tuned variant such "
+        "as qwen-coder, or a self-hosted open-weight model."
+    ),
+)
+
+_REFUSAL_TRIGGER_LIMIT = 280
+
+
+def _refusal_payload(code: str, explanation: str, trigger: str) -> dict:
+    """Build the payload for a `refusal` event.
+
+    Includes the triggering text so the user can see *what* tripped the filter
+    without hunting back through the transcript.
+    """
+    return {
+        "code": code,
+        "explanation": explanation,
+        "trigger": (trigger or "").strip()[:_REFUSAL_TRIGGER_LIMIT],
+        "suggestions": list(REFUSAL_SUGGESTIONS),
+    }
 
 
 @dataclass
@@ -323,6 +370,16 @@ class Agent:
             log.error(msg)
             yield AgentEvent("error", {"message": msg})
             yield AgentEvent("done")
+        except ModerationBlocked as e:
+            # Not an error the user can fix by retrying, and not something the
+            # agent should silently swallow — stop the turn and say what was
+            # blocked so they can decide how to proceed.
+            log.warning("Provider moderation blocked the request: %s", e.code)
+            yield AgentEvent(
+                "refusal",
+                _refusal_payload(e.code, e.explanation, user_message),
+            )
+            yield AgentEvent("done")
         except Exception as e:
             msg = f"Unexpected error: {type(e).__name__}: {e}"
             log.exception(msg)
@@ -490,6 +547,7 @@ class Agent:
             accumulated_text = ""
             accumulated_reasoning = ""
             tool_calls: list[ToolCall] = []
+            finish_reason = "stop"
 
             stream_start = time.monotonic()
             stream_timeout = float(getattr(self.config.llm, "timeout", 120))  # seconds
@@ -521,6 +579,7 @@ class Agent:
                     })
 
                 elif isinstance(event, Finish):
+                    finish_reason = event.finish_reason or "stop"
                     # Record usage for cost tracking
                     self.cost_tracker.record_usage(
                         model=self.config.llm.model,
@@ -534,6 +593,30 @@ class Agent:
                             "completion_tokens": event.usage.completion_tokens,
                         },
                     })
+
+            # A safety filter that also produced text (or tool calls) is a partial
+            # result, not a refusal — keep it and let the normal flow continue.
+            # Only a turn that came back empty *and* carries a filter finish
+            # reason is a genuine refusal, and it must not reach the user as a
+            # blank assistant bubble.
+            if (
+                finish_reason in REFUSAL_FINISH_REASONS
+                and not tool_calls
+                and not accumulated_text.strip()
+            ):
+                log.warning("Generation refused by provider safety filter: %s", finish_reason)
+                await self.session.update_message(stream_msg_id, content=None)
+                yield AgentEvent(
+                    "refusal",
+                    _refusal_payload(
+                        finish_reason,
+                        "The provider's safety filter stopped this response before "
+                        "any content was generated.",
+                        user_message,
+                    ),
+                )
+                yield AgentEvent("done")
+                return
 
             if tool_calls:
                 self._run_used_tools = True

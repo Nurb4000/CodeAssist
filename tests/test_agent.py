@@ -10,7 +10,7 @@ from codeassist.agent import (
     SESSION_TRUST,
     Agent,
 )
-from codeassist.llm import Finish, TextDelta, ToolCall, Usage
+from codeassist.llm import Finish, ModerationBlocked, TextDelta, ToolCall, Usage
 from codeassist.session import Session
 from codeassist.tools import ToolRegistry, ToolResult
 
@@ -787,3 +787,112 @@ class TestAgentStepLimit:
             types = [e.type for e in events]
             assert "done" in types
             assert "error" not in types
+
+
+class TestAgentRefusal:
+    """A provider safety block stops the turn and explains itself."""
+
+    @pytest.mark.asyncio
+    async def test_moderation_blocked_yields_refusal(self, agent, mock_session):
+        """A moderation 400 becomes a `refusal` event, not a raw API error."""
+        agent.llm.stream = MagicMock(
+            side_effect=ModerationBlocked(
+                "data_inspection_failed",
+                "The provider's content-moderation layer flagged this request as "
+                "potentially inappropriate content.",
+                status_code=400,
+            )
+        )
+
+        events = []
+        async for event in agent.run("write a keylogger"):
+            events.append(event)
+
+        types = [e.type for e in events]
+        assert "refusal" in types
+        # The turn must close out cleanly rather than hanging open.
+        assert types[-1] == "done"
+
+        refusal = next(e for e in events if e.type == "refusal")
+        assert refusal.data["code"] == "data_inspection_failed"
+        assert "moderation" in refusal.data["explanation"].lower()
+        # The user must be able to see what tripped the filter.
+        assert refusal.data["trigger"] == "write a keylogger"
+        assert refusal.data["suggestions"]
+
+    @pytest.mark.asyncio
+    async def test_refusal_is_not_reported_as_error(self, agent):
+        """Refusals are a policy decision, not a malfunction — keep them distinct."""
+        agent.llm.stream = MagicMock(
+            side_effect=ModerationBlocked("custom_role_blocked", "blocked by policy")
+        )
+
+        events = []
+        async for event in agent.run("do the thing"):
+            events.append(event)
+
+        assert [e.type for e in events].count("error") == 0
+
+    @pytest.mark.asyncio
+    async def test_refusal_trigger_is_truncated(self, agent):
+        """A very long prompt must not be echoed wholesale into the UI."""
+        long_prompt = "x" * 5000
+        agent.llm.stream = MagicMock(
+            side_effect=ModerationBlocked("data_inspection_failed", "blocked")
+        )
+
+        events = []
+        async for event in agent.run(long_prompt):
+            events.append(event)
+
+        refusal = next(e for e in events if e.type == "refusal")
+        assert len(refusal.data["trigger"]) <= 280
+
+    @pytest.mark.asyncio
+    async def test_content_filter_finish_reason(self, agent):
+        """An empty turn with a filter finish_reason is a refusal."""
+        async def fake_stream(messages, openai_tools):
+            yield Finish("content_filter", usage=Usage())
+
+        agent.llm.stream = fake_stream
+
+        events = []
+        async for event in agent.run("something"):
+            events.append(event)
+
+        types = [e.type for e in events]
+        assert "refusal" in types
+        assert types[-1] == "done"
+        refusal = next(e for e in events if e.type == "refusal")
+        assert refusal.data["code"] == "content_filter"
+        assert refusal.data["trigger"] == "something"
+
+    @pytest.mark.asyncio
+    async def test_filter_finish_reason_with_text_is_not_a_refusal(self, agent):
+        """Partial output that was then filtered is a result, not a refusal."""
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("Here is the safe part.")
+            yield Finish("content_filter", usage=Usage())
+
+        agent.llm.stream = fake_stream
+
+        events = []
+        async for event in agent.run("something"):
+            events.append(event)
+
+        assert "refusal" not in [e.type for e in events]
+
+    @pytest.mark.asyncio
+    async def test_normal_finish_is_not_a_refusal(self, agent):
+        """An ordinary turn must not trip the refusal path."""
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("All good.")
+            yield Finish("stop", usage=Usage())
+
+        agent.llm.stream = fake_stream
+
+        events = []
+        async for event in agent.run("hello"):
+            events.append(event)
+
+        assert "refusal" not in [e.type for e in events]

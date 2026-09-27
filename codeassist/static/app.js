@@ -67,6 +67,7 @@ let pendingReasonBuf = '';
 let activeStepEl = null;   // committed work step in the active zone (null when idle)
 let ranTools = false;      // did the previous turn use tools? (new-step boundary)
 let workStepCount = 0;     // completed/committed work steps (for the Work header)
+let runWasRefused = false; // last turn was stopped by a provider safety filter
 let workBlockEl = null, workActiveEl = null, workHistoryEl = null;
 // Dedicated container for *past* reasoning. The active step keeps its reasoning
 // visible inline; once a step completes its thinking-block is moved here (collapsed
@@ -1453,6 +1454,35 @@ function connectWS() {
             inputEl.disabled = false;
             setAttachmentUiBusy(false);
             inputEl.focus();
+        } else if (data.type === 'refusal') {
+            // Distinct from 'error': a refusal is a provider policy decision,
+            // not a malfunction, and retrying the same request won't help. Show
+            // what was blocked and the options, then hand control back.
+            hideProgress();
+            endRun();
+            runWasRefused = true;
+            const suggestions = (data.suggestions || [])
+                .map(s => `<li>${escapeHtml(s)}</li>`)
+                .join('');
+            const trigger = data.trigger
+                ? `<div style="margin-top:8px;font-size:12px;opacity:0.8;">Triggered by: <code>${escapeHtml(data.trigger)}</code></div>`
+                : '';
+            ensureMainMessage().querySelector('.message-content').innerHTML += `
+                <div style="border-left:3px solid var(--yellow);padding:8px 12px;margin-top:8px;">
+                    <div style="color:var(--yellow);font-weight:600;">Blocked by the provider's safety filter</div>
+                    <div style="margin-top:4px;font-size:13px;">${escapeHtml(data.explanation || '')}</div>
+                    ${data.code ? `<div style="margin-top:4px;font-size:11px;opacity:0.7;">Code: ${escapeHtml(data.code)}</div>` : ''}
+                    ${trigger}
+                    ${suggestions ? `<ul style="margin:8px 0 0;padding-left:18px;font-size:13px;">${suggestions}</ul>` : ''}
+                </div>`;
+            scrollToBottom();
+            isStreaming = false;
+            sendBtn.disabled = false;
+            sendBtn.style.display = 'flex';
+            stopBtn.style.display = 'none';
+            inputEl.disabled = false;
+            setAttachmentUiBusy(false);
+            inputEl.focus();
         } else if (data.type === 'incomplete') {
             hideProgress();
             endRun();
@@ -1470,11 +1500,16 @@ function connectWS() {
             hideProgress();
             endRun();
             if (hasFollowUpContent()) showContinueButton();
-            // Show clear "done" indicator
-            const doneDiv = document.createElement('div');
-            doneDiv.className = 'message-actions';
-            doneDiv.innerHTML = `<span style="color:var(--green);font-size:12px;">&#10003; Complete</span>`;
-            messagesEl.appendChild(doneDiv);
+            // A refused turn produced nothing, so the "Complete" badge would be
+            // a lie. The refusal block above already closed the turn out.
+            if (!runWasRefused) {
+                // Show clear "done" indicator
+                const doneDiv = document.createElement('div');
+                doneDiv.className = 'message-actions';
+                doneDiv.innerHTML = `<span style="color:var(--green);font-size:12px;">&#10003; Complete</span>`;
+                messagesEl.appendChild(doneDiv);
+            }
+            runWasRefused = false;
             scrollToBottom();
             isStreaming = false;
             sendBtn.disabled = false;

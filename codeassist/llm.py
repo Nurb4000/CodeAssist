@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -17,6 +18,69 @@ MAX_RETRIES = 3
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 30.0
 JITTER_FACTOR = 0.2
+
+
+class ModerationBlocked(Exception):
+    """Raised when a provider's content-moderation layer rejects a request.
+
+    Hosted providers signal this with an HTTP 400 carrying a moderation error
+    code rather than a dedicated status — e.g. Qwen/DashScope returns
+    ``data_inspection_failed`` for a blocked prompt or completion. Without this
+    the block is indistinguishable from any other 400 and reaches the user as
+    an opaque "LLM API error (HTTP 400)". Splitting the code out of the raw
+    provider string lets the agent explain what was blocked instead of echoing
+    a vendor message verbatim.
+    """
+
+    def __init__(self, code: str, explanation: str, *, status_code: int | None = None):
+        self.code = code
+        self.explanation = explanation
+        self.status_code = status_code
+        super().__init__(f"{code}: {explanation}")
+
+
+# Keyed by the code with separators stripped, because providers are inconsistent
+# about casing and separators: Qwen returns both `data_inspection_failed` in
+# prose and `DataInspectionFailed` in machine-readable payloads for the same
+# condition. Values are plain-language explanations written here rather than
+# reused from the provider so the UI never shows a raw vendor string.
+_MODERATION_CODES: dict[str, str] = {
+    "datainspectionfailed": (
+        "The provider's content-moderation layer flagged this request as "
+        "potentially inappropriate content."
+    ),
+    "ipinfringementsuspect": (
+        "The provider's moderation layer flagged this request as suspected "
+        "intellectual-property infringement."
+    ),
+    "customroleblocked": (
+        "This request was blocked by a custom moderation policy configured on "
+        "the provider account."
+    ),
+    "faqruleblocked": (
+        "This request was blocked by a configured FAQ-rule intervention."
+    ),
+}
+
+_CODE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{4,}")
+
+
+def classify_moderation_error(exc: BaseException) -> tuple[str, str] | None:
+    """Return ``(code, explanation)`` if *exc* is a provider moderation block.
+
+    Matches on any code token found in the error's string form or parsed body,
+    so it works against both prose and JSON error payloads without coupling to
+    one provider's exact envelope.
+    """
+    parts = [str(exc)]
+    body = getattr(exc, "body", None)
+    if body:
+        parts.append(str(body))
+    for token in _CODE_TOKEN_RE.findall(" ".join(parts)):
+        explanation = _MODERATION_CODES.get(re.sub(r"[^a-z0-9]", "", token.lower()))
+        if explanation:
+            return token, explanation
+    return None
 
 
 @dataclass
@@ -141,6 +205,18 @@ class LLMClient:
                 else:
                     raise
             except openai.APIError as e:
+                # A moderation block is a deterministic 400 — retrying cannot
+                # change the outcome, so surface it as a distinct exception
+                # instead of burning the backoff budget on it.
+                moderation = classify_moderation_error(e)
+                if moderation is not None:
+                    code, explanation = moderation
+                    log.warning("LLM request blocked by provider moderation: %s", code)
+                    raise ModerationBlocked(
+                        code,
+                        explanation,
+                        status_code=getattr(e, "status_code", None),
+                    ) from e
                 log.error("LLM API error: %s", e)
                 raise
 
