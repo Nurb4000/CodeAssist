@@ -1,6 +1,8 @@
 """Config and todo API routes."""
 from fastapi import APIRouter
 
+from ..capabilities import is_external_backend
+
 router = APIRouter(tags=["config"])
 
 
@@ -27,10 +29,10 @@ async def api_config():
     vision = await model_vision_capable(cfg)
     backend = await get_backend_info(cfg)
     # Local vs external provider rule: auto-detect the in-use model for local /
-    # self-hosted backends; external providers (api.openai.com, blank base_url)
-    # keep showing the admin-configured model as before.
-    base = (cfg.llm.base_url or "").strip().lower()
-    external = (not base) or "api.openai.com" in base
+    # self-hosted backends; hosted providers keep showing the admin-configured
+    # model. Classification lives in capabilities.is_external_backend so this
+    # route and the context-window budget can't drift apart.
+    external = is_external_backend(cfg.llm.base_url)
     detected = backend.get("model")
     effective = detected if (not external and detected and backend.get("source") == "backend") else cfg.llm.model
     window = await effective_context_window(cfg)

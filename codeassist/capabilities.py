@@ -13,6 +13,8 @@ base_url still loading at boot) self-heals instead of staying blind.
 """
 import logging
 import time
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -30,6 +32,76 @@ PROBE_TIMEOUT = 3.0
 
 def _default_info() -> dict:
     return {"model": None, "vision": False, "context_window": None, "source": None}
+
+
+# Hostnames that always mean "this machine / my network".
+_LOCAL_HOSTNAMES = frozenset({
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+})
+# Suffixes reserved for local networks (RFC 6762 / RFC 8375) plus the widely
+# used ".lan" and ".internal" home/lab conventions.
+_LOCAL_SUFFIXES = (".local", ".localhost", ".lan", ".internal", ".home.arpa")
+
+
+def _backend_hostname(base_url: str) -> str:
+    """Lowercased hostname from a configured base_url, or "" if there isn't one."""
+    # Config values round-trip through TOML/SQLite, so a non-string can arrive
+    # here despite the annotation. Treat it as unconfigured rather than raising:
+    # this is called from the agent loop, where a TypeError would kill the turn.
+    if not isinstance(base_url, str):
+        return ""
+    raw = base_url.strip()
+    if not raw:
+        return ""
+    if "//" not in raw:
+        # Accept scheme-less forms ("10.0.1.27:8080/v1") as well as full URLs.
+        raw = "//" + raw
+    try:
+        return (urlsplit(raw).hostname or "").lower()
+    except ValueError:  # pragma: no cover - malformed URL/port
+        return ""
+
+
+def _is_local_ip(host: str) -> bool:
+    """True when host is a literal loopback/private/link-local address."""
+    try:
+        addr = ip_address(host)
+    except ValueError:
+        return False
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_unspecified
+    )
+
+
+def is_external_backend(base_url: str) -> bool:
+    """Whether ``base_url`` points at a third-party hosted API.
+
+    Inverted on purpose. A backend counts as local/self-hosted only when the
+    hostname is an unambiguous local signal; **everything else is external**.
+    The previous test allowlisted just ``"api.openai.com"``, so every other
+    hosted endpoint (DashScope, Azure OpenAI, OpenRouter, a vLLM box behind a
+    public domain) fell through to the local branch, where the ``/v1/models``
+    probe overrode the admin-configured model name and context window. Failing
+    toward "external" instead means an unrecognised host simply keeps the values
+    the user configured, which is the recoverable error.
+    """
+    host = _backend_hostname(base_url)
+    if not host:
+        # No base_url set: the SDK's own default endpoint (api.openai.com).
+        return True
+    if host in _LOCAL_HOSTNAMES or host.endswith(_LOCAL_SUFFIXES):
+        return False
+    if _is_local_ip(host):
+        return False
+    # A single-label host ("vllm:8000", "ollama") resolves only on the local
+    # network — no public API provider is addressed this way.
+    return "." in host
 
 
 _cache: dict = {"expires": 0.0, "info": _default_info()}
@@ -211,9 +283,8 @@ async def effective_context_window(cfg) -> int:
     Local/self-hosted backends (a non-OpenAI ``base_url``) advertise their real
     window via auto-detection, which we prefer so budgeting matches the model
     (e.g. a 1M-context llama.cpp build instead of the 128k default). External
-    OpenAI keepers fall back to the configured value.
+    hosted providers fall back to the configured value.
     """
-    base = (cfg.llm.base_url or "").strip().lower()
-    external = (not base) or "api.openai.com" in base
+    external = is_external_backend(cfg.llm.base_url)
     detected = (await get_backend_info(cfg)).get("context_window")
     return detected if (not external and detected) else cfg.llm.context_window
