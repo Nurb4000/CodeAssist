@@ -37,6 +37,11 @@ tests/
 ├── test_skills.py              # Skills discovery and execution
 ├── test_trust_registry.py      # Tool approval system tests
 ├── test_dynamic_tools.py       # Dynamic tool loading tests
+├── test_frontend_js.py         # Runs the tests/js suite from pytest
+├── js/                         # Frontend tests (Node test runner + jsdom)
+│   ├── harness.js              # Boots the real index.html + app.js in jsdom
+│   ├── work-block.test.js      # Work-step lifecycle during a run
+│   └── busy-indicator.test.js  # Working indicator / in-flight UI state
 ├── test_tools/
 │   ├── test_git.py            # Git integration tests
 │   ├── test_fossil.py         # Fossil integration tests
@@ -50,7 +55,24 @@ tests/
 └── test_integration.py         # End-to-end tests (TBD)
 ```
 
-**198 tests** across all modules.
+**730 Python tests + 15 frontend tests** across all modules.
+
+## Frontend Tests
+
+The static frontend (`codeassist/static/app.js`) is served unbundled, so its
+behaviour is tested by booting the real `index.html` and `app.js` inside jsdom
+and driving them through a fake WebSocket. Only `fetch` and `WebSocket` are
+substituted; no app logic is re-implemented.
+
+```bash
+npm install        # once; installs jsdom (the only dependency)
+npm test           # node --test tests/js/
+npm run test:watch
+```
+
+`pytest` runs the same suite through `tests/test_frontend_js.py`, so
+`pytest tests/` remains the single entry point. Those tests **skip** (rather than
+fail) when npm or `node_modules` is absent, keeping a bare checkout working.
 
 ## Running Specific Tests
 

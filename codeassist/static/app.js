@@ -1015,7 +1015,6 @@ function onToolResult(id, output) {
             if (div) { div._output = output || ''; applyToolCallRender(div); }
         }
     }
-    if (pendingUnit) updateToolResultIn(pendingUnit, id, output);
     maybeScrollToBottom();
 }
 

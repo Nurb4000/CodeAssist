@@ -24,3 +24,6 @@ docs/KB_REVIEW*.md
 
 # Local-only git tooling (guardrail hook); not shipped.
 hooks/
+
+# Frontend test tooling (see tests/js/ and package.json)
+node_modules/
