@@ -45,13 +45,39 @@ MODEL_COSTS = {
     "claude-3-haiku": {"input": 0.25, "output": 1.25},
 }
 
+# Models already reported as unpriced in this process, so a long session doesn't
+# repeat the warning on every completion.
+_UNPRICED_WARNED: set[str] = set()
 
-def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """Estimate the cost of a completion in USD."""
+
+def estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    *,
+    local: bool = False,
+) -> float:
+    """Estimate the cost of a completion in USD.
+
+    ``local`` backends (llama.cpp, vLLM on your own hardware) have no marginal
+    per-token cost, so they are 0.0 by definition.
+    """
+    if local:
+        return 0.0
     costs = MODEL_COSTS.get(model)
-    if not costs:
-        # Default to gpt-4o pricing for unknown models
-        costs = MODEL_COSTS["gpt-4o"]
+    if costs is None:
+        # Previously fell back to gpt-4o pricing, which reported a confidently
+        # wrong dollar figure for every unlisted model — any hosted Qwen tier,
+        # and every local one. Report nothing rather than invent a number, and
+        # make the pricing gap visible once per model in the log.
+        if model not in _UNPRICED_WARNED:
+            _UNPRICED_WARNED.add(model)
+            log.warning(
+                "No entry in MODEL_COSTS for model %r — reporting $0.00. "
+                "Add its pricing to cost_tracker.MODEL_COSTS to track spend.",
+                model,
+            )
+        return 0.0
     input_cost = (prompt_tokens / 1_000_000) * costs["input"]
     output_cost = (completion_tokens / 1_000_000) * costs["output"]
     return input_cost + output_cost
@@ -67,9 +93,19 @@ class CostTracker:
         self._total_completion_tokens = 0
         self._total_cost = 0.0
 
-    def record_usage(self, model: str, prompt_tokens: int, completion_tokens: int) -> UsageRecord:
-        """Record token usage for a completion."""
-        cost = estimate_cost(model, prompt_tokens, completion_tokens)
+    def record_usage(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        *,
+        local: bool = False,
+    ) -> UsageRecord:
+        """Record token usage for a completion.
+
+        ``local`` marks a self-hosted backend, whose per-token cost is zero.
+        """
+        cost = estimate_cost(model, prompt_tokens, completion_tokens, local=local)
         record = UsageRecord(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

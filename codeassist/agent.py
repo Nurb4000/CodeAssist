@@ -8,7 +8,7 @@ from pathlib import Path
 
 import openai
 
-from .capabilities import effective_context_window
+from .capabilities import effective_context_window, is_external_backend
 from .config import Config
 from .cost_tracker import CostTracker
 from .knowledge import KnowledgeBase
@@ -580,11 +580,14 @@ class Agent:
 
                 elif isinstance(event, Finish):
                     finish_reason = event.finish_reason or "stop"
-                    # Record usage for cost tracking
+                    # Record usage for cost tracking. Self-hosted backends have
+                    # no per-token cost, so flag them rather than charging
+                    # list price for local inference.
                     self.cost_tracker.record_usage(
                         model=self.config.llm.model,
                         prompt_tokens=event.usage.prompt_tokens,
                         completion_tokens=event.usage.completion_tokens,
+                        local=not is_external_backend(self.config.llm.base_url),
                     )
                     yield AgentEvent("finish", {
                         "reason": event.finish_reason,

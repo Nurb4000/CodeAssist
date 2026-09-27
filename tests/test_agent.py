@@ -32,6 +32,9 @@ def mock_config(tmp_path):
     config.llm.model = "gpt-4o"
     config.llm.context_window = 128000
     config.llm.max_tokens = 4096
+    # Keep string-typed LLMConfig fields realistic; the agent passes base_url
+    # through capabilities.is_external_backend, which expects a str.
+    config.llm.base_url = ""
     config.agent.max_iterations = 3
     config.tools.tool_output_max_tokens = 4000
     return config
