@@ -13,6 +13,7 @@ from .config import Config
 from .cost_tracker import CostTracker
 from .knowledge import KnowledgeBase
 from .llm import (
+    ContextWindowExceeded,
     Finish,
     LLMClient,
     ModerationBlocked,
@@ -114,6 +115,12 @@ REFUSAL_SUGGESTIONS = (
     ),
 )
 
+# How many times a single step may be replayed after the provider rejects it for
+# exceeding the context window. Each attempt compacts harder than the last, so
+# this stays small: two passes are enough to clear a genuinely oversized
+# history, and a third would only repeat work before reporting failure.
+MAX_CONTEXT_RETRIES = 2
+
 _REFUSAL_TRIGGER_LIMIT = 280
 
 
@@ -129,6 +136,38 @@ def _refusal_payload(code: str, explanation: str, trigger: str) -> dict:
         "trigger": (trigger or "").strip()[:_REFUSAL_TRIGGER_LIMIT],
         "suggestions": list(REFUSAL_SUGGESTIONS),
     }
+
+
+def _force_compact(
+    messages: list[dict],
+    *,
+    tool_schemas: list[dict] | None = None,
+    escalation: int = 1,
+) -> list[dict]:
+    """Shrink a history the provider has already refused to accept.
+
+    Recovery from a real rejection cannot rely on the token *estimate* that
+    triggered proactive compaction, because that estimate is what was wrong.
+    So this escalates on a schedule instead of a percentage: each attempt keeps
+    a shorter recent tail, the second drops old tool results outright, and
+    anything past that strips media — the largest remaining non-text payloads.
+    """
+    keep_recent = max(4, 12 - (escalation * 6))
+    compacted = compact_messages(
+        messages,
+        keep_recent=keep_recent,
+        escalation_level=min(escalation, 1),
+    )
+    if escalation >= 2:
+        compacted = strip_media_from_messages(compacted)
+    log.info(
+        "Forced compaction (escalation %d, keep_recent %d): %d -> %d messages",
+        escalation,
+        keep_recent,
+        len(messages),
+        len(compacted),
+    )
+    return compacted
 
 
 @dataclass
@@ -378,6 +417,18 @@ class Agent:
             log.error(msg)
             yield AgentEvent("error", {"message": msg})
             yield AgentEvent("done")
+        except ContextWindowExceeded:
+            # Reached only after the forced-compaction retries in _loop were
+            # exhausted. Say what happened and what to change, rather than
+            # echoing a raw provider string the user cannot act on.
+            msg = (
+                "The conversation no longer fits the model's context window, even after "
+                "compacting. Start a new session, or raise the context window "
+                "(llm.context_window) / lower the compaction threshold to keep more room."
+            )
+            log.error(msg)
+            yield AgentEvent("error", {"message": msg})
+            yield AgentEvent("done")
         except ModerationBlocked as e:
             # Not an error the user can fix by retrying, and not something the
             # agent should silently swallow — stop the turn and say what was
@@ -453,9 +504,17 @@ class Agent:
             if len(history) != _cached_history_len:
                 messages = build_openai_messages(self.system_prompt, history)
 
+                # Resolve the window ONCE and use it for the initial check and
+                # every recheck below. Mixing the two sources is what let a
+                # genuinely-oversized history look fine after compaction: the
+                # post-compaction rechecks read the *configured* window while
+                # the trigger used the *effective* one, and for a local backend
+                # the detected window is often the smaller of the pair.
+                context_window = await effective_context_window(self.config)
+
                 # Check context limits and compact if needed
                 ctx = check_context_limit(
-                    messages, self.config.llm.model, await effective_context_window(self.config),
+                    messages, self.config.llm.model, context_window,
                     tool_schemas=tool_schemas,
                 )
                 yield AgentEvent("context", {
@@ -482,7 +541,7 @@ class Agent:
 
                         # Re-check context after LLM compaction
                         recheck = check_context_limit(
-                            messages, self.config.llm.model, self.config.llm.context_window,
+                            messages, self.config.llm.model, context_window,
                             tool_schemas=tool_schemas,
                         )
 
@@ -499,7 +558,7 @@ class Agent:
 
                             # Final overflow: strip media and retry
                             final_check = check_context_limit(
-                                messages, self.config.llm.model, self.config.llm.context_window,
+                                messages, self.config.llm.model, context_window,
                                 tool_schemas=tool_schemas,
                             )
                             if final_check["needs_compaction"]:
@@ -515,7 +574,7 @@ class Agent:
                             escalation_level=compaction_escalation,
                         )
                         recheck = check_context_limit(
-                            messages, self.config.llm.model, self.config.llm.context_window,
+                            messages, self.config.llm.model, context_window,
                             tool_schemas=tool_schemas,
                         )
                         if recheck["needs_compaction"] and compaction_escalation == 0:
@@ -569,48 +628,90 @@ class Agent:
             # Save placeholder immediately so partial responses survive crashes
             stream_msg_id = await self.session.add_message("assistant", content="")
 
-            async for event in self.llm.stream(messages, openai_tools):
-                if self.cancel_event.is_set():
-                    return
-                if time.monotonic() - stream_start > stream_timeout:
-                    log.warning("LLM stream timed out after %.0fs", stream_timeout)
-                    yield AgentEvent("error", {"message": f"LLM stream timed out after {stream_timeout:.0f}s"})
+            # The provider can still reject a request our token estimate
+            # thought fit: counting is approximate, and a configured window
+            # smaller than the backend's real one is easy to overrun. That
+            # rejection lands before a single token is streamed, so compacting
+            # and replaying this step cannot duplicate output or events.
+            context_retries = 0
+            while True:
+                try:
+                    async for event in self.llm.stream(messages, openai_tools):
+                        if self.cancel_event.is_set():
+                            return
+                        if time.monotonic() - stream_start > stream_timeout:
+                            log.warning("LLM stream timed out after %.0fs", stream_timeout)
+                            yield AgentEvent("error", {"message": f"LLM stream timed out after {stream_timeout:.0f}s"})
+                            break
+                        if isinstance(event, TextDelta):
+                            accumulated_text += event.content
+                            yield AgentEvent("text_delta", {"content": event.content})
+
+                        elif isinstance(event, ReasoningDelta):
+                            accumulated_reasoning += event.content
+                            yield AgentEvent("reasoning", {"content": event.content})
+
+                        elif isinstance(event, ToolCall):
+                            tool_calls.append(event)
+                            yield AgentEvent("tool_call", {
+                                "id": event.id,
+                                "name": event.name,
+                                "arguments": event.arguments,
+                            })
+
+                        elif isinstance(event, Finish):
+                            finish_reason = event.finish_reason or "stop"
+                            # Record usage for cost tracking. Self-hosted backends have
+                            # no per-token cost, so flag them rather than charging
+                            # list price for local inference.
+                            self.cost_tracker.record_usage(
+                                model=self.config.llm.model,
+                                prompt_tokens=event.usage.prompt_tokens,
+                                completion_tokens=event.usage.completion_tokens,
+                                local=not is_external_backend(self.config.llm.base_url),
+                            )
+                            yield AgentEvent("finish", {
+                                "reason": event.finish_reason,
+                                "usage": {
+                                    "prompt_tokens": event.usage.prompt_tokens,
+                                    "completion_tokens": event.usage.completion_tokens,
+                                },
+                            })
+
                     break
-                if isinstance(event, TextDelta):
-                    accumulated_text += event.content
-                    yield AgentEvent("text_delta", {"content": event.content})
 
-                elif isinstance(event, ReasoningDelta):
-                    accumulated_reasoning += event.content
-                    yield AgentEvent("reasoning", {"content": event.content})
-
-                elif isinstance(event, ToolCall):
-                    tool_calls.append(event)
-                    yield AgentEvent("tool_call", {
-                        "id": event.id,
-                        "name": event.name,
-                        "arguments": event.arguments,
-                    })
-
-                elif isinstance(event, Finish):
-                    finish_reason = event.finish_reason or "stop"
-                    # Record usage for cost tracking. Self-hosted backends have
-                    # no per-token cost, so flag them rather than charging
-                    # list price for local inference.
-                    self.cost_tracker.record_usage(
-                        model=self.config.llm.model,
-                        prompt_tokens=event.usage.prompt_tokens,
-                        completion_tokens=event.usage.completion_tokens,
-                        local=not is_external_backend(self.config.llm.base_url),
+                except ContextWindowExceeded as e:
+                    if context_retries >= MAX_CONTEXT_RETRIES or self.cancel_event.is_set():
+                        log.error(
+                            "Context window still exceeded after %d forced compactions: %s",
+                            context_retries, e,
+                        )
+                        raise
+                    context_retries += 1
+                    log.warning(
+                        "Provider rejected the request: context window exceeded "
+                        "(compaction %d/%d). Compacting harder and retrying",
+                        context_retries,
+                        MAX_CONTEXT_RETRIES,
                     )
-                    yield AgentEvent("finish", {
-                        "reason": event.finish_reason,
-                        "usage": {
-                            "prompt_tokens": event.usage.prompt_tokens,
-                            "completion_tokens": event.usage.completion_tokens,
-                        },
+                    messages = _force_compact(
+                        messages,
+                        tool_schemas=tool_schemas,
+                        escalation=context_retries,
+                    )
+                    self._compaction_count += 1
+                    yield AgentEvent("compacted", {
+                        "message": "Context window exceeded — compacted and retrying",
+                        "mode": "forced",
+                        "count": self._compaction_count,
                     })
-
+                    # The tail may have ended on tool results (the agent was
+                    # mid-work); nudge it so the replay continues the task.
+                    if messages and messages[-1].get("role") == "tool":
+                        messages.append({
+                            "role": "user",
+                            "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
+                        })
             # A safety filter that also produced text (or tool calls) is a partial
             # result, not a refusal — keep it and let the normal flow continue.
             # Only a turn that came back empty *and* carries a filter finish

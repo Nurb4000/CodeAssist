@@ -83,6 +83,60 @@ def classify_moderation_error(exc: BaseException) -> tuple[str, str] | None:
     return None
 
 
+class ContextWindowExceeded(Exception):
+    """Raised when the provider rejects a request because the prompt plus the
+    requested completion does not fit the model's context window.
+
+    This is a *recoverable* condition, unlike a generic API failure: the caller
+    can compact the history and replay the request. It is surfaced as its own
+    exception because the rejection arrives as a bare ``openai.APIError`` whose
+    only distinguishing feature is the message text, and without this it reached
+    the user as "Unexpected error: APIError: Context size has been exceeded"
+    instead of compacting and continuing.
+    """
+
+    def __init__(self, detail: str = "", *, status_code: int | None = None):
+        self.detail = detail
+        self.status_code = status_code
+        super().__init__(detail or "context window exceeded")
+
+
+# Providers word this rejection very differently, and the local backends the
+# project targets are the least standard of them, so match on a set of phrases
+# rather than one envelope. Lowercased comparison.
+_CONTEXT_ERROR_PHRASES = (
+    "context size has been exceeded",        # llama.cpp
+    "exceeds the available context size",    # llama.cpp (newer builds)
+    "context window",                        # generic
+    "context_length_exceeded",               # OpenAI error code
+    "maximum context length",                # OpenAI / vLLM
+    "context limit",                         # vLLM / Ollama
+    "requested tokens exceed",               # vLLM
+    "reduce the length of the messages",     # OpenAI guidance text
+    "input is too long",                     # Ollama
+    "prompt is too long",                    # Ollama / various
+    "n_ctx",                                 # llama.cpp KV cache
+    "exceeds the model's context",           # phrasing variants
+)
+
+
+def is_context_length_error(exc: BaseException) -> bool:
+    """Return True if *exc* is a provider rejecting the prompt for exceeding
+    the context window.
+
+    Inspects the exception string, its ``body``/``message`` attributes and the
+    HTTP status, so it works for both prose and JSON error payloads without
+    coupling to one provider's exact envelope.
+    """
+    parts = [str(exc)]
+    for attr in ("body", "message", "code"):
+        val = getattr(exc, attr, None)
+        if val:
+            parts.append(str(val))
+    haystack = " ".join(parts).lower()
+    return any(phrase in haystack for phrase in _CONTEXT_ERROR_PHRASES)
+
+
 @dataclass
 class TextDelta:
     content: str
@@ -205,6 +259,16 @@ class LLMClient:
                 else:
                     raise
             except openai.APIError as e:
+                # A context-window rejection is recoverable: the caller can
+                # compact the history and replay. Surface it as its own
+                # exception instead of burning the backoff budget (a retry with
+                # the same oversized prompt can never succeed) and instead of
+                # letting it reach the user as a raw APIError.
+                if is_context_length_error(e):
+                    log.warning("LLM request exceeded the context window: %s", e)
+                    raise ContextWindowExceeded(
+                        str(e), status_code=getattr(e, "status_code", None)
+                    ) from e
                 # A moderation block is a deterministic 400 — retrying cannot
                 # change the outcome, so surface it as a distinct exception
                 # instead of burning the backoff budget on it.

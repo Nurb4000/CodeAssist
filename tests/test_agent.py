@@ -10,7 +10,16 @@ from codeassist.agent import (
     SESSION_TRUST,
     Agent,
 )
-from codeassist.llm import Finish, ModerationBlocked, TextDelta, ToolCall, Usage
+from codeassist.llm import (
+    ContextWindowExceeded,
+    Finish,
+    LLMClient,
+    ModerationBlocked,
+    TextDelta,
+    ToolCall,
+    Usage,
+    is_context_length_error,
+)
 from codeassist.session import Session
 from codeassist.tools import ToolRegistry, ToolResult
 
@@ -1094,3 +1103,123 @@ class TestBuiltinAgentPermissions:
         ruleset = self._ruleset(key)
         for tool in ["read", "grep", "glob", "webfetch"]:
             assert ruleset.check(tool) == "allow", f"{key} should still allow {tool}"
+
+
+class TestContextWindowRecovery:
+    """A provider that refuses a request for exceeding the context window must be
+    recovered from, not reported.
+
+    The reported symptom was a bare "Unexpected error: APIError: Context size
+    has been exceeded" on a turn that visibly *should* have compacted. The
+    rejection arrives as a plain openai.APIError, and nothing in the agent
+    recognised it, so it fell through to the catch-all handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_context_rejection_compacts_then_retries(self, agent, mock_session):
+        """One rejection -> forced compaction -> the step is replayed and the
+        turn completes normally instead of erroring."""
+        agent._trust_all = True
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            # A history with enough tool output that compaction has something to
+            # reclaim -- which is the realistic case for an oversize rejection.
+            history = [{"role": "user", "content": "keep going"}]
+            for i in range(12):
+                history += [
+                    {"role": "assistant", "content": f"step {i}",
+                     "tool_calls": [{"id": f"c{i}", "type": "function",
+                                     "function": {"name": "grep", "arguments": "{}"}}]},
+                    {"role": "tool", "tool_call_id": f"c{i}",
+                     "content": "x" * 4000},
+                ]
+            mock_build.return_value = history
+            # Proactive estimate says everything is fine -- which is exactly why
+            # the provider rejection has to be handled, not the estimate.
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=history)
+
+            seen = []
+
+            async def fake_stream(messages, openai_tools):
+                seen.append([dict(m) for m in messages])
+                if len(seen) == 1:
+                    raise ContextWindowExceeded("Context size has been exceeded")
+                yield TextDelta("Recovered after compacting.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("keep going"):
+                events.append(event)
+
+        types = [e.type for e in events]
+        assert "error" not in types, f"must not surface an error, got {types}"
+        assert len(seen) == 2, "the step must be replayed after compacting"
+        assert len(seen[1]) < len(seen[0]), "the retry must carry a smaller history"
+        # The user is told what happened rather than left in the dark.
+        compacted = [e for e in events if e.type == "compacted"]
+        assert compacted, "a compacted event must be emitted"
+        assert "retrying" in compacted[0].data["message"].lower()
+
+
+class TestContextWindowErrorDetection:
+    """The rejection is worded differently by every backend, so match on phrases."""
+
+    @pytest.mark.parametrize("message", [
+        "Context size has been exceeded",          # llama.cpp
+        "the request exceeds the available context size",
+        "This model's maximum context length is 8192 tokens",
+        "context_length_exceeded",
+        "reduce the length of the messages",
+        "input is too long",                       # Ollama
+        "prompt is too long",
+        "requested tokens exceed the model maximum",
+        "n_ctx is 4096",
+    ])
+    def test_recognised(self, message):
+        assert is_context_length_error(Exception(message)) is True
+
+    @pytest.mark.parametrize("message", [
+        "rate limit reached",
+        "the server had an error processing your request",
+        "content moderation triggered",
+    ])
+    def test_not_mistaken_for_other_errors(self, message):
+        assert is_context_length_error(Exception(message)) is False
+
+    def test_llm_raises_dedicated_exception_not_a_bare_retry(self):
+        """A context rejection must not be retried with the same oversized
+        prompt -- that can never succeed -- and must not surface as a raw
+        APIError."""
+        import openai
+
+        config = MagicMock()
+        config.model = "m"
+        config.base_url = ""
+        config.temperature = 0.0
+        config.max_tokens = 100
+        config.frequency_penalty = 0.0
+        config.presence_penalty = 0.0
+        config.timeout = 5
+
+        client = LLMClient(config)
+        client.client.chat.completions.create = AsyncMock(
+            side_effect=openai.APIError("Context size has been exceeded", request=MagicMock(), body=None)
+        )
+
+        async def drain():
+            async for _ in client.stream([{"role": "user", "content": "x"}]):
+                pass
+
+        with pytest.raises(ContextWindowExceeded):
+            asyncio.run(drain())
+        # Not retried: one attempt only.
+        assert client.client.chat.completions.create.await_count == 1
