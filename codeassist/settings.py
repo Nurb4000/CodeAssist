@@ -81,7 +81,7 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
      "label": "Default agent", "description": "Agent key used for new sessions.",
      "group": "Agent", "restart_required": False},
      {"key": "agent.max_iterations", "section": "agent", "field": "max_iterations", "type": "int",
-      "label": "Max iterations", "description": "Hard global cap on tool-call turns (backstop above the graceful step budget).",
+      "label": "Max iterations", "description": "Step budget used by agents that have no per-agent 'Step budget' set (built-ins define their own in the Agents tab). Raise the per-agent Step budget for headroom.",
       "group": "Agent", "restart_required": False},
 
     # --- Tools ---

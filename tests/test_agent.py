@@ -687,9 +687,12 @@ class TestAgentStepLimit:
             assert "error" not in types
 
     @pytest.mark.asyncio
-    async def test_steps_capped_by_max_iterations(self, agent, mock_session):
-        """A per-agent budget larger than the global cap is clamped to the cap."""
-        agent.max_steps = 999
+    async def test_steps_take_precedence_over_max_iterations(self, agent, mock_session):
+        """A per-agent step budget binds even when it exceeds the global
+        `agent.max_iterations` fallback. Raising the admin "Step budget" far
+        above the global cap must actually extend the run (it used to be
+        silently clamped by min(steps, max_iterations))."""
+        agent.max_steps = 2
         agent.config.agent.max_iterations = 1
 
         with patch("codeassist.agent.build_openai_messages") as mock_build, \
@@ -707,17 +710,21 @@ class TestAgentStepLimit:
             agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
             agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
 
-            async def turn_wrapup():
-                yield TextDelta("Summary on the very first (and last) step.")
+            async def turn_work():
+                yield ToolCall(id="c1", name="shell", arguments={"command": "echo"})
                 yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
-            turns = [turn_wrapup()]
+            async def turn_wrapup():
+                yield TextDelta("Summary on the final step.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            turns = [turn_work(), turn_wrapup()]
             calls = {"n": 0}
-            last_tools = {}
+            tool_states = []
 
             async def fake_stream(messages, openai_tools):
+                tool_states.append(openai_tools)
                 g = turns[calls["n"]]
-                last_tools["v"] = openai_tools
                 calls["n"] += 1
                 async for ev in g:
                     yield ev
@@ -728,10 +735,72 @@ class TestAgentStepLimit:
             async for event in agent.run("implement X"):
                 events.append(event)
 
-            assert calls["n"] == 1
-            assert last_tools["v"] is None
+            # The per-agent budget (2) ran, NOT the global cap (1).
+            assert calls["n"] == 2
+            assert tool_states[-1] is None
             types = [e.type for e in events]
             assert "done" in types
+
+    @pytest.mark.asyncio
+    async def test_stop_wraps_up_at_binding_step_budget(self, agent, mock_session):
+        """A model that never stops working is wrapped up at the per-agent step
+        budget, even when that budget is far above the global max_iterations
+        fallback. Previously min(steps, max_iterations) cut these runs short at
+        the global cap, which is why raising the admin "Step budget" had no
+        visible effect once it passed the cap."""
+        agent.max_steps = 7
+        agent.config.agent.max_iterations = 3
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "implement X"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "implement X"}])
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            async def turn_work():
+                yield ToolCall(id="c1", name="shell", arguments={"command": "echo"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            async def turn_wrapup():
+                yield TextDelta("Reached the step budget; here is what remains.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            # 6 working turns then the forced wrap-up on the 7th (last) step.
+            # Note: one turn_work() per slot — list-mult would share a single
+            # generator object and silently consume it once.
+            turns = [turn_work() for _ in range(6)] + [turn_wrapup()]
+            calls = {"n": 0}
+            tool_states = []
+
+            async def fake_stream(messages, openai_tools):
+                tool_states.append(openai_tools)
+                g = turns[calls["n"]]
+                calls["n"] += 1
+                async for ev in g:
+                    yield ev
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("implement X"):
+                events.append(event)
+
+            # Exactly 7 turns ran (the per-agent budget), not the 3 global cap.
+            assert calls["n"] == 7
+            assert len(tool_states) == 7
+            assert tool_states[-1] is None  # tools disabled on the wrap-up turn
+            types = [e.type for e in events]
+            assert "done" in types
+            assert "error" not in types
 
     @pytest.mark.asyncio
     async def test_stops_at_step_budget_when_model_keeps_working(self, agent, mock_session):

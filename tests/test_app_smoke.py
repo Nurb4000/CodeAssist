@@ -401,8 +401,8 @@ def test_static_work_block_lifecycle_guards(live_client):
     js = live_client.get("/static/app.js").text
     css = live_client.get("/static/style.css").text
 
-    # A closed step stays visible while the run is live.
-    assert "if (!runActive) activeStepEl.classList.remove('open');" in js
+    # A closed step stays visible while the run is live (only collapses at endRun).
+    assert "if (!runActive || done) activeStepEl.classList.remove('open');" in js
     # Results are routed to the step that owns the call, wherever it lives now.
     assert "function findStepForToolCall(id)" in js
     assert "const step = findStepForToolCall(id);" in js

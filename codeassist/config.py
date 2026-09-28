@@ -42,9 +42,10 @@ class ServerConfig:
 
 @dataclass
 class AgentConfig:
-    # Hard global backstop on tool-call turns per turn. The graceful per-agent
-    # step budget (see agents.py) binds first; this only fires if an agent is
-    # edited past the cap. Kept generous so it never truncates a normal run.
+    # Default step budget for agents that do not define their own per-agent
+    # 'steps' (built-ins all define one, so they bind instead). It also feeds
+    # subagents that fall back to it. The per-agent step budget is the graceful
+    # wrap-up point; this value is only consulted when no per-agent budget is set.
     max_iterations: int = 200
     name: str = "CodeAssist"
     default_agent: str = "default"

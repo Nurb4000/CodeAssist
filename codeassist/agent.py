@@ -418,11 +418,17 @@ class Agent:
         _cached_messages = None
         _cached_history_len = 0
 
-        # Graceful step budget: the per-agent 'steps' limit if configured, else the
-        # global max_iterations cap. The loop wraps up structurally at this point
-        # (tools disabled, model asked to summarise) rather than stopping hard.
-        step_limit = self.max_steps if (self.max_steps and self.max_steps > 0) else self.config.agent.max_iterations
-        step_limit = min(step_limit, self.config.agent.max_iterations)
+        # Graceful step budget: the per-agent 'steps' limit if configured, else
+        # the global max_iterations cap. The per-agent budget BINDS — it is the
+        # loop's wrap-up point (tools disabled, model asked to summarise) rather
+        # than a hard stop. `max_iterations` is only a fallback for agents that
+        # have no per-agent step budget; clamping the per-agent value to it made
+        # the admin "Step budget" field silently dead once raised past the global
+        # cap (editor pushes it to 200+ and nothing changes).
+        if self.max_steps and self.max_steps > 0:
+            step_limit = self.max_steps
+        else:
+            step_limit = self.config.agent.max_iterations
 
         for iteration in range(step_limit):
             is_last_step = iteration + 1 >= step_limit
@@ -851,7 +857,7 @@ class Agent:
 
         if not self.cancel_event.is_set() and hit_max_iterations:
             yield AgentEvent("error", {
-                "message": f"Reached maximum iterations ({self.config.agent.max_iterations}). "
+                "message": f"Reached maximum iterations ({step_limit}). "
                            "The task may not be fully complete. You can continue in a new message."
             })
 

@@ -1021,12 +1021,62 @@ body {
 }
 
 .plan-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--accent);
     margin-bottom: 8px;
+}
+
+/* Collapse toggle: a small chevron button on the title. */
+.plan-toggle {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 2px;
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1;
+}
+.plan-toggle:hover {
+    color: var(--text-primary);
+}
+.plan-chevron {
+    display: inline-block;
+    transition: transform 0.15s ease;
+}
+.plan-container.collapsed .plan-chevron {
+    transform: rotate(-90deg);
+}
+
+/* Cap the visible list at ~6 rows; overflow scrolls within the panel. */
+.plan-list {
+    max-height: 162px;
+    overflow-y: auto;
+}
+
+.plan-container.collapsed .plan-list {
+    display: none;
+}
+.plan-container.collapsed .plan-title {
+    margin-bottom: 0;
+}
+
+.plan-count {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 6px;
+    line-height: 16px;
 }
 
 .plan-item {

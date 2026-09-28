@@ -901,8 +901,12 @@ function createWorkStep(n) {
     return step;
 }
 
-// Detached assistant-message div streaming a turn's leading prose/reasoning live
-// before it is committed into the work block (or flushed to main flow if summary).
+// Detached assistant-message div streaming a turn's leading prose/reasoning. It
+// is attached to the flow immediately so reasoning is visible WHILE it streams
+// (previously it floated disconnected until the first tool call, so a long
+// thinking phase rendered nothing but the busy dot). If the turn turns out to be
+// a work step, commitPendingUnit() moves its content into the step; prose-only
+// turns stay as a normal main-flow assistant message.
 function startPendingUnit() {
     if (pendingUnit) return pendingUnit;
     pendingUnit = document.createElement('div');
@@ -911,6 +915,11 @@ function startPendingUnit() {
         `<div class="message-role assistant">CodeAssist</div>` +
         `<div class="thinking-block ${thinkingHiddenAttr()}"><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
         `<div class="message-content"></div>`;
+    removeWelcome();
+    // Attach at the end of the scroll flow so streamed reasoning/prose appears
+    // in reading order (after the work block/active step), not wedged between
+    // the anchor user message and the work block.
+    messagesEl.appendChild(pendingUnit);
     return pendingUnit;
 }
 
@@ -946,17 +955,24 @@ function commitPendingUnit() {
 // Close the active step: collapse it and move it into the history accumulator.
 // Work steps are collapsed by default; the header toggle still lets a user
 // expand an individual step, and the Work header collapses the whole history.
-function closeActiveStep() {
+// `done` is set when the whole run is over (endRun) so reasoning is only
+// archived into the past-thinking container at that point.
+function closeActiveStep({ done = false } = {}) {
     if (!activeStepEl) return;
     // Stay expanded while the run is live. Collapsing here made a step vanish
     // the moment the model narrated past it, because the step moved into
     // .work-history which is display:none between runs -- so tool output
     // appeared to blink out and then reappear in a different position.
-    if (!runActive) activeStepEl.classList.remove('open');
-    // Archive this step's reasoning into the past-thinking container (collapsed);
-    // the completed step keeps its prose + tool calls but no longer shows thinking.
-    const think = activeStepEl.querySelector('.thinking-block');
-    if (think) archiveThinking(think);
+    if (!runActive || done) activeStepEl.classList.remove('open');
+    // Reasoning must stay visible for the whole live run. Closing a step mid-run
+    // (the model narrating past a tool call) used to archive its thinking-block
+    // into the collapsed past-thinking container immediately, so thinking
+    // "blinked in then vanished" and an active turn showed no reasoning at all.
+    // Only archive once the run is actually over.
+    if (!runActive || done) {
+        const think = activeStepEl.querySelector('.thinking-block');
+        if (think) archiveThinking(think);
+    }
     workHistoryEl.appendChild(activeStepEl);
     activeStepEl = null;
     updateWorkCount();
@@ -1034,7 +1050,7 @@ function findStepForToolCall(id) {
 
 // End a run: close any active step and flush an uncommitted summary to main flow.
 function endRun() {
-    if (activeStepEl) closeActiveStep();
+    if (activeStepEl) closeActiveStep({ done: true });
     flushPendingToMainFlow();
     // The run is over, so finished steps may collapse into the Work section --
     // but only if the user has not opened it deliberately.
@@ -1044,6 +1060,24 @@ function endRun() {
     }
     runActive = false;
     finalizeState();
+    // Run's over: sweep every step's reasoning into the collapsed past-thinking
+    // container. Mid-run steps kept their thinking visible (see closeActiveStep);
+    // now that the Work history is collapsed this matches the design of storing
+    // completed reasoning out of the way.
+    archiveAllStepThinking();
+}
+
+// Move every remaining .thinking-block out of the work steps into the collapsed
+// past-thinking container. Idempotent (archiveThinking is a no-op for already-
+// archived blocks, which are no longer inside .work-step).
+function archiveAllStepThinking() {
+    const zones = [];
+    if (workHistoryEl) zones.push(workHistoryEl);
+    if (workActiveEl) zones.push(workActiveEl);
+    if (workBlockEl) zones.push(workBlockEl);
+    zones.forEach((zone) => {
+        zone.querySelectorAll('.work-step .thinking-block').forEach((think) => archiveThinking(think));
+    });
 }
 
 // Whether there is anything worth offering "Continue" for: at least one work step
@@ -1784,21 +1818,52 @@ function updateTokenInfo(totalTokens, rate) {
     el.textContent = `${totalTokens.toLocaleString()} tokens${rateText}`;
 }
 
+// Plan panel: show at most this many task rows (the rest scroll), and keep the
+// whole list collapsible. Default is expanded; the choice persists per browser.
+const PLAN_DISPLAY_MAX = 6;
+let planCollapsed = false;
+try { planCollapsed = localStorage.getItem('plan-collapsed') === '1'; } catch (e) {}
+
+function togglePlanCollapsed() {
+    planCollapsed = !planCollapsed;
+    try { planCollapsed ? localStorage.setItem('plan-collapsed', '1') : localStorage.removeItem('plan-collapsed'); } catch (e) {}
+    const container = planDisplayEl.querySelector('.plan-container');
+    if (container) container.classList.toggle('collapsed', planCollapsed);
+    const toggle = planDisplayEl.querySelector('.plan-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', String(!planCollapsed));
+}
+
 function updatePlanDisplay(tasks) {
     if (!tasks || tasks.length === 0) {
         planDisplayEl.innerHTML = '';
         return;
     }
 
+    const visible = tasks.slice(0, PLAN_DISPLAY_MAX);
     const container = document.createElement('div');
-    container.className = 'plan-container';
+    container.className = 'plan-container' + (planCollapsed ? ' collapsed' : '');
 
     const title = document.createElement('div');
     title.className = 'plan-title';
-    title.textContent = 'Current Plan';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'plan-toggle';
+    toggle.setAttribute('aria-expanded', String(!planCollapsed));
+    toggle.innerHTML = '<span class="plan-chevron">&#9662;</span>';
+    toggle.onclick = togglePlanCollapsed;
+    title.appendChild(toggle);
+    title.appendChild(document.createTextNode('Current Plan'));
+    if (tasks.length > visible.length) {
+        const count = document.createElement('span');
+        count.className = 'plan-count';
+        count.textContent = `${tasks.length}`;
+        title.appendChild(count);
+    }
     container.appendChild(title);
 
-    for (const task of tasks) {
+    const list = document.createElement('div');
+    list.className = 'plan-list';
+    for (const task of visible) {
         const item = document.createElement('div');
         item.className = `plan-item ${task.status}`;
 
@@ -1815,9 +1880,10 @@ function updatePlanDisplay(tasks) {
 
         item.appendChild(checkbox);
         item.appendChild(content);
-        container.appendChild(item);
+        list.appendChild(item);
     }
 
+    container.appendChild(list);
     planDisplayEl.innerHTML = '';
     planDisplayEl.appendChild(container);
 }
