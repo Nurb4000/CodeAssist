@@ -500,8 +500,15 @@ async function loadMessages() {
         if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf = { prose: '', reasoning: '' }; return; }
         const div = appendAssistantMessage(summaryBuf.prose);
         if (summaryBuf.reasoning) {
-            const rEl = div.querySelector('.thinking-content');
-            if (rEl) { rEl.textContent = summaryBuf.reasoning; applyThinkingVisibility(div.querySelector('.thinking-block')); }
+            // Same rule a live turn follows: reasoning is filed in the collapsed
+            // past-thinking container, so a reloaded session looks exactly like
+            // the turn that produced it. The message keeps the answer only.
+            const think = div.querySelector('.thinking-block');
+            const rEl = think && think.querySelector('.thinking-content');
+            if (rEl) {
+                rEl.textContent = summaryBuf.reasoning;
+                archiveThinking(think);
+            }
         }
         summaryBuf = { prose: '', reasoning: '' };
     };
@@ -633,7 +640,12 @@ function ensurePastThinkingContainer() {
         c.querySelector('.thinking-history-chevron').textContent = hidden ? '▸' : '▾';
     });
     pastThinkingListEl = c.querySelector('.past-thinking-list');
-    (workActiveEl || workBlockEl || lastUserEl || messagesEl).after(c);
+    // Sits after the work block / active step during a run (like the Work
+    // section). With no work block (a prose-only turn, including a reloaded
+    // summary), park it at the end of the flow so it never lands mid-message.
+    const anchor = workActiveEl || workBlockEl;
+    if (anchor) anchor.after(c);
+    else messagesEl.appendChild(c);
     pastThinkingEl = c;
     return c;
 }
@@ -875,7 +887,14 @@ function ensureWorkBlock() {
 }
 
 function updateWorkCount() {
-    if (runActive && !workBlockUserToggled) setWorkHistoryVisible(true);
+    // The Work section is an accumulator of completed steps: collapsed by
+    // default at all times -- during a run and after it. There is deliberately
+    // NO mid-run force-show; that left the container expanded by default and
+    // buried the run in completed history. The live step is unaffected because
+    // .work-active lives OUTSIDE this collapsible block, so the run is still
+    // watchable without opening anything. A deliberate manual toggle is
+    // respected until the next turn resets workBlockUserToggled.
+    if (!workBlockUserToggled) setWorkHistoryVisible(false);
     if (workBlockEl) {
         const c = workBlockEl.querySelector('.work-count');
         if (c) c.textContent = workStepCount;
@@ -1051,7 +1070,12 @@ function findStepForToolCall(id) {
 // End a run: close any active step and flush an uncommitted summary to main flow.
 function endRun() {
     if (activeStepEl) closeActiveStep({ done: true });
+    const summaryUnit = pendingUnit;
     flushPendingToMainFlow();
+    // The turn is over: file the summary's own reasoning too. It streamed into
+    // the pending unit, so leaving it inline kept a thinking block visible after
+    // the run -- the one piece of reasoning that never reached the container.
+    archiveUnitThinking(summaryUnit);
     // The run is over, so finished steps may collapse into the Work section --
     // but only if the user has not opened it deliberately.
     if (!workBlockUserToggled && workBlockEl) {
@@ -1065,6 +1089,18 @@ function endRun() {
     // now that the Work history is collapsed this matches the design of storing
     // completed reasoning out of the way.
     archiveAllStepThinking();
+}
+
+// File a message unit's reasoning into the past-thinking container. Reasoning with
+// no text (a prose-only turn leaves an empty block behind) is simply removed so
+// the container does not fill with empty entries.
+function archiveUnitThinking(unit) {
+    if (!unit) return;
+    const think = unit.querySelector('.thinking-block');
+    if (!think) return;
+    const c = think.querySelector('.thinking-content');
+    if (c && c.textContent.trim()) archiveThinking(think);
+    else think.remove();
 }
 
 // Move every remaining .thinking-block out of the work steps into the collapsed

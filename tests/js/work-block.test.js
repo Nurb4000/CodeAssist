@@ -21,24 +21,40 @@ async function turnWithOneTool(env, { closeStep = false } = {}) {
   }
 }
 
-test('a step that closes mid-run stays visible and expanded', async () => {
+test('the work section stays collapsed while the run is live', async () => {
   const env = await boot();
   startTurn(env);
   await turnWithOneTool(env, { closeStep: true });
 
-  const block = workBlock(env.document);
-  assert.ok(block, 'work block should exist');
+  // Completed steps are an accumulator you open on demand, never expanded for
+  // you. Nothing force-shows it mid-run any more.
   assert.ok(
-    !block.classList.contains('history-hidden'),
-    'completed steps must not be hidden while the run is still streaming'
+    workBlock(env.document).classList.contains('history-hidden'),
+    'the work section is collapsed by default while a run is streaming'
   );
 
+  // ...but the content is retained, so expanding shows the whole step.
   const [step] = steps(env.document);
-  assert.ok(step.classList.contains('open'), 'a mid-run step must stay expanded');
-  assert.deepStrictEqual(stepOutputs(step), ['print(1)']);
+  assert.deepStrictEqual(stepOutputs(step), ['print(1)'], 'the closed step keeps its tool output');
 });
 
-test('finished steps only collapse when the run ends', async () => {
+test('the live step stays visible outside the collapsed work section', async () => {
+  const env = await boot();
+  startTurn(env);
+  await turnWithOneTool(env, { closeStep: true });
+
+  // A second step opens: it renders in .work-active, which is a SIBLING of the
+  // collapsible block, so a collapsed Work section never hides the current step.
+  env.feed({ type: 'tool_call', name: 'grep', arguments: { pattern: 'y' }, id: 't2' });
+  const live = env.document.querySelectorAll('.work-active .work-step');
+  assert.strictEqual(live.length, 1, 'the running step is in the always-visible active zone');
+  assert.ok(
+    !workBlock(env.document).contains(live[0]),
+    'the active zone must not be inside the collapsible block'
+  );
+});
+
+test('individual steps collapse when the run ends', async () => {
   const env = await boot();
   startTurn(env);
   await turnWithOneTool(env, { closeStep: true });
@@ -48,7 +64,7 @@ test('finished steps only collapse when the run ends', async () => {
 
   assert.ok(
     workBlock(env.document).classList.contains('history-hidden'),
-    'the Work section collapses once the run is over'
+    'the Work section stays collapsed once the run is over'
   );
   assert.ok(!steps(env.document)[0].classList.contains('open'), 'steps collapse on done');
 });
@@ -86,25 +102,23 @@ test('a result arriving after a new step opened lands in the right step', async 
   assert.deepStrictEqual(stepOutputs(second), [], 'not duplicated into the newer step');
 });
 
-test('a manual toggle of the Work section survives the rest of the run', async () => {
+test('a manual expand of the Work section survives the rest of the run', async () => {
   const env = await boot();
   startTurn(env);
   await turnWithOneTool(env, { closeStep: true });
 
   const header = workBlock(env.document).querySelector('.work-block-header');
 
-  // User collapses it deliberately mid-run; later activity must not re-expand it.
-  header.click();
-  assert.ok(workBlock(env.document).classList.contains('history-hidden'));
-  env.feed({ type: 'tool_call', name: 'grep', arguments: { pattern: 'y' }, id: 't2' });
-  assert.ok(
-    workBlock(env.document).classList.contains('history-hidden'),
-    'a deliberate collapse must not be overridden mid-run'
-  );
-
-  // And if they open it again, endRun must leave it open.
+  // User opens it deliberately mid-run; later activity must not re-collapse it.
   header.click();
   assert.ok(!workBlock(env.document).classList.contains('history-hidden'));
+  env.feed({ type: 'tool_call', name: 'grep', arguments: { pattern: 'y' }, id: 't2' });
+  assert.ok(
+    !workBlock(env.document).classList.contains('history-hidden'),
+    'a deliberate expand must not be overridden mid-run'
+  );
+
+  // And endRun must leave it open.
   env.feed({ type: 'done' });
   assert.ok(
     !workBlock(env.document).classList.contains('history-hidden'),
@@ -112,7 +126,7 @@ test('a manual toggle of the Work section survives the rest of the run', async (
   );
 });
 
-test('a new turn restores the auto-collapse behaviour', async () => {
+test('a new turn restores the collapsed default', async () => {
   const env = await boot();
   startTurn(env, 'first');
   await turnWithOneTool(env);
@@ -123,7 +137,7 @@ test('a new turn restores the auto-collapse behaviour', async () => {
   env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't3' });
 
   assert.ok(
-    !workBlock(env.document).classList.contains('history-hidden'),
+    workBlock(env.document).classList.contains('history-hidden'),
     'the manual override is per-turn'
   );
 });

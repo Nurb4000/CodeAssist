@@ -82,6 +82,54 @@ test('a completed mid-run turn keeps its thinking during the run', async () => {
   );
 });
 
+test('the summary\'s own reasoning is filed when the run ends', async () => {
+  // The last LLM turn is prose + reasoning, never a tool call, so its reasoning
+  // streams into the pending unit. That used to be the one piece of thinking that
+  // stayed on screen after the run finished.
+  const env = await boot();
+  startTurn(env);
+  env.feed({ type: 'reasoning', content: 'Step reasoning.' });
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'a.py' }, id: 't1' });
+  env.feed({ type: 'tool_result', id: 't1', output: 'x' });
+  env.feed({ type: 'reasoning', content: 'Summary reasoning.' });
+  env.feed({ type: 'text_delta', content: 'All done.' });
+  env.feed({ type: 'done' });
+
+  assert.strictEqual(
+    all(env.document, '#messages > .message > .thinking-block').length, 0,
+    'no inline thinking block survives on the summary message'
+  );
+  assert.strictEqual(all(env.document, '.past-thinking-entry').length, 2, 'both reasonings are filed');
+  assert.ok(
+    all(env.document, '.past-thinking-entry .thinking-content')
+      .some((c) => c.textContent.includes('Summary reasoning.')),
+    'the summary reasoning reaches the past-thinking container'
+  );
+  // The answer itself must survive in the main flow.
+  assert.ok(
+    all(env.document, '#messages > .message .message-content')
+      .some((c) => c.textContent.includes('All done.')),
+    'the summary prose is still in the main flow'
+  );
+});
+
+test('a prose-only turn does not leave an empty thinking entry', async () => {
+  const env = await boot();
+  startTurn(env);
+  env.feed({ type: 'text_delta', content: 'Just an answer, no reasoning.' });
+  env.feed({ type: 'done' });
+
+  assert.strictEqual(
+    all(env.document, '.past-thinking-entry').length, 0,
+    'an empty thinking block must not be filed'
+  );
+  assert.ok(
+    all(env.document, '#messages > .message .message-content')
+      .some((c) => c.textContent.includes('Just an answer')),
+    'the message is still rendered'
+  );
+});
+
 test('end of run archives all thinking into the past-thinking container', async () => {
   const env = await boot();
   startTurn(env);
