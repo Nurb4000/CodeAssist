@@ -113,6 +113,47 @@ test('the summary\'s own reasoning is filed when the run ends', async () => {
   );
 });
 
+test('a reasoning-only turn leaves no orphan agent label', async () => {
+  // The model can think after its last tool call and narrate nothing. That turn
+  // used to flush a message shell holding only the "CodeAssist" role label once
+  // the reasoning was filed away.
+  const env = await boot();
+  startTurn(env);
+  env.feed({ type: 'reasoning', content: 'Step reasoning.' });
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'a.py' }, id: 't1' });
+  env.feed({ type: 'tool_result', id: 't1', output: 'x' });
+  env.feed({ type: 'reasoning', content: 'Silent final reasoning.' });
+  env.feed({ type: 'done' });
+
+  assert.strictEqual(
+    all(env.document, '#messages > .message > .message-role.assistant').length, 0,
+    'no assistant message shell may survive without content'
+  );
+  assert.ok(
+    all(env.document, '.past-thinking-entry .thinking-content')
+      .some((c) => c.textContent.includes('Silent final reasoning.')),
+    'the reasoning is still filed'
+  );
+});
+
+test('a prose summary keeps its agent label', async () => {
+  // Guard against the opposite over-correction: a real answer must not lose it.
+  const env = await boot();
+  startTurn(env);
+  env.feed({ type: 'reasoning', content: 'Reasoning.' });
+  env.feed({ type: 'text_delta', content: 'The answer.' });
+  env.feed({ type: 'done' });
+
+  const labelled = all(env.document, '#messages > .message').filter((m) =>
+    m.querySelector('.message-role.assistant')
+  );
+  assert.strictEqual(labelled.length, 1, 'the summary message keeps its label');
+  assert.ok(
+    labelled[0].textContent.includes('The answer.'),
+    'and still shows the answer'
+  );
+});
+
 test('a prose-only turn does not leave an empty thinking entry', async () => {
   const env = await boot();
   startTurn(env);

@@ -1097,10 +1097,21 @@ function endRun() {
 function archiveUnitThinking(unit) {
     if (!unit) return;
     const think = unit.querySelector('.thinking-block');
-    if (!think) return;
-    const c = think.querySelector('.thinking-content');
-    if (c && c.textContent.trim()) archiveThinking(think);
-    else think.remove();
+    if (think) {
+        const c = think.querySelector('.thinking-content');
+        if (c && c.textContent.trim()) archiveThinking(think);
+        else think.remove();
+    }
+    // A reasoning-only turn (model narrates nothing, just thinks) flushed a
+    // message shell whose only real content was the reasoning just filed away.
+    // That leaves the "CodeAssist" role label stranded in the flow with nothing
+    // under it, so drop the empty shell. Anything that still carries content --
+    // prose, tool calls, images -- keeps its label.
+    if (!unit.isConnected) return;
+    const body = unit.querySelector('.message-content');
+    const hasBody = body && body.textContent.trim();
+    const hasExtras = unit.querySelector('.tool-call-stack, img, .message-actions, table, pre');
+    if (!hasBody && !hasExtras) unit.remove();
 }
 
 // Move every remaining .thinking-block out of the work steps into the collapsed
