@@ -97,26 +97,36 @@ async def api_status():
     }
 
 
-# Todo endpoints
+# Todo endpoints. Both are session-scoped: the plan list belongs to one
+# conversation, and the tool instance is shared across the whole process, so the
+# caller has to say which session it means.
 @router.get("/api/todos")
-async def get_todos():
-    """Get the current todo list from the active agent."""
+async def get_todos(session_id: str | None = None):
+    """Get the task list for a session."""
     from ..server import tools
     if tools is None:
         return {"tasks": []}
     todo_tool = tools.get("todo")
-    if todo_tool and hasattr(todo_tool, "get_tasks"):
-        return {"tasks": todo_tool.get_tasks()}
+    if todo_tool and hasattr(todo_tool, "load_session"):
+        # Hydrate from the database first: after a restart the in-memory list is
+        # empty even though the session still has a plan on disk.
+        if session_id:
+            await todo_tool.load_session(session_id)
+        return {"tasks": todo_tool.get_tasks(session_id)}
     return {"tasks": []}
 
 
 @router.post("/api/todos/clear")
-async def clear_todos():
-    """Clear all tasks from the active agent's todo list."""
+async def clear_todos(session_id: str | None = None):
+    """Clear the task list for one session.
+
+    Without a session id this clears the currently-bound session, so it can no
+    longer wipe another conversation's plan.
+    """
     from ..server import tools
     if tools is None:
         return {"ok": True}
     todo_tool = tools.get("todo")
     if todo_tool and hasattr(todo_tool, "clear_tasks"):
-        todo_tool.clear_tasks()
+        await todo_tool.clear_tasks(session_id)
     return {"ok": True}

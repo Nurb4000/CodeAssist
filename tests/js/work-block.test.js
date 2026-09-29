@@ -164,3 +164,48 @@ test('an error mid-run does not leave steps stuck open', async () => {
     'endRun runs on the error path too'
   );
 });
+
+// ── Deleting a session ────────────────────────────────────────────────────────
+// deleteSession() replaced #messages wholesale but left the cached Work-block
+// handles pointing at the detached node, so every step after a delete was built
+// inside an orphan and never appeared. Same failure shape as the past-thinking
+// container, and it is what made the two sections behave inconsistently.
+
+test('a run after deleting and recreating a session renders its work block', async () => {
+  const env = await boot({
+    fixtures: {
+      '/api/sessions': (method) =>
+        method === 'POST' ? { id: 'session-3' } : [{ id: 'session-1', name: 'one' }],
+    },
+  });
+  startTurn(env);
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'a.py' }, id: 't1' });
+  env.feed({ type: 'tool_result', id: 't1', output: 'before delete' });
+  env.feed({ type: 'done' });
+  assert.ok(workBlock(env.document), 'precondition: a work block exists');
+
+  // Deleting the active session confirms, then wipes the flow and drops the
+  // socket (there is no session left to connect to).
+  env.window.confirm = () => true;
+  await env.window.deleteSession('session-1');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(workBlock(env.document), null, 'the flow really was wiped');
+
+  // The realistic recovery path: start a new session, which reconnects.
+  await env.window.createSession();
+  await new Promise((r) => setTimeout(r, 20));
+  const socket = env.sockets[env.sockets.length - 1];
+
+  env.window.document.getElementById('user-input').value = 'after the delete';
+  env.window.sendMessage();
+  socket.receive({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't2' });
+  socket.receive({ type: 'tool_result', id: 't2', output: 'after delete' });
+
+  const block = workBlock(env.document);
+  assert.ok(block, 'the work block is rebuilt, not left orphaned');
+  assert.ok(block.isConnected, 'the rebuilt work block is attached to the document');
+  assert.ok(
+    stepOutputs(steps(env.document)[0]).some((o) => o.includes('after delete')),
+    'the new step renders its tool output'
+  );
+});

@@ -89,3 +89,53 @@ test('a second turn can be sent after the previous one finishes', async () => {
   const sent = env.socket.sent.filter((m) => m.type === 'user_message');
   assert.deepStrictEqual(sent.map((m) => m.content), ['first', 'second']);
 });
+
+// ── Stop acknowledgement ─────────────────────────────────────────────────────
+// Pressing Stop used to look like nothing happened until the server's
+// `cancelled` reply came back over the socket, which is a visible delay when
+// the turn is mid tool call. The click now shows up immediately, and repeat
+// clicks are ignored so the second one cannot interrupt the agent's cleanup.
+
+const cancels = (env) => env.socket.sent.filter((m) => m.type === 'cancel').length;
+const isStopping = (env) => sel(env, 'stop-btn').classList.contains('stopping');
+
+test('clicking stop acknowledges the request immediately', async () => {
+  const env = await boot();
+  startTurn(env);
+  assert.ok(!isStopping(env), 'not stopping before the click');
+
+  sel(env, 'stop-btn').click();
+
+  assert.ok(isStopping(env), 'the button shows the stop was taken');
+  assert.strictEqual(cancels(env), 1, 'exactly one cancel is sent');
+  // Still no `cancelled` from the server yet -- the UI must not wait for it.
+  assert.ok(isBusy(env).body, 'the run has not ended yet, by design');
+});
+
+test('repeated stop clicks do not re-cancel', async () => {
+  const env = await boot();
+  startTurn(env);
+
+  sel(env, 'stop-btn').click();
+  sel(env, 'stop-btn').click();
+  sel(env, 'stop-btn').click();
+
+  assert.strictEqual(
+    cancels(env), 1,
+    'a second cancel would interrupt the agent writing the partial turn out'
+  );
+});
+
+test('stop is re-armed for the next run', async () => {
+  const env = await boot();
+  startTurn(env, 'first');
+  sel(env, 'stop-btn').click();
+  env.feed({ type: 'cancelled' });
+  env.feed({ type: 'done' });
+  assert.ok(!isStopping(env), 'the stopping state is cleared when the run ends');
+
+  startTurn(env, 'second');
+  assert.ok(!isStopping(env), 'a fresh run re-arms stop');
+  sel(env, 'stop-btn').click();
+  assert.strictEqual(cancels(env), 2, 'the second run can be stopped too');
+});

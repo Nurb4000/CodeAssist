@@ -1223,3 +1223,154 @@ class TestContextWindowErrorDetection:
             asyncio.run(drain())
         # Not retried: one attempt only.
         assert client.client.chat.completions.create.await_count == 1
+
+
+async def _drain(agen):
+    """Consume an AgentEvent stream into a list."""
+    return [event async for event in agen]
+
+
+class TestAgentStop:
+    """Stopping a turn must end it promptly and must not throw away work that
+    already happened.
+
+    Two separate defects fed the "Stop does nothing for a while" report:
+
+      * The cooperative `cancel_event` is only inspected between streamed chunks
+        and between tool calls, so a turn waiting on its first token, or one
+        sitting inside `asyncio.gather` on a long tool, kept running to
+        completion. The server now also cancels the asyncio task.
+      * Both the flag path and the hard-cancel path unwound without persisting
+        what had already streamed, leaving the placeholder assistant row empty
+        -- the text the user watched appear vanished. They also left an
+        assistant message carrying `tool_calls` with no matching tool result,
+        which makes the provider reject the next request.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_stream_persists_partial_output(self, agent, mock_session):
+        """Stop part-way through a stream keeps the text and reasoning that
+        already arrived, and drops what never did."""
+        from codeassist.llm import ReasoningDelta, TextDelta
+
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("half an answer")
+            yield ReasoningDelta("thinking so far")
+            agent.cancel_event.set()  # the user pressed Stop
+            yield TextDelta(" never delivered")
+
+        agent.llm.stream = fake_stream
+
+        events = await _drain(agent.run("Hello"))
+
+        last = mock_session.update_message.call_args_list[-1]
+        assert last.kwargs["content"] == "half an answer", "partial text is saved"
+        assert last.kwargs["reasoning_content"] == "thinking so far", "partial reasoning is saved"
+        assert "never delivered" not in str(last.kwargs["content"])
+        assert "cancelled" in [e.type for e in events]
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_stream_answers_streamed_tool_calls(self, agent, mock_session):
+        """A tool call that streamed before the stop still needs a tool result,
+        or the transcript is invalid for the next turn."""
+        async def fake_stream(messages, openai_tools):
+            yield ToolCall(id="c1", name="shell", arguments={"command": "echo hi"})
+            agent.cancel_event.set()
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = fake_stream
+
+        await _drain(agent.run("Hello"))
+
+        tool_msgs = [c for c in mock_session.add_message.call_args_list
+                     if c.args and c.args[0] == "tool"]
+        assert tool_msgs, "the unrun tool call must be answered"
+        assert tool_msgs[-1].kwargs["tool_call_id"] == "c1"
+
+    @pytest.mark.asyncio
+    async def test_cancel_interrupts_a_running_tool_promptly(self, agent, mock_session):
+        """A long tool call must not hold the run open. Cancelling the task
+        unwinds the pending await instead of waiting the tool out."""
+        started = asyncio.Event()
+        finished = False
+
+        async def slow_execute(name, args):
+            nonlocal finished
+            started.set()
+            await asyncio.sleep(30)
+            finished = True
+            return ToolResult(output="never", error=False)
+
+        agent.tools.execute = slow_execute
+        agent._trust_all = True
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+        async def turn():
+            yield ToolCall(id="c1", name="shell", arguments={"command": "sleep 30"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = lambda messages, openai_tools: turn()
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "go"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+
+            task = asyncio.create_task(_drain(agent.run("go")))
+            await asyncio.wait_for(started.wait(), timeout=5)
+
+            task.cancel()
+            # Must settle promptly, not after the tool's own 30s.
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+
+        assert not finished, "the interrupted tool must not have run to completion"
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_tool_call_answers_the_call(self, agent, mock_session):
+        """Interrupting a running tool still owes the transcript a result for
+        its tool_call, otherwise the next request to the provider is rejected."""
+        started = asyncio.Event()
+
+        async def slow_execute(name, args):
+            started.set()
+            await asyncio.sleep(30)
+            return ToolResult(output="never", error=False)
+
+        agent.tools.execute = slow_execute
+        agent._trust_all = True
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+        async def turn():
+            yield ToolCall(id="c1", name="shell", arguments={"command": "sleep 30"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = lambda messages, openai_tools: turn()
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "go"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+
+            task = asyncio.create_task(_drain(agent.run("go")))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+
+        # The shielded write must have completed even though the task was cancelled.
+        await asyncio.sleep(0.05)
+        tool_msgs = [c for c in mock_session.add_message.call_args_list
+                     if c.args and c.args[0] == "tool"]
+        assert tool_msgs, "the interrupted tool call must still be answered"
+        assert tool_msgs[-1].kwargs["tool_call_id"] == "c1"

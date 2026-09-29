@@ -226,6 +226,50 @@ class Agent:
             self._confirm_results[confirm_id] = False
             event.set()
 
+    async def _answer_unrun_tool_calls(self, tool_calls: list["ToolCall"]):
+        """Write a placeholder result for tool calls that never got to run.
+
+        A turn cut short must still leave a transcript the provider will accept:
+        an assistant message carrying ``tool_calls`` has to be followed by one
+        tool message per call, or the next request is rejected outright. Calls
+        that were streamed but cancelled mid-flight get an explicit "never ran"
+        result so the model is not left reasoning about phantom output.
+        """
+        for tc in tool_calls:
+            await self.session.add_message(
+                "tool",
+                content="Cancelled by user before this tool ran.",
+                tool_call_id=tc.id,
+            )
+        self._messages_dirty = True
+
+    async def _persist_interrupted_step(
+        self,
+        stream_msg_id: str,
+        accumulated_text: str,
+        accumulated_reasoning: str,
+        tool_calls: list["ToolCall"],
+    ):
+        """Persist a turn that was cut short, so Stop does not discard the work.
+
+        The placeholder assistant row is written up front, so an interruption
+        that returns without an update leaves it empty and the text the user
+        already watched stream in is lost. Save it, then answer any tool calls
+        so the transcript stays valid.
+        """
+        tc_dicts = [
+            {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
+            for tc in tool_calls
+        ]
+        await self.session.update_message(
+            stream_msg_id,
+            content=accumulated_text or None,
+            tool_calls=tc_dicts or None,
+            reasoning_content=accumulated_reasoning or None,
+        )
+        self._messages_dirty = True
+        await self._answer_unrun_tool_calls(tool_calls)
+
     def reset_trust(self):
         """Reset trust flags for new session."""
         self._trust_workspace_writes = False
@@ -379,6 +423,27 @@ class Agent:
             question_tool.set_answer(question_id, answer)
 
     async def run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
+        """Run one turn, bound to this agent's session.
+
+        The plan list lives on a single, process-wide tool instance, so the
+        session is bound for the whole turn via a task-local context. Binding it
+        as a plain attribute would let a second session streaming at the same
+        time redirect this turn's todo writes into its own plan.
+        """
+        todo_tool = self.tools.get("todo")
+        if todo_tool is None or not hasattr(todo_tool, "load_session"):
+            async for event in self._run(user_message, attachments):
+                yield event
+            return
+        # Hydrate before the turn starts: after a restart the only copy of the
+        # plan is on disk, and without this the turn would start from an empty
+        # list and overwrite it.
+        await todo_tool.load_session(self.session.id)
+        with todo_tool.active(self.session.id):
+            async for event in self._run(user_message, attachments):
+                yield event
+
+    async def _run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
         # Reset compaction state for new user turn
         self._compaction_summary = ""
@@ -638,6 +703,13 @@ class Agent:
                 try:
                     async for event in self.llm.stream(messages, openai_tools):
                         if self.cancel_event.is_set():
+                            # Stop arrived mid-stream. Save what already streamed
+                            # before unwinding, otherwise the turn ends with an
+                            # empty assistant row and the text the user watched
+                            # appear is thrown away.
+                            await self._persist_interrupted_step(
+                                stream_msg_id, accumulated_text, accumulated_reasoning, tool_calls
+                            )
                             return
                         if time.monotonic() - stream_start > stream_timeout:
                             log.warning("LLM stream timed out after %.0fs", stream_timeout)
@@ -861,7 +933,18 @@ class Agent:
                     return tc, result, truncated, duration_ms
 
                 if confirmed_tool_calls:
-                    results = await asyncio.gather(*[_exec_tool(tc) for tc in confirmed_tool_calls])
+                    try:
+                        results = await asyncio.gather(*[_exec_tool(tc) for tc in confirmed_tool_calls])
+                    except asyncio.CancelledError:
+                        # Stop was pressed while the tools were running. The
+                        # assistant message with its tool_calls is already
+                        # persisted, so answer every call we did not finish or
+                        # the transcript becomes invalid for the next turn. The
+                        # writes are shielded so a second cancel (the button
+                        # stays live until the run ends) cannot tear them off
+                        # half-written.
+                        await asyncio.shield(self._answer_unrun_tool_calls(confirmed_tool_calls))
+                        raise
                     for tc, result, truncated, duration_ms in results:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                         self._messages_dirty = True
@@ -882,7 +965,14 @@ class Agent:
                         if tc.name == "todo":
                             todo_tool = self.tools.get("todo")
                             if todo_tool and hasattr(todo_tool, "get_tasks"):
-                                yield AgentEvent("plan_update", {"tasks": todo_tool.get_tasks()})
+                                # Read this session's plan explicitly. The tool is
+                                # a shared process-wide instance, so a bare
+                                # get_tasks() would report whichever session
+                                # happens to be bound right now.
+                                yield AgentEvent(
+                                    "plan_update",
+                                    {"tasks": todo_tool.get_tasks(self.session.id)},
+                                )
 
                 continue
 

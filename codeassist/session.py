@@ -14,7 +14,7 @@ import aiosqlite
 # volume). Defaults to <package>/data for plain local runs.
 DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 13
 
 
 class _DBPool:
@@ -187,6 +187,10 @@ async def init_db():
         if current_version < 12:
             await _add_v12_tables(db)
             current_version = 12
+
+        if current_version < 13:
+            await _add_v13_tables(db)
+            current_version = 13
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -602,6 +606,40 @@ async def _add_v12_tables(db):
         await db.commit()
 
 
+async def _add_v13_tables(db):
+    """Persist the per-session task/plan list.
+
+    The plan the model builds with the `todo` tool used to exist only in the
+    tool's process memory: a server restart emptied it, and because the tool is
+    a single process-wide instance, every session shared one list. Keying rows
+    by session makes a plan belong to the conversation that wrote it, so it
+    survives a restart and cannot bleed between sessions.
+
+    This is deliberately a new table rather than the existing `todos` one: that
+    table is written by the subagent manager and its `content` column holds a
+    JSON blob of subagent metadata, not a task line. Its primary key is also a
+    bare TEXT id, whereas the plan's ids are the small per-session integers the
+    model refers to when it updates a task, so they are stored as a composite
+    (session_id, task_id) key.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS plan_tasks (
+            session_id TEXT NOT NULL,
+            task_id INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            PRIMARY KEY (session_id, task_id)
+        )
+    """)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plan_tasks_session "
+        "ON plan_tasks(session_id, position)"
+    )
+    await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -961,6 +999,10 @@ class Session:
                 (self.id,),
             )
             await db.execute("DELETE FROM messages WHERE session_id = ?", (self.id,))
+            # The pool does not enable PRAGMA foreign_keys, so the ON DELETE
+            # CASCADE declared on these tables never fires. Remove the session's
+            # plan rows explicitly rather than leaking them.
+            await db.execute("DELETE FROM plan_tasks WHERE session_id = ?", (self.id,))
             await db.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
             await db.commit()
 

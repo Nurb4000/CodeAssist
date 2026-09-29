@@ -613,6 +613,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     if session_tool and hasattr(session_tool, "current_session_id"):
         session_tool.current_session_id = session_id
 
+    # The plan list is per-session state on a shared tool instance. Bind it to
+    # this connection and hydrate it from the database, so the panel is correct
+    # on connect (including after a restart) and one session cannot read or
+    # clear another's plan.
+    todo_tool = tools.get("todo")
+    if todo_tool and hasattr(todo_tool, "load_session"):
+        todo_tool.bind(session_id)
+        await todo_tool.load_session(session_id)
+
     # Configure TaskTool with session context for subagent spawning
     task_tool = tools.get("task")
     if task_tool and hasattr(task_tool, "configure"):
@@ -672,12 +681,25 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         """Relay one turn. `runner` is passed explicitly rather than closed over
         so a turn always uses the agent that was current when it was queued."""
         nonlocal agent_task
+        ended = False  # a `done` event already closed the run out
         try:
             async for event in runner.run(message, attachments or None):
+                if event.type == "done":
+                    ended = True
                 await websocket.send_json({
                     "type": event.type,
                     **event.data,
                 })
+        except asyncio.CancelledError:
+            # Stop was pressed. The agent persists any partial output on its way
+            # out; we only report it. Swallowing the cancellation ends the task
+            # normally, which is what "the run stopped" means here.
+            if not ended:
+                try:
+                    await websocket.send_json({"type": "cancelled"})
+                    await websocket.send_json({"type": "done"})
+                except Exception:  # noqa: BLE001, S110
+                    pass
         except Exception as e:
             log.exception("Agent error")
             try:
@@ -729,7 +751,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             elif data.get("type") == "cancel":
                 if agent_task and not agent_task.done():
+                    # Two things, deliberately. `agent.cancel()` sets the
+                    # cooperative flag and unblocks any permission prompt, which
+                    # is what lets the loop unwind on its own at the next check
+                    # point. The flag alone is not enough to feel like Stop: the
+                    # checks only run between streamed chunks and between tool
+                    # calls, so a turn waiting on its first token or sitting in a
+                    # long shell/test call kept running to completion -- which
+                    # is exactly the "Stop did nothing for a while" report.
+                    # Cancelling the task unwinds the pending await immediately.
                     agent.cancel()
+                    agent_task.cancel()
 
             elif data.get("type") == "undo":
                 deleted = await session.undo_last_turn()

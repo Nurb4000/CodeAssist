@@ -65,14 +65,23 @@ class FakeWebSocket {
 /**
  * Boot the real frontend in jsdom.
  *
+ * @param {object} [options]
+ * @param {object} [options.fixtures] Extra/overriding REST responses, keyed by
+ *   path (query string stripped) or by exact URL including the query string,
+ *   the latter taking precedence. Merged over API_FIXTURES, so a test can serve
+ *   a session whose messages actually carry `reasoning_content`, or give two
+ *   sessions different plans. A value may be a function of the HTTP method for
+ *   endpoints hit with several verbs.
  * @returns {{
  *   window: Window, document: Document, sockets: FakeWebSocket[],
  *   socket: FakeWebSocket, feed: (payload: object) => void,
  *   ready: Promise<void>, errors: string[]
  * }}
  */
-async function boot() {
+async function boot({ fixtures = {} } = {}) {
   const errors = [];
+  const requests = [];
+  const routes = { ...API_FIXTURES, ...fixtures };
   const dom = new JSDOM(readStatic('index.html'), {
     url: 'http://localhost:8000/',
     pretendToBeVisual: true,
@@ -87,9 +96,18 @@ async function boot() {
 
   window.addEventListener('error', (e) => errors.push(String(e.error || e.message)));
 
-  window.fetch = async (url) => {
-    const pathOnly = String(url).split('?')[0];
-    const body = API_FIXTURES[pathOnly] !== undefined ? API_FIXTURES[pathOnly] : {};
+  window.fetch = async (url, opts = {}) => {
+    const full = String(url);
+    requests.push(full);
+    const pathOnly = full.split('?')[0];
+    // Prefer an exact-URL fixture (query string included) so a test can give two
+    // sessions different responses for the same endpoint, e.g. /api/todos.
+    const entry = routes[full] !== undefined ? routes[full] : routes[pathOnly];
+    // A fixture may be a function of the HTTP method, for endpoints the app
+    // hits with more than one verb (/api/sessions is both a list and a create).
+    const body = typeof entry === 'function'
+      ? entry((opts && opts.method) || 'GET')
+      : (entry !== undefined ? entry : {});
     return {
       ok: true,
       status: 200,
@@ -116,6 +134,7 @@ async function boot() {
     feed: (payload) => socket.receive(payload),
     ready: Promise.resolve(),
     errors,
+    requests,
   };
 }
 

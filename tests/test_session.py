@@ -443,9 +443,9 @@ class TestPinning:
             )
             version = (await vcur.fetchone())[0]
 
-        # v10 adds reasoning_content; the DB advances past it (and v11/v12) to the
+        # v10 adds reasoning_content; the DB advances past it (and v11-v13) to the
         # current schema version with no data loss.
-        assert version == "12"
+        assert version == str(smod.SCHEMA_VERSION)
         assert "reasoning_content" in cols
 
         # v11 adds agents.steps and v12 adds agents.key (built-in budget overrides).
@@ -454,6 +454,14 @@ class TestPinning:
             agent_cols = [r[1] for r in await cur.fetchall()]
             assert "steps" in agent_cols
             assert "key" in agent_cols
+
+        # v13 adds the per-session plan table, so an old database gains it on
+        # upgrade rather than failing every plan write afterwards.
+        async with smod.get_db() as pdb:
+            cur = await pdb.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='plan_tasks'"
+            )
+            assert await cur.fetchone(), "plan_tasks table should exist after migration"
 
         # The pre-existing message is preserved (column is nullable, not dropped).
         msgs = await s.get_messages()

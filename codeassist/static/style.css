@@ -1531,6 +1531,18 @@ body {
     #stop-btn.busy { animation: none; box-shadow: 0 0 0 3px rgba(218, 54, 51, 0.35); }
 }
 
+/* Stop acknowledged: the request is sent, the turn is unwinding. The busy
+   pulse is replaced by a dimmed, non-interactive button so the click is visibly
+   registered instead of looking ignored while the `cancelled` reply is in
+   flight. */
+#stop-btn.stopping {
+    background: var(--bg-hover);
+    cursor: default;
+    animation: none;
+    box-shadow: none;
+    opacity: 0.7;
+}
+
 /* Secondary cue next to the mode selector, so the busy state is visible even
    when the composer is scrolled out of view. */
 body.is-working .mode-dot {

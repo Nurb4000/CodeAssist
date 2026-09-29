@@ -429,3 +429,248 @@ def test_static_busy_state_has_single_owner(live_client):
     assert js.count("stopBtn.style.display = 'none';") == 1
     assert js.count("inputEl.disabled = false;") == 0, "setBusy() should own this"
     assert "setAttachmentUiBusy(busy);" in js
+
+
+def test_ws_cancel_interrupts_a_running_tool(live_client, monkeypatch):
+    """Stop must end a turn even while a tool is still running.
+
+    The cancel handler used to set only the cooperative `cancel_event`, which the
+    agent inspects between streamed chunks and between tool calls -- never inside
+    `asyncio.gather` while a tool is executing. A long tool therefore kept the
+    run alive long after Stop, which is the reported "it waits for the whole
+    turn" behaviour. The handler now also cancels the agent task.
+    """
+    import asyncio
+    import threading
+    import time
+    import uuid
+
+    import codeassist.llm as llm_mod
+    import codeassist.server as server_mod
+    from codeassist.llm import Finish, ToolCall, Usage
+    from codeassist.tools import ToolResult
+
+    async def _stream(self, *args, **kwargs):
+        yield ToolCall(id="c1", name="read", arguments={"file_path": "slow.py"})
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    tool_running = threading.Event()
+
+    async def _slow_execute(name, args):
+        tool_running.set()
+        await asyncio.sleep(30)  # far longer than the test will wait
+        return ToolResult(output="never", error=False)
+
+    monkeypatch.setattr(server_mod.tools, "execute", _slow_execute)
+
+    sid = f"cancel-latency-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "run something slow"})
+        assert tool_running.wait(timeout=10), "the tool call never started"
+
+        started = time.monotonic()
+        ws.send_json({"type": "cancel"})
+
+        seen = []
+        for _ in range(50):
+            data = ws.receive_json()
+            seen.append(data.get("type"))
+            if data.get("type") == "cancelled":
+                break
+        elapsed = time.monotonic() - started
+
+    assert "cancelled" in seen, f"no 'cancelled' event, got {seen}"
+    assert "tool_call" in seen, f"the run never reached the tool, got {seen}"
+    assert elapsed < 10, f"Stop took {elapsed:.1f}s -- the tool was waited out"
+
+    # The turn is still a valid transcript: the interrupted tool_call is answered.
+    msgs = live_client.get(f"/api/sessions/{sid}/messages").json()
+    assert any(m["role"] == "tool" and m.get("tool_call_id") == "c1" for m in msgs), (
+        "an interrupted tool_call must still get a tool result, or the next "
+        "request to the provider is rejected"
+    )
+
+
+def test_ws_cancel_while_waiting_for_first_token(live_client, monkeypatch):
+    """Stop must not wait for the model to produce its first token.
+
+    The per-chunk flag check cannot fire before the first chunk arrives, so a
+    slow/thinking model left the run hanging with no output to show for it.
+    """
+    import asyncio
+    import time
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+
+    async def _slow_stream(self, *args, **kwargs):
+        await asyncio.sleep(30)  # model never gets going
+        yield TextDelta("far too late")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _slow_stream)
+
+    sid = f"cancel-first-token-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "think slowly"})
+        # Give the run a moment to reach the stream before cancelling.
+        time.sleep(0.3)
+
+        started = time.monotonic()
+        ws.send_json({"type": "cancel"})
+
+        seen = []
+        for _ in range(50):
+            data = ws.receive_json()
+            seen.append(data.get("type"))
+            if data.get("type") == "cancelled":
+                break
+        elapsed = time.monotonic() - started
+
+    assert "cancelled" in seen, f"no 'cancelled' event, got {seen}"
+    assert elapsed < 10, f"Stop took {elapsed:.1f}s -- it waited on the stream"
+
+
+def test_plan_tasks_are_persisted_and_scoped_per_session(live_client, monkeypatch):
+    """A session's plan belongs to that session and outlives the process.
+
+    The plan used to be a list on one process-wide tool instance: a restart
+    emptied it, and every session shared -- and cleared -- the same one, so
+    switching conversations destroyed the work in progress.
+    """
+    import asyncio
+
+    from codeassist import server as server_mod
+    from codeassist.tools.todo import TodoTool
+
+    a = live_client.post("/api/sessions", json={}).json()["id"]
+    b = live_client.post("/api/sessions", json={}).json()["id"]
+
+    async def _seed(session_id, items):
+        tool = server_mod.tools.get("todo")
+        tool.bind(session_id)
+        await tool.load_session(session_id)
+        for content in items:
+            await tool.execute("add", content=content)
+
+    asyncio.run(_seed(a, ["A one", "A two"]))
+    asyncio.run(_seed(b, ["B one"]))
+
+    assert [t["content"] for t in live_client.get(f"/api/todos?session_id={a}").json()["tasks"]] == [
+        "A one", "A two",
+    ]
+    assert [t["content"] for t in live_client.get(f"/api/todos?session_id={b}").json()["tasks"]] == [
+        "B one",
+    ]
+
+    # Simulate a restart: the tool instance is rebuilt with no memory, and the
+    # only copy of each plan is on disk.
+    server_mod.tools.register(TodoTool())
+    assert [t["content"] for t in live_client.get(f"/api/todos?session_id={a}").json()["tasks"]] == [
+        "A one", "A two",
+    ], "the plan must come back after a restart"
+
+    # Clearing one session must not touch the other.
+    live_client.post(f"/api/todos/clear?session_id={a}")
+    assert live_client.get(f"/api/todos?session_id={a}").json()["tasks"] == []
+    assert [t["content"] for t in live_client.get(f"/api/todos?session_id={b}").json()["tasks"]] == [
+        "B one",
+    ], "clearing one session must not empty another"
+
+
+def test_deleting_a_session_removes_its_plan(live_client):
+    """No orphaned plan rows: the pool does not enforce FK cascades, so the
+    delete has to remove them explicitly."""
+    import asyncio
+
+    from codeassist import server as server_mod
+    from codeassist.session import get_db
+
+    sid = live_client.post("/api/sessions", json={}).json()["id"]
+
+    async def _seed_and_count():
+        tool = server_mod.tools.get("todo")
+        tool.bind(sid)
+        await tool.load_session(sid)
+        await tool.execute("add", content="Doomed task")
+        async with get_db() as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM plan_tasks WHERE session_id = ?", (sid,)
+            )
+            return (await cur.fetchone())[0]
+
+    assert asyncio.run(_seed_and_count()) == 1
+
+    live_client.delete(f"/api/sessions/{sid}")
+
+    async def _remaining():
+        async with get_db() as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM plan_tasks WHERE session_id = ?", (sid,)
+            )
+            return (await cur.fetchone())[0]
+
+    assert asyncio.run(_remaining()) == 0, "plan rows must not outlive their session"
+
+
+def test_ws_turn_writes_the_plan_to_its_own_session(live_client, monkeypatch):
+    """A turn's plan_update must describe the session that ran it.
+
+    The todo tool is one instance for the whole process, so reading a bare
+    get_tasks() would report whichever session happened to be bound last.
+    """
+    import asyncio
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, ToolCall, Usage
+
+    sid = f"plan-ws-{uuid.uuid4()}"
+
+    calls = {"n": 0}
+
+    async def _stream(self, *args, **kwargs):
+        # Plan on the first turn, then answer in prose so the run terminates
+        # instead of looping on the same tool call.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield ToolCall(id="t1", name="todo", arguments={"action": "add", "content": "Plan item"})
+        else:
+            yield TextDelta("Plan recorded.")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    def _plan_update(events):
+        for e in events:
+            if e.get("type") == "plan_update":
+                return e
+        return None
+
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "make me a plan"})
+        events = []
+        for _ in range(60):
+            data = ws.receive_json()
+            events.append(data)
+            if data.get("type") == "done":
+                break
+
+    update = _plan_update(events)
+    assert update is not None, f"no plan_update event, got {[e.get('type') for e in events]}"
+    assert [t["content"] for t in update["tasks"]] == ["Plan item"]
+
+    # And it is on disk against this session, not just in memory.
+    async def _rows():
+        from codeassist.session import get_db
+
+        async with get_db() as db:
+            cur = await db.execute(
+                "SELECT content FROM plan_tasks WHERE session_id = ?", (sid,)
+            )
+            return [r[0] for r in await cur.fetchall()]
+
+    assert asyncio.run(_rows()) == ["Plan item"]

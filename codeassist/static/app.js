@@ -44,6 +44,10 @@ let currentSessionId = null;
 let ws = null;
 let wsConnected = false;
 let isStreaming = false;
+// Set the moment Stop is pressed, cleared when the run starts or ends. Drives
+// the button's "stopping" state so a click is visibly acknowledged before the
+// server's `cancelled` reply gets back.
+let stopRequested = false;
 
 // Running token accounting for the sidebar footer (cumulative + rate).
 let tokenState = { total: 0, lastTotal: 0, lastTime: null };
@@ -452,8 +456,10 @@ function startRename(sessionId, nameSpan) {
 async function createSession() {
     const res = await api('POST', '/api/sessions');
     currentSessionId = res.id;
-    planDisplayEl.innerHTML = ''; // Clear plan display
-    await api('POST', '/api/todos/clear'); // Clear todo tool state
+    // A brand-new session has no plan, and now has its own -- nothing to clear
+    // server-side. Clearing the shared list here used to wipe the plan of
+    // whichever session you had been working in.
+    planDisplayEl.innerHTML = '';
     await loadSessions();
     showWelcome();
     connectWS();
@@ -463,10 +469,12 @@ async function switchSession(id) {
     if (isStreaming) return;
     currentSessionId = id;
     hideContinueButton();
-    planDisplayEl.innerHTML = ''; // Clear plan display
-    await api('POST', '/api/todos/clear'); // Clear todo tool state
+    // Plans are persisted per session, so switching no longer destroys
+    // anything: drop the old session's panel and load the new one's.
+    planDisplayEl.innerHTML = '';
     await loadSessions();
     await loadMessages();
+    await loadTodos();
     connectWS();
 }
 
@@ -476,6 +484,8 @@ async function deleteSession(id) {
     if (currentSessionId === id) {
         currentSessionId = null;
         messagesEl.innerHTML = '';
+        planDisplayEl.innerHTML = ''; // the plan went with the session
+        resetFlowSections();
         showWelcome();
         if (ws) ws.close();
     }
@@ -485,11 +495,12 @@ async function deleteSession(id) {
 async function loadMessages() {
     const msgs = await api('GET', `/api/sessions/${currentSessionId}/messages`);
     messagesEl.innerHTML = '';
-    if (workBlockEl) { workBlockEl.remove(); workBlockEl = workActiveEl = workHistoryEl = null; }
+    // #messages was just wiped, so the Work block, the past-thinking container
+    // and the flow anchors went with it. Their handles are cached, so reset them
+    // too or this session's steps and reasoning are built inside detached nodes.
+    resetFlowSections();
     finalizeState();
     workStepCount = 0;
-    lastUserEl = null;
-    lastMainMsgEl = null;
     removeWelcome();
     if (msgs.length === 0) { showWelcome(); return; }
 
@@ -629,7 +640,14 @@ function archiveThinking(thinkEl) {
 // Lazily create the "Past thinking" container, a collapsible section that sits
 // after the active step (like the work block). Collapsed by default.
 function ensurePastThinkingContainer() {
-    if (pastThinkingEl) return pastThinkingEl;
+    // Self-heal: anything that clears #messages (a session load, the welcome
+    // screen) detaches this container, and a stale handle would send every
+    // later archive into an orphan subtree -- the "thinking vanishes on reload"
+    // bug. Re-create whenever the cached node is no longer in the document.
+    if (pastThinkingEl && pastThinkingEl.isConnected) return pastThinkingEl;
+    pastThinkingEl = null;
+    pastThinkingListEl = null;
+    pastThinkingCount = 0;
     const c = document.createElement('div');
     c.className = 'thinking-history history-hidden';
     c.innerHTML =
@@ -650,12 +668,45 @@ function ensurePastThinkingContainer() {
     return c;
 }
 
+// Drop the cached work-block handles. Must be called anywhere #messages is
+// wiped, or ensureWorkBlock() hands back a detached node and every later step is
+// built inside an orphan subtree -- the same failure mode as the past-thinking
+// container, and the reason Work survived a session switch while thinking did
+// not.
+function resetWorkBlock() {
+    if (workBlockEl) workBlockEl.remove();
+    workBlockEl = workActiveEl = workHistoryEl = null;
+}
+
+// Drop the cached past-thinking handles. Must be called anywhere #messages is
+// wiped, alongside the work-block reset, or the next archiveThinking() writes
+// into a detached node and the reasoning is lost from the page.
+function resetThinkingContainer() {
+    pastThinkingEl = null;
+    pastThinkingListEl = null;
+    pastThinkingCount = 0;
+}
+
+// Every wholesale replacement of the message flow must invalidate the cached
+// node handles together: they are all rebuilt lazily and point into #messages,
+// so a stale one silently swallows the section instead of re-creating it. The
+// flow anchors go too -- ensureWorkBlock() anchors off lastUserEl, and calling
+// .after() on a detached node is a no-op that loses the block entirely.
+function resetFlowSections() {
+    resetWorkBlock();
+    resetThinkingContainer();
+    lastUserEl = null;
+    lastMainMsgEl = null;
+}
+
 function showWelcome() {
     messagesEl.innerHTML = `
         <div class="welcome">
             <h2>CodeAssist</h2>
             <p>AI coding assistant connected to your workspace</p>
         </div>`;
+    // Same as loadMessages(): the flow was replaced wholesale.
+    resetFlowSections();
 }
 
 function appendUserMessage(text, images = []) {
@@ -1771,18 +1822,22 @@ let continueBtnContainer = null;
 function setBusy(busy) {
     isStreaming = busy;
     if (busy) {
+        stopRequested = false;
         sendBtn.disabled = true;
         sendBtn.style.display = 'none';
         stopBtn.style.display = 'flex';
         stopBtn.classList.add('busy');
         document.body.classList.add('is-working');
     } else {
+        stopRequested = false;
         sendBtn.disabled = false;
         sendBtn.style.display = 'flex';
         stopBtn.style.display = 'none';
         stopBtn.classList.remove('busy');
         document.body.classList.remove('is-working');
     }
+    // Cleared on both edges: a fresh run re-arms Stop, a finished one restores it.
+    stopBtn.classList.remove('stopping');
     inputEl.disabled = busy;
     setAttachmentUiBusy(busy);
     if (!busy) inputEl.focus();
@@ -1936,11 +1991,15 @@ function updatePlanDisplay(tasks) {
 }
 
 async function loadTodos() {
+    if (!currentSessionId) {
+        updatePlanDisplay([]);
+        return;
+    }
     try {
-        const data = await api('GET', '/api/todos');
-        if (data.tasks && data.tasks.length > 0) {
-            updatePlanDisplay(data.tasks);
-        }
+        // Session-scoped: the plan belongs to the conversation, and survives a
+        // reload or a server restart because it is stored per session.
+        const data = await api('GET', `/api/todos?session_id=${encodeURIComponent(currentSessionId)}`);
+        updatePlanDisplay((data && data.tasks) || []);
     } catch (e) {
         // Ignore errors loading todos
     }
@@ -2006,9 +2065,17 @@ inputAreaEl.addEventListener('drop', (e) => {
 });
 
 stopBtn.addEventListener('click', () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'cancel' }));
-    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // Ignore repeat clicks: the first one already asked the server to unwind the
+    // turn, and a second cancel would interrupt the agent's own cleanup (writing
+    // the partial turn to the database on its way out).
+    if (stopRequested) return;
+    // Mark the stop as in-flight immediately. The server unwinds the turn right
+    // away, but the `cancelled` reply still has to travel back over the socket,
+    // and an unresponsive button reads as "Stop did nothing".
+    stopRequested = true;
+    stopBtn.classList.add('stopping');
+    ws.send(JSON.stringify({ type: 'cancel' }));
 });
 newSessionBtn.addEventListener('click', createSession);
 

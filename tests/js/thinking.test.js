@@ -9,6 +9,10 @@
 //   2. closeActiveStep() archived a step's thinking into the collapsed
 //      past-thinking container the instant the model narrated past a tool call,
 //      so thinking blinked out mid-run. It now only archives at endRun().
+//   3. loadMessages()/showWelcome() wipe #messages but left pastThinkingEl
+//      pointing at the detached container, so every later archive went into an
+//      orphan subtree. That is why re-entering a session showed the Work
+//      container but no thinking.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -194,5 +198,115 @@ test('end of run archives all thinking into the past-thinking container', async 
     all(env.document, '.past-thinking-entry .thinking-content')
       .some((c) => c.textContent.includes('Plan the change.')),
     'archived reasoning keeps its text'
+  );
+});
+// ── Session switches ─────────────────────────────────────────────────────────
+// The reported symptom: "if I leave the session then return, the work container
+// is there, but not always the thinking." Work survived because loadMessages()
+// explicitly nulled the work-block handles; the past-thinking handles were never
+// reset, so the next archive landed in a detached node.
+
+const REASONED_SESSION = [
+  { id: 'u1', role: 'user', content: 'do the thing' },
+  {
+    id: 'a1', role: 'assistant', content: '',
+    tool_calls: [{ id: 't1', type: 'function', function: { name: 'read', arguments: '{}' } }],
+    reasoning_content: 'Deep thought about the task.',
+  },
+  { id: 'r1', role: 'tool', content: 'x', tool_call_id: 't1' },
+  { id: 'a2', role: 'assistant', content: 'The answer.', reasoning_content: 'Wrapping up.' },
+];
+
+const TWO_SESSION_FIXTURES = {
+  '/api/sessions': [{ id: 'session-1', name: 'one' }, { id: 'session-2', name: 'two' }],
+  '/api/sessions/session-1/messages': REASONED_SESSION,
+  '/api/sessions/session-2/messages': [],
+};
+
+const reasoningInDocument = (doc) =>
+  all(doc, '.thinking-content').map((c) => c.textContent).join(' ');
+
+test('a session restored on load files its reasoning into the document', async () => {
+  // Baseline: with no session switch involved, the reload path must file
+  // reasoning into a live (connected) container.
+  const env = await boot({ fixtures: TWO_SESSION_FIXTURES });
+  const doc = env.document;
+  assert.strictEqual(all(doc, '.past-thinking-entry').length, 2, 'both reasonings filed');
+  assert.ok(
+    q(doc, '.thinking-history').isConnected,
+    'the past-thinking container must be attached to the document'
+  );
+  assert.ok(
+    reasoningInDocument(doc).includes('Deep thought about the task.'),
+    'step reasoning is reachable in the document'
+  );
+});
+
+test('re-entering a session restores its thinking (not just the work block)', async () => {
+  const env = await boot({ fixtures: TWO_SESSION_FIXTURES });
+
+  // Leave for another session, then come back.
+  await env.window.switchSession('session-2');
+  await new Promise((r) => setTimeout(r, 20));
+  await env.window.switchSession('session-1');
+  await new Promise((r) => setTimeout(r, 20));
+
+  const doc = env.document;
+  const container = q(doc, '.thinking-history');
+  assert.ok(container, 'the past-thinking container is rebuilt after a session switch');
+  assert.ok(
+    container.isConnected,
+    'the rebuilt container must be attached to the document, not left orphaned'
+  );
+  assert.strictEqual(
+    all(doc, '.work-step').length, 1, 'the work step is restored too'
+  );
+  assert.strictEqual(
+    all(doc, '.past-thinking-entry').length, 2,
+    'both reasonings are filed after re-entering the session'
+  );
+  assert.ok(
+    reasoningInDocument(doc).includes('Deep thought about the task.'),
+    'step reasoning is visible again'
+  );
+  assert.ok(
+    reasoningInDocument(doc).includes('Wrapping up.'),
+    'summary reasoning is visible again'
+  );
+});
+
+test('the past-thinking counter restarts instead of accumulating across switches', async () => {
+  const env = await boot({ fixtures: TWO_SESSION_FIXTURES });
+  await env.window.switchSession('session-2');
+  await new Promise((r) => setTimeout(r, 20));
+  await env.window.switchSession('session-1');
+  await new Promise((r) => setTimeout(r, 20));
+
+  const count = q(env.document, '.thinking-history .past-thinking-count');
+  assert.ok(count, 'the container shows a count');
+  assert.strictEqual(
+    count.textContent, '2',
+    'the count reflects this session\'s entries, not a running total across visits'
+  );
+});
+
+test('thinking produced after a session switch still lands in the document', async () => {
+  // The live path, not the reload path: archiveThinking() must not write into a
+  // container orphaned by an earlier switch.
+  const env = await boot({ fixtures: TWO_SESSION_FIXTURES });
+  await env.window.switchSession('session-2');
+  await new Promise((r) => setTimeout(r, 20));
+  await env.window.switchSession('session-1');
+  await new Promise((r) => setTimeout(r, 20));
+
+  startTurn(env, 'another turn');
+  env.feed({ type: 'reasoning', content: 'Fresh reasoning after switching.' });
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't9' });
+  env.feed({ type: 'tool_result', id: 't9', output: 'y' });
+  env.feed({ type: 'done' });
+
+  assert.ok(
+    reasoningInDocument(env.document).includes('Fresh reasoning after switching.'),
+    'reasoning streamed after a switch is archived into a live container'
   );
 });
