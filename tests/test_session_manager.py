@@ -5,6 +5,7 @@ import pytest
 
 from codeassist.session import Session, init_db
 from codeassist.session_manager import SessionManager
+from codeassist.tools import ToolResult
 
 
 class TestSessionManager:
@@ -128,7 +129,10 @@ class TestSessionManager:
         
         result = await tool.execute(action="fork", name="Forked via Tool")
         
-        assert "Forked session" in result or "New session ID" in result
+        # A ToolResult, not a bare str: the agent reads `result.output`.
+        assert isinstance(result, ToolResult)
+        assert "Forked session" in result.output or "New session ID" in result.output
+        assert result.error is False
 
     @pytest.mark.asyncio
     async def test_session_tool_export(self):
@@ -143,7 +147,8 @@ class TestSessionManager:
         result = await tool.execute(action="export")
         
         # Result should be JSON
-        data = json.loads(result)
+        assert isinstance(result, ToolResult)
+        data = json.loads(result.output)
         assert "messages" in data
 
     @pytest.mark.asyncio
@@ -158,7 +163,8 @@ class TestSessionManager:
         
         result = await tool.execute(action="summary")
         
-        data = json.loads(result)
+        assert isinstance(result, ToolResult)
+        data = json.loads(result.output)
         assert "message_count" in data
 
     def test_session_tool_schema(self):

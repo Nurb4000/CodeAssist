@@ -250,9 +250,18 @@ class MCPToolAdapter:
     def __init__(self, mcp_client: MCPClient):
         self.mcp_client = mcp_client
 
-    async def execute(self, name: str, arguments: dict) -> str:
-        """Execute an MCP tool through the adapter."""
-        return await self.mcp_client.call_tool(name, arguments)
+    async def execute(self, name: str, arguments: dict) -> "ToolResult":
+        """Execute an MCP tool through the adapter.
+
+        Wraps the raw text in a ToolResult: the agent reads `result.output`, so
+        returning a bare str here aborted the turn. MCPToolWrapper is the
+        per-tool path actually registered with the registry; this adapter is
+        kept consistent with it.
+        """
+        from .tools import ToolResult
+
+        output = await self.mcp_client.call_tool(name, arguments)
+        return ToolResult(output=output, error=output.startswith("Error:"))
 
     def list_names(self) -> list[str]:
         """List all available MCP tool names."""

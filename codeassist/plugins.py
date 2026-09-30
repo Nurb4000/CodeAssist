@@ -5,9 +5,12 @@ import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .trust_registry import TrustRegistry, TrustStatus
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .tools import ToolResult
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +211,13 @@ class PluginRegistry:
 
 
 class PluginTool:
-    """Base class for plugin-provided tools."""
+    """Base class for plugin-provided tools.
+
+    Subclasses must return a :class:`ToolResult`, not a bare str: the registry
+    forwards the value to the agent, which reads ``result.output``. This used to
+    be annotated ``-> str``, which walked plugin authors straight into a
+    "'str' object has no attribute 'output'" crash mid-turn.
+    """
 
     name: str = ""
     description: str = ""
@@ -216,5 +225,5 @@ class PluginTool:
     def __init__(self):
         self.parameters: dict = {}
 
-    async def execute(self, **kwargs) -> str:
+    async def execute(self, **kwargs) -> "ToolResult":
         raise NotImplementedError

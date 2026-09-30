@@ -3,6 +3,7 @@
 import pytest
 
 from codeassist.skills import SkillRegistry, SkillTool
+from codeassist.tools import ToolResult
 
 
 class TestSkillRegistry:
@@ -168,30 +169,38 @@ Test content here.
         """Test listing skills via tool."""
         result = await skill_tool.execute(action="list")
         
-        assert "test-skill" in result
-        assert "A test skill" in result
+        assert isinstance(result, ToolResult)
+        assert "test-skill" in result.output
+        assert "A test skill" in result.output
+        assert result.error is False
 
     @pytest.mark.asyncio
     async def test_skill_tool_get(self, skill_tool):
         """Test getting skill instructions via tool."""
         result = await skill_tool.execute(action="get", skill_name="test-skill")
         
-        assert "test-skill" in result
-        assert "Test content here" in result
+        assert isinstance(result, ToolResult)
+        assert "test-skill" in result.output
+        assert "Test content here" in result.output
+        assert result.error is False
 
     @pytest.mark.asyncio
     async def test_skill_tool_get_nonexistent(self, skill_tool):
         """Test getting nonexistent skill."""
         result = await skill_tool.execute(action="get", skill_name="nonexistent")
         
-        assert "not found" in result.lower()
+        assert isinstance(result, ToolResult), "the agent reads .output and would crash on a str"
+        assert "not found" in result.output.lower()
+        assert result.error is True
 
     @pytest.mark.asyncio
     async def test_skill_tool_invalid_action(self, skill_tool):
         """Test invalid action."""
         result = await skill_tool.execute(action="invalid")
         
-        assert "Error" in result or "unknown action" in result.lower()
+        assert isinstance(result, ToolResult)
+        assert "Error" in result.output or "unknown action" in result.output.lower()
+        assert result.error is True
 
     def test_skill_tool_schema(self, skill_tool):
         """Test skill tool schema."""

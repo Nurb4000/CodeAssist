@@ -88,10 +88,24 @@ class ToolRegistry:
             return ToolResult(output=f"Error: {name}: {err}", error=True)
 
         try:
-            return await tool.execute(**arguments)
+            result = await tool.execute(**arguments)
         except Exception as e:
             log.exception("Tool '%s' failed", name)
             return ToolResult(output=f"Error executing {name}: {e}", error=True)
+
+        # Callers (notably the agent, which reads `result.output`) assume a
+        # ToolResult. Third-party and dynamically loaded tools are not held to
+        # the base class's signature, and one that returned a bare str aborted
+        # the whole turn with "'str' object has no attribute 'output'". Coerce
+        # defensively rather than trusting every registration to conform.
+        if isinstance(result, ToolResult):
+            return result
+        if isinstance(result, str):
+            return ToolResult(output=result)
+        return ToolResult(
+            output=f"Error: tool '{name}' returned {type(result).__name__}, expected a ToolResult",
+            error=True,
+        )
 
     def list_names(self) -> list[str]:
         return list(self._tools.keys())

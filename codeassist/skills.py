@@ -2,7 +2,10 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .tools import ToolResult
 
 log = logging.getLogger(__name__)
 
@@ -370,28 +373,43 @@ class SkillTool:
             "parameters": self.parameters,
         }
 
-    async def execute(self, action: str, skill_name: str | None = None) -> str:
+    async def execute(self, action: str, skill_name: str | None = None) -> "ToolResult":
+        # Must return a ToolResult, not a bare str: the registry hands this
+        # straight to the agent, which reads `result.output`. Returning a str
+        # made any use of a skill -- e.g. asking for the music skill -- abort
+        # the turn with "'str' object has no attribute 'output'".
+        from .tools import ToolResult
+
         if action == "list":
             skills = self.registry.list_skills()
             if not skills:
-                return "No skills available. Add skill files to your configured skill directories."
+                return ToolResult(
+                    output="No skills available. Add skill files to your configured skill directories.",
+                    error=True,
+                )
 
             result = ["**Available Skills:**\n"]
             for skill in skills:
                 slash = f" (/{skill['slash_command']})" if skill.get('slash_command') else ""
                 result.append(f"- **{skill['name']}**: {skill['description']}{slash}")
 
-            return "\n".join(result)
+            return ToolResult(output="\n".join(result))
 
         elif action == "get":
             if not skill_name:
-                return "Error: skill_name is required for 'get' action"
+                return ToolResult(
+                    output="Error: skill_name is required for 'get' action", error=True
+                )
 
             skill = self.registry.get_skill(skill_name)
             if not skill:
-                return f"Error: skill '{skill_name}' not found. Use 'list' to see available skills."
+                return ToolResult(
+                    output=f"Error: skill '{skill_name}' not found. Use 'list' to see available skills.",
+                    error=True,
+                )
 
-            return f"**Skill: {skill.name}**\n\n{skill.content}"
+            return ToolResult(output=f"**Skill: {skill.name}**\n\n{skill.content}")
 
-        else:
-            return f"Error: unknown action '{action}'. Use 'list' or 'get'."
+        return ToolResult(
+            output=f"Error: unknown action '{action}'. Use 'list' or 'get'.", error=True
+        )

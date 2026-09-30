@@ -2,8 +2,12 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .session import Session
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .tools import ToolResult
 
 
 class SessionManager:
@@ -167,56 +171,61 @@ class SessionTool:
 
     async def execute(self, action: str, session_id: str | None = None,
                      name: str | None = None, data: str | None = None,
-                     redact: bool = False) -> str:
+                     redact: bool = False) -> "ToolResult":
+        # Returns a ToolResult, not a bare str: the agent reads `result.output`,
+        # so a str here aborted the whole turn rather than just this call.
+        from .tools import ToolResult  # local: tools imports this module
+
         if action == "fork":
             target_id = session_id or self.current_session_id
             try:
                 new_session = await SessionManager.fork_session(target_id, name)
-                return f"Forked session. New session ID: {new_session.id}"
+                return ToolResult(output=f"Forked session. New session ID: {new_session.id}")
             except Exception as e:  # noqa: BLE001
-                return f"Error forking session: {e}"
+                return ToolResult(output=f"Error forking session: {e}", error=True)
 
         elif action == "export":
             target_id = session_id or self.current_session_id
             try:
                 export_data = await SessionManager.export_session(target_id, redact)
-                return json.dumps(export_data, indent=2)
+                return ToolResult(output=json.dumps(export_data, indent=2))
             except Exception as e:  # noqa: BLE001
-                return f"Error exporting session: {e}"
+                return ToolResult(output=f"Error exporting session: {e}", error=True)
 
         elif action == "share":
             target_id = session_id or self.current_session_id
             try:
                 result = await SessionManager.export_session(target_id, redact=True, as_bundle=True)
                 if isinstance(result, Path):
-                    return (
-                        f"Session exported to: {result}\n"
-                        f"This is a self-contained JSON bundle with PII redacted. "
-                        f"You can share this file or import it later."
+                    return ToolResult(
+                        output=(
+                            f"Session exported to: {result}\n"
+                            f"This is a self-contained JSON bundle with PII redacted. "
+                            f"You can share this file or import it later."
+                        )
                     )
-                return str(result)
+                return ToolResult(output=str(result))
             except Exception as e:  # noqa: BLE001
-                return f"Error sharing session: {e}"
+                return ToolResult(output=f"Error sharing session: {e}", error=True)
 
         elif action == "import":
             if not data:
-                return "Error: data (JSON string) is required for import"
+                return ToolResult(output="Error: data (JSON string) is required for import", error=True)
             try:
                 import_data = json.loads(data)
                 new_session = await SessionManager.import_session(import_data, name)
-                return f"Imported session. New session ID: {new_session.id}"
+                return ToolResult(output=f"Imported session. New session ID: {new_session.id}")
             except json.JSONDecodeError as e:
-                return f"Error: invalid JSON data: {e}"
+                return ToolResult(output=f"Error: invalid JSON data: {e}", error=True)
             except Exception as e:  # noqa: BLE001
-                return f"Error importing session: {e}"
+                return ToolResult(output=f"Error importing session: {e}", error=True)
 
         elif action == "summary":
             target_id = session_id or self.current_session_id
             try:
                 summary = await SessionManager.get_session_summary(target_id)
-                return json.dumps(summary, indent=2)
+                return ToolResult(output=json.dumps(summary, indent=2))
             except Exception as e:  # noqa: BLE001
-                return f"Error getting session summary: {e}"
+                return ToolResult(output=f"Error getting session summary: {e}", error=True)
 
-        else:
-            return f"Error: unknown action '{action}'"
+        return ToolResult(output=f"Error: unknown action '{action}'", error=True)
