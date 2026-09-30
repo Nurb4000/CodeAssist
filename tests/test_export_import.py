@@ -151,6 +151,47 @@ def test_custom_tool_import_rejects_wrong_bundle(tmp_path):
         reg.import_tools({"format": "wrong"})
 
 
+def test_custom_tool_registry_rekeys_on_workspace_change(tmp_path, monkeypatch):
+    """The registry pins its tools_dir at construction.
+
+    It is a process-wide singleton, so a second caller asking for a different
+    workspace must get a registry pointed at *their* project rather than
+    silently inheriting the first caller's tools_dir.
+    """
+    from codeassist import custom_tools_loader
+
+    monkeypatch.setattr(custom_tools_loader, "_custom_tool_registry", None)
+
+    project_a = tmp_path / "a"
+    project_b = tmp_path / "b"
+    for project in (project_a, project_b):
+        (project / "runtime" / "custom_tools").mkdir(parents=True)
+
+    reg_a = custom_tools_loader.get_custom_tool_registry(project_a)
+    assert reg_a.workspace == project_a.resolve()
+
+    # Same workspace -> same instance reused.
+    assert custom_tools_loader.get_custom_tool_registry(project_a) is reg_a
+
+    # Different workspace -> rebuilt against the new project.
+    reg_b = custom_tools_loader.get_custom_tool_registry(project_b)
+    assert reg_b is not reg_a
+    assert reg_b.workspace == project_b.resolve()
+    assert reg_b.tools_dir == project_b.resolve() / "runtime" / "custom_tools"
+
+
+def test_custom_tool_registry_accepts_equivalent_path_spelling(tmp_path, monkeypatch):
+    """A trailing-slash / non-normalized spelling is the same workspace, so the
+    singleton must be reused rather than rebuilt on every request."""
+    from codeassist import custom_tools_loader
+
+    monkeypatch.setattr(custom_tools_loader, "_custom_tool_registry", None)
+
+    reg = custom_tools_loader.get_custom_tool_registry(tmp_path)
+    again = custom_tools_loader.get_custom_tool_registry(tmp_path / "." / "sub" / "..")
+    assert again is reg
+
+
 def test_export_base_tools_captures_package_source():
     from codeassist.tools import export_base_tools
 

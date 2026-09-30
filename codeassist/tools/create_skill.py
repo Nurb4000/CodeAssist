@@ -49,7 +49,8 @@ class CreateSkill(Tool):
 
     async def execute(self, name: str, description: str, content: str,
                       slash_command: str | None = None,
-                      tags: list[str] | None = None) -> ToolResult:
+                      tags: list[str] | None = None,
+                      session_id: str | None = None) -> ToolResult:
         workspace = str(self.workspace) if hasattr(self, "workspace") else "."
         try:
             if not name.replace("-", "").replace("_", "").isalnum():
@@ -74,6 +75,7 @@ class CreateSkill(Tool):
                 scope="project",
                 scope_identifier=f"runtime/skills/{name}.md",
                 content=f"Created skill '{name}': {description}",
+                source_session_id=session_id,
                 confidence=1.0,
                 tags=tags or ["skill", "auto_created"],
                 metadata={"skill_name": name, "slash_command": slash_command, "created_by": "create_skill_tool"},

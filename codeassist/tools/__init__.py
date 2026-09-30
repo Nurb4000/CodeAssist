@@ -13,6 +13,20 @@ class ToolResult:
     error: bool = False
 
 
+def live_config():
+    """The live server Config, for the few tools that need LLM/server settings.
+
+    Prefer ``self.workspace`` (injected by the registry) for anything touching
+    the user's files. Reach for this only for settings a tool cannot be handed
+    at construction time. Unlike ``config.load_config()`` it also sees settings
+    changed at runtime via the settings API, and it resolves the workspace the
+    same way the server did.
+    """
+    from codeassist.server import get_config  # local: server imports this module
+
+    return get_config()
+
+
 def _validate_args(schema: dict, args: dict) -> str | None:
     """Validate tool arguments against JSON Schema. Returns error message or None."""
     props = schema.get("properties", {})
@@ -188,6 +202,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     # Register Process tool
     process_tool = ProcessTool()
+    process_tool.workspace = workspace
     registry.register(process_tool)
 
     # Register HTTP tool
@@ -217,29 +232,29 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     registry.register(QuestionTool())
 
     # Register Create Tool and Create Skill tools
-    registry.register(CreateTool())
-    registry.register(CreateSkill())
+    create_tool = CreateTool()
+    create_tool.workspace = workspace
+    registry.register(create_tool)
+    create_skill_tool = CreateSkill()
+    create_skill_tool.workspace = workspace
+    registry.register(create_skill_tool)
 
-    # Register Diff Preview tool
-    registry.register(DiffPreviewTool())
-
-    # Register Test Runner tool
-    registry.register(TestRunnerTool())
-
-    # Register Symbol Search tool
-    registry.register(SymbolSearchTool())
-
-    # Register Package Manager tool
-    registry.register(PackageManagerTool())
-
-    # Register Git Snapshot tool
-    registry.register(GitSnapshotTool())
-
-    # Register Docker tool
-    registry.register(DockerTool())
-
-    # Register Image Analyze tool
-    registry.register(ImageAnalyzeTool())
+    # Every remaining built-in tool below is workspace-scoped: each one reads
+    # self.workspace to sandbox its filesystem access. They must be injected
+    # with the configured workspace here or they silently fall back to the
+    # process CWD and operate on the app tree instead of the user's project.
+    for tool_cls in [
+        DiffPreviewTool,
+        TestRunnerTool,
+        SymbolSearchTool,
+        PackageManagerTool,
+        GitSnapshotTool,
+        DockerTool,
+        ImageAnalyzeTool,
+    ]:
+        tool = tool_cls()
+        tool.workspace = workspace
+        registry.register(tool)
 
     # Register Screenshot tool
     screenshot_tool = ScreenshotTool()
@@ -251,12 +266,14 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
         registry.register(SkillTool(skill_registry))
 
     # Register Session tool
-    registry.register(SessionTool(current_session_id=""))  # Will be updated per-session
+    registry.register(SessionTool(current_session_id="", workspace=workspace))  # ID updated per-session
 
     # Register LSP tool (if LSP client exists)
     if lsp_client:
         from codeassist.lsp_client import LSPTool
-        registry.register(LSPTool(lsp_client))
+        lsp_tool = LSPTool(lsp_client)
+        lsp_tool.workspace = workspace
+        registry.register(lsp_tool)
 
     # Register MCP tools (if MCP client exists)
     if mcp_client:
@@ -303,7 +320,9 @@ def get_tools(config=None) -> dict:
     from .write import WriteTool
 
     tools = {}
-    workspace = Path(".")
+    # Use the configured workspace so tools listed in the GUI report the same
+    # scope the agent actually runs with, rather than the process CWD.
+    workspace = Path(config.workspace) if config is not None else Path(".")
     
     # Create tool instances
     tool_classes = [

@@ -1,7 +1,10 @@
 """Tests for skills system."""
 
+from pathlib import Path
+
 import pytest
 
+from codeassist.config import SkillsConfig
 from codeassist.skills import SkillRegistry, SkillTool
 from codeassist.tools import ToolResult
 
@@ -14,7 +17,8 @@ class TestSkillRegistry:
         """Create a skill registry with test skills."""
         config = type('Config', (), {
             'enabled': True,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         # Create skill directory
@@ -80,7 +84,8 @@ It should be discoverable.
         """Test behavior when skills are disabled."""
         config = type('Config', (), {
             'enabled': False,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         registry = SkillRegistry(tmp_path, config)
@@ -92,7 +97,8 @@ It should be discoverable.
         """Test behavior with empty skill directory."""
         config = type('Config', (), {
             'enabled': True,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         skill_dir = tmp_path / '.skills'
@@ -107,7 +113,8 @@ It should be discoverable.
         """Test discovering multiple skills."""
         config = type('Config', (), {
             'enabled': True,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         skill_dir = tmp_path / '.skills'
@@ -145,7 +152,8 @@ class TestSkillTool:
         """Create a skill tool with test skills."""
         config = type('Config', (), {
             'enabled': True,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         skill_dir = tmp_path / '.skills'
@@ -304,7 +312,8 @@ class TestSkillValidation:
         
         config = type('Config', (), {
             'enabled': True,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         skill_dir = tmp_path / '.skills'
@@ -339,7 +348,8 @@ Content here.
         
         config = type('Config', (), {
             'enabled': True,
-            'directories': ['.skills']
+            'directories': ['.skills'],
+            'include_packaged': False,
         })()
         
         skill_dir = tmp_path / '.skills'
@@ -369,3 +379,86 @@ Second content.
         
         # Warning should be logged for duplicate slash command
         assert any("Duplicate slash command" in record.message for record in caplog.records)
+
+
+class TestPackagedSkills:
+    """The skills shipped inside the package must load for any workspace.
+
+    Regression cover for default skills silently disappearing: discovery used to
+    be workspace-relative only, so pointing `server.workspace` at an unrelated
+    directory (a bind mount, a scratch dir) dropped all 16 defaults.
+    """
+
+    @staticmethod
+    def _skills_dir() -> Path:
+        return SkillRegistry.packaged_skills_dir()
+
+    def test_shipped_skill_files_are_installed(self):
+        """Guard the packaging config: the wheel must carry the defaults."""
+        skill_files = sorted(self._skills_dir().glob("*.md"))
+
+        assert skill_files, "no packaged skill files found"
+        assert len(skill_files) >= 10, f"expected the shipped defaults, found {len(skill_files)}"
+
+    def test_loads_without_a_matching_workspace(self, tmp_path):
+        """A workspace with no codeassist/ dir still gets the defaults."""
+        config = SkillsConfig(enabled=True, directories=["codeassist/skills", "runtime/skills"])
+        assert not (tmp_path / "codeassist").exists()
+
+        skills = SkillRegistry(tmp_path, config).discover()
+
+        assert len(skills) >= 10
+        assert {s.name for s in skills} >= {"clean", "code-review", "test"}
+
+    def test_packaged_skills_are_tagged_and_read_only(self, tmp_path):
+        """Packaged skills carry a package: source and cannot be edited."""
+        config = SkillsConfig(enabled=True, directories=[])
+
+        registry = SkillRegistry(tmp_path, config)
+        registry.discover()
+
+        skill = registry.get_skill("code-review")
+        assert skill is not None
+        assert skill.source.startswith(SkillRegistry.PACKAGE_SOURCE_PREFIX)
+        assert registry._resolve_skill_path("code-review") is None
+        assert registry.update_skill("code-review", "x", "y") is None
+        assert registry.remove_skill("code-review") is None
+
+    def test_workspace_copy_shadows_packaged_skill(self, tmp_path):
+        """A workspace skill of the same name overrides the shipped default."""
+        skill_dir = tmp_path / "runtime" / "skills"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "clean.md").write_text(
+            "---\nname: clean\ndescription: My own clean skill\n---\nlocal body\n"
+        )
+
+        registry = SkillRegistry(tmp_path, SkillsConfig())
+        registry.discover()
+
+        clean = registry.get_skill("clean")
+        assert clean.description == "My own clean skill"
+        assert clean.source == "runtime/skills/clean.md"
+
+    def test_project_root_workspace_does_not_double_count(self):
+        """A workspace that is the checkout scans the defaults exactly once."""
+        import codeassist
+
+        project_root = Path(codeassist.__file__).resolve().parent.parent
+        if not (project_root / "codeassist" / "skills").is_dir():
+            pytest.skip("not running from a source checkout")
+
+        skills = SkillRegistry(project_root, SkillsConfig()).discover()
+        names = [s.name for s in skills]
+
+        assert len(names) == len(set(names)), "skills were discovered more than once"
+        # Workspace-backed, so the defaults stay editable from a checkout.
+        assert all(not s.source.startswith(SkillRegistry.PACKAGE_SOURCE_PREFIX)
+                   for s in skills)
+
+    def test_include_packaged_opt_out(self, tmp_path):
+        """`include_packaged = false` runs with workspace skills only."""
+        config = SkillsConfig(enabled=True, directories=["codeassist/skills"],
+                              include_packaged=False)
+
+        assert SkillRegistry(tmp_path, config).discover() == []
+

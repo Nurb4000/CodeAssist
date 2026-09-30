@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 class DiffPreviewTool(Tool):
     name = "diff_preview"
+    workspace = Path(".")
     description = (
         "Show a unified diff of planned changes before applying them. "
         "Compare two files, compare a file against new content, or preview "
@@ -48,8 +49,7 @@ class DiffPreviewTool(Tool):
                       context_lines: int = 3) -> ToolResult:
         try:
             from .security import validate_path
-            path = Path(file_path).resolve()
-            validate_path(path)
+            path = validate_path(file_path, self.workspace)
 
             if not path.exists():
                 return ToolResult(output=f"Error: File '{file_path}' does not exist", error=True)

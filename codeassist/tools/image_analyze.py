@@ -2,14 +2,16 @@
 
 import base64
 import logging
+from pathlib import Path
 
-from . import Tool, ToolResult
+from . import Tool, ToolResult, live_config
 
 log = logging.getLogger(__name__)
 
 
 class ImageAnalyzeTool(Tool):
     name = "image_analyze"
+    workspace = Path(".")
     description = (
         "Analyze images (screenshots, UI mockups, diagrams) using a vision-capable LLM. "
         "Provide a file path to an image and a question about it. The image is sent to "
@@ -35,12 +37,8 @@ class ImageAnalyzeTool(Tool):
 
     async def execute(self, file_path: str, question: str | None = None) -> ToolResult:
         try:
-            from codeassist.config import load_config
-
-            config = load_config()
-
             from .security import validate_path
-            path = validate_path(file_path, config.workspace)
+            path = validate_path(file_path, self.workspace)
 
             if not path.exists():
                 return ToolResult(output=f"Error: File '{file_path}' does not exist", error=True)
@@ -75,6 +73,7 @@ class ImageAnalyzeTool(Tool):
             try:
                 import openai
 
+                config = live_config()
                 client = openai.AsyncOpenAI(
                     api_key=config.llm.api_key,
                     base_url=config.llm.base_url or None,

@@ -97,14 +97,21 @@ enabled = false
 # Enable skills system
 enabled = true
 
-# Directories to search for skills (relative to workspace)
+# The shipped defaults are read from the installed package, so they are always
+# available no matter what the workspace points at. These directories are
+# workspace-relative and are scanned *after* the packaged ones, so a file here
+# with the same skill name overrides the shipped default for this project.
+# `codeassist/skills` is only used if you create it; it is not created for you.
 directories = ["codeassist/skills", "runtime/skills"]
 
 [plugins]
 # Enable plugin system
 enabled = false
 
-# Directories to search for plugins (relative to workspace)
+# Plugins are executable code and are trust-checked before loading, so they are
+# only ever loaded from the workspace - never from the package. To start one,
+# copy the bundled template:
+#   codeassist/plugins/example-plugin/  ->  <workspace>/runtime/plugins/my-plugin/
 directories = ["codeassist/plugins"]
 
 [lsp]

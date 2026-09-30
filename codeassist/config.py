@@ -83,6 +83,10 @@ class SkillsConfig:
     directories: list[str] = field(
         default_factory=lambda: ["codeassist/skills", "runtime/skills"]
     )
+    # The skills shipped inside the package are always discovered, so they stay
+    # available no matter what `server.workspace` points at. Set to false to run
+    # with workspace-provided skills only.
+    include_packaged: bool = True
 
 
 @dataclass
@@ -165,6 +169,19 @@ class Config:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
+
+    def refresh_workspace(self) -> None:
+        """Re-derive the effective ``workspace`` from the current raw setting.
+
+        ``server.workspace`` is the raw string a user can change (config file,
+        ``CODEASSIST_WORKSPACE``, or the settings UI); ``workspace`` is the
+        resolved absolute path that every tool and route actually reads. They are
+        computed at different times, so anything that mutates the raw value must
+        call this or the two silently diverge and tools keep operating on the
+        previous project.
+        """
+        raw = getattr(self.server, "workspace", ".")
+        self.workspace = Path(os.environ.get("CODEASSIST_WORKSPACE", raw)).resolve()
 
     @property
     def overrides_path(self) -> Path:
@@ -249,6 +266,7 @@ class Config:
                 directories=raw.get("skills", {}).get(
                     "directories", ["codeassist/skills", "runtime/skills"]
                 ),
+                include_packaged=raw.get("skills", {}).get("include_packaged", True),
             ),
             plugins=PluginConfig(
                 enabled=raw.get("plugins", {}).get("enabled", False),
@@ -285,9 +303,7 @@ class Config:
                 trust_all=raw.get("permissions", {}).get("trust_all", "ask"),
             ),
         )
-        config.workspace = Path(
-            os.environ.get("CODEASSIST_WORKSPACE", config.server.workspace)
-        ).resolve()
+        config.refresh_workspace()
         # Allow env overrides for Docker / containerized deployments
         if os.environ.get("CODEASSIST_HOST"):
             config.server.host = os.environ["CODEASSIST_HOST"]

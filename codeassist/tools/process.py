@@ -9,6 +9,7 @@ log = logging.getLogger(__name__)
 
 class ProcessTool(Tool):
     name = "process"
+    workspace = Path(".")
     description = (
         "Manage running processes. Start, stop, monitor, and get information "
         "about long-running processes. Use this for development servers, "
@@ -47,7 +48,6 @@ class ProcessTool(Tool):
     }
 
     def __init__(self):
-        self.workspace = Path.cwd()
         self._processes: dict[str, asyncio.subprocess.Process] = {}
 
     async def execute(self, action: str, command: str | None = None,

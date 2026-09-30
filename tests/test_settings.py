@@ -104,6 +104,39 @@ def test_coerce_types():
     assert coerce(42, "str") == "42"
 
 
+@pytest.mark.asyncio
+async def test_workspace_override_updates_effective_workspace(monkeypatch, tmp_path):
+    """A UI-set workspace must reach the effective value tools/routes read.
+
+    `Config.load()` derives `cfg.workspace` from `server.workspace`, but boot
+    overrides are applied *after* that. Without re-deriving, the raw setting
+    changes while every tool keeps operating on the previous project.
+    """
+    target = tmp_path / "some-other-project"
+    target.mkdir()
+    await _init()
+    await settings_store.set("server.workspace", str(target))
+
+    cfg = Config()
+    stale = cfg.workspace
+    await apply_settings_overrides(cfg)
+
+    assert cfg.server.workspace == str(target)
+    assert cfg.workspace == target.resolve()
+    assert cfg.workspace != stale
+
+    await settings_store.clear("server.workspace")
+
+
+def test_refresh_workspace_uses_env_over_raw(monkeypatch, tmp_path):
+    """CODEASSIST_WORKSPACE keeps precedence over the raw config value."""
+    monkeypatch.setenv("CODEASSIST_WORKSPACE", str(tmp_path))
+    cfg = Config()
+    cfg.server.workspace = "/some/other/dir"
+    cfg.refresh_workspace()
+    assert cfg.workspace == tmp_path.resolve()
+
+
 def test_get_settings_lists_catalog(live_client):
     data = live_client.get("/api/settings")
     assert data.status_code == 200

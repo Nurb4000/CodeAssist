@@ -14,19 +14,37 @@ class SessionManager:
     """Manages session operations like fork, export, import."""
 
     @staticmethod
+    def _resolve_workspace(workspace: Path | None) -> Path:
+        """Resolve the workspace an export should be written under.
+
+        Prefers the caller's workspace; falls back to the live server config so
+        exports never land in the process CWD (which is the app tree in Docker).
+        """
+        if workspace is not None:
+            return Path(workspace)
+        from .server import get_config  # local: server imports this module
+
+        return Path(get_config().workspace)
+
+    @staticmethod
     async def fork_session(session_id: str, name: str | None = None) -> Session:
         """Create a fork of an existing session."""
         original = Session(session_id)
         return await original.fork(name)
 
     @staticmethod
-    async def export_session(session_id: str, redact: bool = False, as_bundle: bool = False) -> dict | Path:
+    async def export_session(session_id: str, redact: bool = False,
+                             as_bundle: bool = False,
+                             workspace: Path | None = None) -> dict | Path:
         """Export session data for sharing or backup.
 
         Args:
             session_id: Session to export.
             redact: Whether to redact PII.
-            as_bundle: If True, write a self-contained JSON file to runtime/exports/.
+            as_bundle: If True, write a self-contained JSON file to
+                ``<workspace>/runtime/exports/``.
+            workspace: Workspace to write bundles under; defaults to the live
+                server config.
 
         Returns:
             dict if as_bundle=False, Path to exported file if as_bundle=True.
@@ -48,7 +66,7 @@ class SessionManager:
             export_data = SessionManager._redact_pii(export_data)
 
         if as_bundle:
-            export_dir = Path("runtime") / "exports"
+            export_dir = SessionManager._resolve_workspace(workspace) / "runtime" / "exports"
             export_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r'[^\w\-]', '_', ((summary or {}).get("first_message") or "session")[:40])
             filename = f"{safe_name}_{session_id[:8]}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
@@ -159,8 +177,9 @@ class SessionTool:
         "required": ["action"],
     }
 
-    def __init__(self, current_session_id: str):
+    def __init__(self, current_session_id: str, workspace: Path | None = None):
         self.current_session_id = current_session_id
+        self.workspace = workspace
 
     def schema(self) -> dict:
         return {
@@ -195,7 +214,9 @@ class SessionTool:
         elif action == "share":
             target_id = session_id or self.current_session_id
             try:
-                result = await SessionManager.export_session(target_id, redact=True, as_bundle=True)
+                result = await SessionManager.export_session(
+                    target_id, redact=True, as_bundle=True, workspace=self.workspace,
+                )
                 if isinstance(result, Path):
                     return ToolResult(
                         output=(

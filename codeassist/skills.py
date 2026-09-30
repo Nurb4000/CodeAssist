@@ -72,17 +72,48 @@ class SkillRegistry:
         self._last_discover_time: float = 0
 
     def discover(self) -> list[Skill]:
-        """Discover skills from configured directories."""
+        """Discover skills from the packaged skills and the configured
+        workspace directories.
+
+        The packaged skills are scanned first so that a workspace copy of the
+        same skill shadows the shipped default. Each directory is scanned at
+        most once, so a workspace that *is* the project root does not report
+        every skill twice.
+        """
         if not self.config or not self.config.enabled:
             return []
 
-        directories = self.config.directories
-        for dir_name in directories:
-            skill_dir = self.workspace / dir_name
-            if skill_dir.exists() and skill_dir.is_dir():
-                self._discover_from_directory(skill_dir)
+        scanned: set[Path] = set()
+
+        if getattr(self.config, "include_packaged", True):
+            self._scan_dir(self.packaged_skills_dir(), scanned)
+
+        for dir_name in self.config.directories:
+            self._scan_dir(self.workspace / dir_name, scanned)
 
         return list(self._skills.values())
+
+    @staticmethod
+    def packaged_skills_dir() -> Path:
+        """The skills shipped inside the package, next to this module.
+
+        Resolved from ``__file__`` rather than the workspace so the defaults are
+        found for any ``server.workspace`` (a container may mount an unrelated
+        directory, or a wheel install may not have a project checkout at all).
+        """
+        return Path(__file__).resolve().parent / "skills"
+
+    def _scan_dir(self, directory: Path, scanned: set[Path]) -> None:
+        """Scan ``directory`` for skills, skipping any already scanned."""
+        try:
+            resolved = directory.resolve()
+        except OSError:  # pragma: no cover - unresolvable path
+            log.warning("Skipping unresolvable skill directory %s", directory)
+            return
+        if not resolved.is_dir() or resolved in scanned:
+            return
+        scanned.add(resolved)
+        self._discover_from_directory(resolved)
 
     def reload(self) -> list[Skill]:
         """Hot-reload skills from disk."""
@@ -151,8 +182,21 @@ class SkillRegistry:
             description=description,
             content=body.strip(),
             slash_command=slash_command,
-            source=str(path.relative_to(self.workspace)),
+            source=self._source_for(path),
         )
+
+    def _source_for(self, path: Path) -> str:
+        """Describe where a skill file lives.
+
+        Workspace-backed skills get a workspace-relative posix path, which is
+        what makes them editable, movable and exportable. Skills that ship with
+        the package sit outside the workspace, so they are tagged with a
+        ``package:`` prefix instead of a misleading relative path.
+        """
+        try:
+            return path.resolve().relative_to(self.workspace.resolve()).as_posix()
+        except (ValueError, OSError):
+            return f"{self.PACKAGE_SOURCE_PREFIX}{path.as_posix()}"
 
     def get_skill(self, name: str) -> Skill | None:
         """Get a skill by name."""
@@ -166,12 +210,15 @@ class SkillRegistry:
 
     def _resolve_skill_path(self, name: str) -> Path | None:
         """Return the on-disk source path for a discovered skill, scoped to the
-        workspace. Returns None if the skill is unknown or its source escapes
-        the workspace (guards against path traversal via a crafted `source`)."""
+        workspace. Returns None if the skill is unknown, ships with the package,
+        or its source escapes the workspace (guards against path traversal via
+        a crafted `source`)."""
 
         skill = self._skills.get(name)
         if not skill or not skill.source:
             return None
+        if skill.source.startswith(self.PACKAGE_SOURCE_PREFIX):
+            return None  # packaged default, not workspace-managed
         candidate = (self.workspace / skill.source).resolve()
         workspace_root = self.workspace.resolve()
         try:
@@ -226,6 +273,7 @@ class SkillRegistry:
     SKILLS_BUNDLE = "codeassist-skills-bundle"
     BASE_DIR = "codeassist/skills"
     CUSTOM_DIR = "runtime/skills"
+    PACKAGE_SOURCE_PREFIX = "package:"
 
     def _category_for(self, rel_posix: str) -> str:
         return "base" if rel_posix.startswith(self.BASE_DIR + "/") else "custom"
@@ -237,6 +285,9 @@ class SkillRegistry:
         Each entry records the rendered body plus the category (``base`` for
         shipped skills under ``codeassist/skills``, ``custom`` for everything
         else) so it can be round-tripped and promoted.
+
+        Only workspace-backed skills are exported; packaged defaults are already
+        installed with the package and are not re-imported over the top of them.
         """
         manifest = {
             "format": self.SKILLS_BUNDLE,

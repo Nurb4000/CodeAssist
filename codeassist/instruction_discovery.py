@@ -128,7 +128,7 @@ class InstructionDiscoverer:
         # 3. Load config-specified paths/URLs
         if config_paths:
             for p in config_paths:
-                source = await self._load_single(p)
+                source = await self._load_single(p, base=workspace)
                 if source:
                     self.sources.append(source)
 
@@ -174,9 +174,19 @@ class InstructionDiscoverer:
 
         return results
 
-    async def _load_single(self, path_or_url: str) -> InstructionSource | None:
-        """Load a single instruction source (file or URL)."""
-        resolved = Path(path_or_url).resolve() if not path_or_url.startswith("http") else Path(path_or_url)
+    async def _load_single(self, path_or_url: str, base: Path | None = None) -> InstructionSource | None:
+        """Load a single instruction source (file or URL).
+
+        Relative paths are resolved against ``base`` (the workspace) rather than
+        the process CWD, which is the app tree in a container.
+        """
+        if path_or_url.startswith("http"):
+            resolved = Path(path_or_url)
+        else:
+            candidate = Path(path_or_url)
+            if not candidate.is_absolute() and base is not None:
+                candidate = base / candidate
+            resolved = candidate.resolve()
 
         # Avoid loading the same file twice
         real_path = str(resolved)
@@ -187,7 +197,7 @@ class InstructionDiscoverer:
         if path_or_url.startswith("http"):
             return await load_url_instructions(path_or_url)
         else:
-            return await load_file_instructions(Path(path_or_url))
+            return await load_file_instructions(resolved)
 
     def get_combined_content(self, sources: list[InstructionSource] | None = None) -> str:
         """Combine all loaded instructions into a single text block."""

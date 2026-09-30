@@ -249,6 +249,9 @@ async def test_e2e_captures_real_page(tmp_path, monkeypatch):
         thread.start()
         try:
             tool = ScreenshotTool()
+            # The tool is workspace-scoped via the injected attribute (as
+            # create_registry does), not a private config reload.
+            tool.workspace = tmp_path
             out = tmp_path / "cap.png"
             result = await tool.execute(
                 url=f"http://127.0.0.1:{port}/",

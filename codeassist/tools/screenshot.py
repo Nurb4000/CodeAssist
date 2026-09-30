@@ -20,7 +20,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import Tool, ToolResult
+from . import Tool, ToolResult, live_config
 from .security import validate_path
 
 log = logging.getLogger(__name__)
@@ -100,9 +100,7 @@ class ScreenshotTool(Tool):
 
     DEFAULT_WIDTH = 1280
     DEFAULT_HEIGHT = 800
-
-    def __init__(self):
-        self.workspace = Path.cwd()
+    workspace = Path(".")
 
     async def execute(
         self,
@@ -116,15 +114,13 @@ class ScreenshotTool(Tool):
         question: str | None = None,
     ) -> ToolResult:
         try:
-            from codeassist.config import load_config
-
-            config = load_config()
+            config = live_config()
 
             target_url = await self._resolve_target_url(url, capture_local_app, config)
             if isinstance(target_url, ToolResult):
                 return target_url
 
-            png_path = self._resolve_output_path(output_path, config.workspace)
+            png_path = self._resolve_output_path(output_path, self.workspace)
             if isinstance(png_path, ToolResult):
                 return png_path
 

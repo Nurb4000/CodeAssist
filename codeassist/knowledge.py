@@ -231,6 +231,7 @@ class KnowledgeBase:
         entry_type: str | None = None,
         scope: str | None = None,
         scope_identifier: str | None = None,
+        source_session_id: str | None = None,
         tags: list[str] | None = None,
         min_confidence: float = 0.0,
         limit: int = 50,
@@ -258,6 +259,9 @@ class KnowledgeBase:
         if scope_identifier:
             conditions.append("scope_identifier = ?")
             params.append(scope_identifier)
+        if source_session_id:
+            conditions.append("source_session_id = ?")
+            params.append(source_session_id)
         if tags:
             # JSON-array "contains" check. Escape LIKE wildcards so a tag name
             # containing %, _, or \\ is matched literally instead of acting as a

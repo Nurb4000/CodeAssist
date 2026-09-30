@@ -51,7 +51,7 @@ async def list_all_tools():
     from ..tools import get_tools
 
     config = get_config()
-    workspace = Path(config.server.workspace)
+    workspace = config.workspace
     trust_registry = get_trust_registry()
 
     builtin_tools = get_tools(config)
@@ -117,7 +117,7 @@ async def get_tool_details(tool_name: str):
     from ..tools import get_tools
 
     config = get_config()
-    workspace = Path(config.server.workspace)
+    workspace = config.workspace
     trust_registry = get_trust_registry()
 
     builtin_tools = get_tools(config)
@@ -163,7 +163,7 @@ async def set_tool_trust(tool_name: str, body: dict):
     from ..server import get_config, get_trust_registry
 
     config = get_config()
-    workspace = Path(config.server.workspace)
+    workspace = config.workspace
     trust_registry = get_trust_registry()
 
     custom_registry = get_custom_tool_registry(workspace, trust_registry=trust_registry)
@@ -187,7 +187,7 @@ async def delete_custom_tool(tool_name: str):
     from ..server import get_config, get_trust_registry
 
     config = get_config()
-    workspace = Path(config.server.workspace)
+    workspace = config.workspace
     trust_registry = get_trust_registry()
 
     custom_registry = get_custom_tool_registry(workspace, trust_registry=trust_registry)
@@ -214,7 +214,7 @@ async def scan_custom_tools():
     from ..server import get_config, get_trust_registry
 
     config = get_config()
-    workspace = Path(config.server.workspace)
+    workspace = config.workspace
     trust_registry = get_trust_registry()
 
     custom_registry = get_custom_tool_registry(workspace, trust_registry=trust_registry)

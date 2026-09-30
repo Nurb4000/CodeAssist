@@ -6,7 +6,6 @@ import sys
 import threading
 import time
 import webbrowser
-from pathlib import Path
 
 
 def main():
@@ -32,7 +31,7 @@ def main():
         config.server.port = args.port
     if args.workspace is not None:
         config.server.workspace = args.workspace
-        config.workspace = Path(config.server.workspace).resolve()
+        config.refresh_workspace()
 
     server.set_config(config)
 

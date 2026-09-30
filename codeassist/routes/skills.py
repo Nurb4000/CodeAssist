@@ -4,12 +4,12 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 
-def _discover_registry():
-    """Build a fresh disk SkillRegistry and discover skills from it.
+def _fresh_registry():
+    """Build an undiscovered disk SkillRegistry against the live workspace.
 
     Uses ``cfg.workspace`` (the same resolved workspace the boot-time global
-    registry uses) so edit/delete operate on exactly what ``GET /api/skills``
-    lists.
+    registry uses) so edit/delete/reload operate on exactly what
+    ``GET /api/skills`` lists.
     """
     from pathlib import Path
 
@@ -18,7 +18,12 @@ def _discover_registry():
     from ..server import get_config
 
     cfg = get_config()
-    registry = SkillRegistry(Path(cfg.workspace), cfg.skills)
+    return SkillRegistry(Path(cfg.workspace), cfg.skills)
+
+
+def _discover_registry():
+    """Build a fresh disk SkillRegistry and discover skills from it."""
+    registry = _fresh_registry()
     registry.discover()
     return registry
 
@@ -54,13 +59,7 @@ async def create_skill(body: dict):
 @router.get("/list")
 async def list_all_skills():
     """List all skills discovered from disk (bypasses database)."""
-    from pathlib import Path
-
-    from codeassist.config import load_config
-    from codeassist.skills import SkillRegistry
-    config = load_config()
-    workspace = Path(config.server.workspace)
-    registry = SkillRegistry(workspace, config.skills)
+    registry = _discover_registry()
     skills = registry.discover()
     return {"skills": [s.to_dict() for s in skills]}
 
@@ -68,13 +67,7 @@ async def list_all_skills():
 @router.post("/reload")
 async def reload_skills():
     """Hot-reload skills from disk without restarting the server."""
-    from pathlib import Path
-
-    from codeassist.config import load_config
-    from codeassist.skills import SkillRegistry
-    config = load_config()
-    workspace = Path(config.server.workspace)
-    registry = SkillRegistry(workspace, config.skills)
+    registry = _fresh_registry()
     registry.reload()
     return {"message": "Skills reloaded", "count": len(registry._skills)}
 

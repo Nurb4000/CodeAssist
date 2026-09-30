@@ -53,6 +53,7 @@ class LSPClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=str(workspace),
             )
 
             self._servers[name] = proc
@@ -503,6 +504,7 @@ class LSPTool(Tool):
     """Tool for interacting with LSP servers. Supports 9 operations."""
 
     name = "lsp"
+    workspace = Path(".")
     description = (
         "Query language servers for code intelligence. Read-only operation, always allowed.\n\n"
         "Actions:\n"
@@ -597,13 +599,13 @@ class LSPTool(Tool):
             if not file_path:
                 return ToolResult(output=f"Error: file_path is required for action '{action}'", error=True)
 
-            path = Path(file_path).resolve()
+            path = validate_path(file_path, self.workspace)
 
             # File existence check
             if not path.exists():
                 return ToolResult(output=f"Error: file does not exist: {file_path}", error=True)
 
-            uri = validate_path(path)
+            uri = path
 
             if action == "diagnostics":
                 diagnostics = await self.lsp_client.get_diagnostics(uri, language or "")

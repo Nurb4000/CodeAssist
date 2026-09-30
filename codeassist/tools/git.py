@@ -485,7 +485,7 @@ class GitTool(Tool):
             if not branch or not worktree_path:
                 return ToolResult(output="Error: branch and worktree_path are required", error=True)
 
-            validate_directory(Path(worktree_path))
+            validate_directory(Path(worktree_path), self.workspace)
 
             args = ["worktree", "add", worktree_path, branch]
             stdout, stderr, rc = await self._run_git(repo_path, args)

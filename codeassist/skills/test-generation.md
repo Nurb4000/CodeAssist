@@ -1,7 +1,7 @@
 ---
 name: test-generation
 description: Generate comprehensive tests for a module or function
-slash: test
+slash: testgen
 ---
 
 You are generating comprehensive tests. Follow these steps:

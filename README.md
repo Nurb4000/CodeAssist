@@ -407,6 +407,7 @@ Skills are reusable, guided workflows that extend CodeAssist's capabilities. The
 | `refactor` | `/refactor` | Systematic refactoring with safety checks and test verification |
 | `debug` | `/debug` | Step-by-step debugging workflow |
 | `test` | `/test` | Write unit and integration tests |
+| `test-generation` | `/testgen` | Generate comprehensive tests for a module or function |
 | `explain` | `/explain` | Explain how code works |
 | `document` | `/doc` | Generate docstrings and documentation |
 | `optimize` | `/optimize` | Data-driven performance profiling and optimization |

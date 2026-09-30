@@ -1009,20 +1009,18 @@ Provide a JSON response with:
             
             if not config.agent.auto_create_skills:
                 return
-            
-            # Check auto-creation count for this session
-            existing_skills = await KnowledgeBase.search_knowledge(
+
+            # Count this session's auto-creations against the per-session cap.
+            # source_session_id is a first-class column, so the cap does not
+            # depend on parsing the free-form metadata blob.
+            session_creations = await KnowledgeBase.search_knowledge(
                 entry_type="skill_created",
                 scope="project",
+                source_session_id=session_id,
                 min_confidence=0.5,
-                limit=config.agent.max_auto_creations,
+                limit=config.agent.max_auto_creations + 1,
             )
-            
-            session_creations = [
-                e for e in existing_skills
-                if e.get("metadata", {}).get("session_id") == session_id
-            ]
-            
+
             if len(session_creations) >= config.agent.max_auto_creations:
                 log.info("Auto-creation limit reached for session %s", session_id)
                 return
@@ -1050,14 +1048,23 @@ This workflow is now available as a skill. The agent will use this pattern when 
 {chr(10).join(f"- **{tool}**: Part of the automated workflow" for tool in sequence)}
 """
             
-            # Create the skill
-            from .tools.create_skill import execute as create_skill_execute
-            await create_skill_execute(
+            # Create the skill through the same tool the agent uses, scoped to
+            # the configured workspace so it lands in <workspace>/runtime/skills
+            # and is picked up by the skill registry.
+            from .tools.create_skill import CreateSkill
+            tool = CreateSkill()
+            tool.workspace = config.workspace
+            result = await tool.execute(
                 name=skill_name,
                 description=skill_description,
                 content=skill_content,
+                tags=["auto_created"],
+                session_id=session_id,
             )
-            
+            if result.error:
+                log.warning("Auto-skill creation failed: %s", result.output)
+                return
+
             log.info("Auto-created skill '%s' for repetitive pattern", skill_name)
             
         except Exception as e:  # noqa: BLE001

@@ -255,6 +255,11 @@ async def apply_settings_overrides(cfg: Any) -> None:
         if section is None:
             continue
         setattr(section, spec["field"], decoded)
+    # `server.workspace` is only the raw value; `Config.workspace` is what the
+    # tools/routes read. It was derived during Config.load(), before these
+    # overrides landed, so re-derive it or a UI-set workspace is ignored.
+    if hasattr(cfg, "refresh_workspace"):
+        cfg.refresh_workspace()
     log.info("Applied %d settings override(s) from DB", len(settings_store.all()))
 
 
@@ -273,6 +278,8 @@ async def clear_override(key: str, cfg: Any) -> None:
         return
     live_section = getattr(cfg, spec["section"])
     setattr(live_section, spec["field"], getattr(fresh_section, spec["field"]))
+    if spec["key"] == "server.workspace" and hasattr(cfg, "refresh_workspace"):
+        cfg.refresh_workspace()
 
 
 def validate_setting(spec: dict, value: Any) -> str | None:

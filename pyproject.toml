@@ -33,3 +33,11 @@ codeassist = "codeassist.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["codeassist*"]
+
+# codeassist/skills/ and codeassist/plugins/ are data directories, not packages
+# (no __init__.py), so they are skipped by packages.find. Ship them explicitly or
+# an installed copy of CodeAssist discovers zero default skills and has no plugin
+# template to copy from. Plugins stay workspace-scoped on purpose (they are
+# executable and trust-checked), so the bundled one is a template only.
+[tool.setuptools.package-data]
+codeassist = ["skills/*.md", "skills/**/*.md", "plugins/*/*.py", "plugins/*/*.json"]

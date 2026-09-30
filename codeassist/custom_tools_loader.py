@@ -282,8 +282,15 @@ _custom_tool_registry: CustomToolRegistry | None = None
 
 
 def get_custom_tool_registry(workspace: Path, trust_registry: TrustRegistry | None = None) -> CustomToolRegistry:
-    """Get or create the custom tool registry singleton."""
+    """Get or create the custom tool registry singleton.
+
+    The registry pins its ``tools_dir`` at construction, so re-key it whenever a
+    different workspace is requested. Without this the first caller's workspace
+    wins for the process lifetime, and a later caller silently gets a registry
+    pointed at the wrong project.
+    """
     global _custom_tool_registry
-    if _custom_tool_registry is None:
+    workspace = Path(workspace).resolve()
+    if _custom_tool_registry is None or Path(_custom_tool_registry.workspace) != workspace:
         _custom_tool_registry = CustomToolRegistry(workspace, trust_registry=trust_registry)
     return _custom_tool_registry

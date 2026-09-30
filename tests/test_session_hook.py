@@ -1,5 +1,6 @@
 """Tests for session hook - summary generation, knowledge extraction."""
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -743,4 +744,77 @@ class TestQAPairExtraction:
         assert len(entries) >= 1
         meta = json.loads(entries[0]["metadata"])
         assert "management command" in meta["answer"].lower()
+
+
+class TestAutoCreateSkill:
+    """The auto-creation path used to import a non-existent ``execute`` symbol,
+    so every suggestion was swallowed as a warning and no skill was ever
+    written. Pin the whole path: file lands in the workspace, KB entry records
+    the session, and the per-session cap is enforced.
+    """
+
+    @staticmethod
+    def _config(workspace, max_auto_creations=3):
+        return SimpleNamespace(
+            workspace=workspace,
+            agent=SimpleNamespace(
+                auto_create_skills=True,
+                max_auto_creations=max_auto_creations,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_writes_skill_into_workspace(self, session_hook, tmp_path, monkeypatch):
+        from codeassist import config as config_mod
+
+        await init_db()
+        monkeypatch.setattr(config_mod, "load_config", lambda: self._config(tmp_path))
+
+        await session_hook._suggest_skill_creation(("read", "edit", "write"), 3, "sess-auto")
+
+        skill_file = tmp_path / "runtime" / "skills" / "auto-read-workflow.md"
+        assert skill_file.exists()
+        body = skill_file.read_text()
+        assert "name: auto-read-workflow" in body
+        assert "read" in body and "edit" in body
+
+        entries = await KnowledgeBase.search_knowledge(
+            entry_type="skill_created", source_session_id="sess-auto", min_confidence=0.0,
+        )
+        assert len(entries) == 1
+
+    @pytest.mark.asyncio
+    async def test_per_session_cap_is_enforced(self, session_hook, tmp_path, monkeypatch):
+        from codeassist import config as config_mod
+
+        await init_db()
+        for i in range(3):
+            await KnowledgeBase.create_knowledge_entry(
+                entry_type="skill_created", scope="project",
+                content=f"prior {i}", source_session_id="sess-full", confidence=1.0,
+            )
+        monkeypatch.setattr(config_mod, "load_config",
+                            lambda: self._config(tmp_path, max_auto_creations=3))
+
+        await session_hook._suggest_skill_creation(("read", "edit"), 5, "sess-full")
+
+        assert not (tmp_path / "runtime" / "skills").exists()
+
+    @pytest.mark.asyncio
+    async def test_other_sessions_do_not_count_against_cap(self, session_hook, tmp_path, monkeypatch):
+        from codeassist import config as config_mod
+
+        await init_db()
+        for i in range(5):
+            await KnowledgeBase.create_knowledge_entry(
+                entry_type="skill_created", scope="project",
+                content=f"other {i}", source_session_id="some-other-session", confidence=1.0,
+            )
+        monkeypatch.setattr(config_mod, "load_config",
+                            lambda: self._config(tmp_path, max_auto_creations=3))
+
+        await session_hook._suggest_skill_creation(("grep", "read"), 4, "sess-new")
+
+        assert (tmp_path / "runtime" / "skills" / "auto-grep-workflow.md").exists()
+
 

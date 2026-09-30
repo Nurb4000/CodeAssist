@@ -1,5 +1,6 @@
 """Tests for session manager operations."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -60,6 +61,28 @@ class TestSessionManager:
         user_msg = export_data["messages"][0]
         assert "sk-1234567890abcdef" not in user_msg["content"]
         assert "***REDACTED***" in user_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_export_bundle_lands_in_workspace(self, tmp_path):
+        """A share/bundle export must be written under the workspace, not CWD.
+
+        In Docker the process CWD is the app tree (/app), so a CWD-relative
+        export would land outside the mounted project and vanish on rebuild.
+        """
+        await init_db()
+        session = await Session.create(name="Bundle Test")
+        await session.add_message("user", "Hello")
+
+        workspace = tmp_path / "my-project"
+        workspace.mkdir()
+
+        result = await SessionManager.export_session(
+            session.id, redact=True, as_bundle=True, workspace=workspace,
+        )
+
+        assert isinstance(result, Path)
+        assert result.parent == workspace / "runtime" / "exports"
+        assert result.is_file()
 
     @pytest.mark.asyncio
     async def test_import_session(self):
