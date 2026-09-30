@@ -186,7 +186,8 @@ async function loadSkills() {
     const data = await api('GET', '/api/skills');
     const tbody = document.getElementById('skills-body');
     tbody.innerHTML = '';
-    for (const s of data.skills || []) {
+    for (const s of (data.skills || []).sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''))) {
         const tr = row(
             `<td class="cell-em">${escapeHtml(s.name || '')}</td>` +
             `<td>${escapeHtml(s.description || '')}</td>` +
@@ -284,7 +285,8 @@ async function loadCustomTools() {
     const data = await api('GET', '/api/custom-tools');
     const tbody = document.getElementById('custom-body');
     tbody.innerHTML = '';
-    for (const t of data.tools || []) {
+    for (const t of (data.tools || []).sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''))) {
         const tr = row(
             `<td class="cell-em">${escapeHtml(t.name || '')}</td>` +
             `<td>${escapeHtml(t.description || '')}</td>`);
