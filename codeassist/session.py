@@ -985,6 +985,44 @@ class Session:
             )
             await db.commit()
 
+    async def delete_message(self, message_id: str) -> int:
+        """Delete a single message, returning the number of rows removed.
+
+        The loop writes an assistant placeholder before streaming so that an
+        interruption still leaves the text the user was reading. When the turn is
+        then discarded -- the reply turned out to be a safety-filter refusal, or a
+        restatement of what was already answered -- there is nothing worth keeping,
+        and the placeholder has to go rather than sit in history as a blank turn
+        that every later request replays and the client renders as an empty bubble.
+
+        Child rows are removed explicitly: the pool does not enable
+        ``PRAGMA foreign_keys``, so the ``ON DELETE CASCADE`` declared on
+        ``message_attachments`` never fires, and ``questions.message_id`` has no
+        foreign key at all.
+        """
+        async with get_db() as db:
+            await db.execute(
+                "DELETE FROM message_attachments WHERE message_id = ? AND message_id IN "
+                "(SELECT id FROM messages WHERE id = ? AND session_id = ?)",
+                (message_id, message_id, self.id),
+            )
+            await db.execute(
+                "DELETE FROM questions WHERE message_id = ? AND session_id = ?",
+                (message_id, self.id),
+            )
+            cursor = await db.execute(
+                "DELETE FROM messages WHERE id = ? AND session_id = ?",
+                (message_id, self.id),
+            )
+            deleted = cursor.rowcount
+            if deleted:
+                await db.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                    (datetime.now(UTC).isoformat(), self.id),
+                )
+            await db.commit()
+            return deleted
+
     async def rename(self, name: str):
         now = datetime.now(UTC).isoformat()
         async with get_db() as db:

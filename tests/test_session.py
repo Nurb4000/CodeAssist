@@ -68,6 +68,58 @@ class TestSession:
         assert messages[0]["content"] == "Hello"
 
     @pytest.mark.asyncio
+    async def test_delete_message(self):
+        """Deleting one message removes it and leaves its neighbours alone."""
+        await init_db()
+        session = await Session.create()
+
+        first = await session.add_message("user", "Hello")
+        second = await session.add_message("assistant", "About to be discarded")
+        await session.add_message("user", "Next question")
+
+        deleted = await session.delete_message(second)
+        assert deleted == 1
+
+        messages = await session.get_messages()
+        assert [m["id"] for m in messages] == [first, messages[-1]["id"]]
+        assert all("discarded" not in (m["content"] or "") for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_delete_message_is_scoped_to_the_session(self):
+        """A message id from another session must not be deletable through this one."""
+        await init_db()
+        session = await Session.create()
+        other = await Session.create()
+
+        mine = await session.add_message("user", "Mine")
+        theirs = await other.add_message("user", "Theirs")
+
+        assert await session.delete_message(theirs) == 0
+        assert [m["id"] for m in await session.get_messages()] == [mine]
+
+    @pytest.mark.asyncio
+    async def test_delete_message_clears_child_rows(self):
+        """Attachments are cascaded in the schema, but the pool does not enable
+        PRAGMA foreign_keys, so they have to go explicitly or they are orphaned."""
+        await init_db()
+        session = await Session.create()
+
+        msg_id = await session.add_message(
+            "user", "See attached", attachments=[{"name": "a.txt", "content": "hi"}]
+        )
+        await session.delete_message(msg_id)
+
+        from codeassist.session import get_db
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) AS n FROM message_attachments WHERE message_id = ?",
+                (msg_id,),
+            )
+            row = await cursor.fetchone()
+        assert row["n"] == 0
+
+    @pytest.mark.asyncio
     async def test_add_multiple_messages(self):
         """Test adding multiple messages."""
         await init_db()

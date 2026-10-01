@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -54,12 +55,18 @@ MAX_CONTINUATION_NUDGES = 5
 
 # First nudge: gentle, and it offers an escape hatch so a legitimate
 # research-only question (e.g. "what is in this file?") can still be answered.
+# The "do not repeat yourself" clause matters as much as the instruction to
+# continue: asked to "give your final answer now", models tend to comply by
+# restating the answer already delivered, which reads as the summary appearing
+# twice.
 CONTINUATION_NUDGE = (
     "[Task check: you have used tools but may not be finished yet. If there is "
     "more work to do, continue with the necessary actions now "
     "(read more, edit, run tests, document) — do not stop after gathering "
     "information or conclude with a summary while work remains. If the task is "
-    "truly and fully complete, reply with your final answer now.]"
+    "truly and fully complete, reply with your final answer now. In either "
+    "case, do not repeat, restate or re-list what you have already reported in "
+    "your previous message — add only what is new.]"
 )
 
 # Follow-up nudges for a model that keeps stopping after using tools: firmer,
@@ -68,7 +75,8 @@ CONTINUATION_NUDGE_FIRM = (
     "[You have used more tools and stopped again without finishing. Continue "
     "completing the task now — do not conclude with a summary while work "
     "remains. Proceed with the required actions, or give your final answer only "
-    "if the task is genuinely complete.]"
+    "if the task is genuinely complete. Do not repeat or restate your previous "
+    "message; state only what you have done since.]"
 )
 
 # Injected (as a user turn) when the agent reaches its per-agent step budget.
@@ -122,6 +130,63 @@ REFUSAL_SUGGESTIONS = (
 MAX_CONTEXT_RETRIES = 2
 
 _REFUSAL_TRIGGER_LIMIT = 280
+
+# What makes a reply a restatement rather than new work: it re-uses most of the
+# answer it is repeating (measured as shared unique words), *and* it is about
+# the same size. The size test is what separates the two failure modes either
+# side of the repeat -- a terse new finding is much shorter, and an answer that
+# genuinely extends the earlier one is much longer, so both sit outside the
+# band. Measured against the observed case: a re-delivered listing scores 0.63
+# overlap at 1.28x length, a terse follow-up 0.04 at 0.24x, and an expanded
+# answer ~0.0 at 4x.
+_RESTATE_MIN_OVERLAP = 0.5
+_RESTATE_MIN_GROWTH = 0.6
+_RESTATE_MAX_GROWTH = 1.8
+
+
+def _restates(previous: str, candidate: str) -> bool:
+    """True when ``candidate`` is ``previous`` said again, not new work.
+
+    The continuation nudge asks the model to either finish the job or give its
+    final answer, and models reliably take the second option -- by restating the
+    answer they already delivered. The user then sees the same summary twice at
+    the end of the turn. Because the repeat is re-generated it is rarely
+    character-identical: framing changes and wording drifts, while the substance
+    (the filenames, counts, symbol names) comes back word for word. So compare
+    vocabulary and size rather than text.
+
+    Two conditions must both hold:
+
+    - most of the previous answer's unique words appear again, and
+    - the reply is roughly the same size.
+
+    Requiring the overlap as well as the size matters in both directions. A terse
+    new finding ("I also checked the tarball: 3 archives") is short and shares
+    almost no vocabulary, so it is kept; the size band alone would keep it too,
+    but a same-length reply about something *else* would sit inside the band and
+    would be wrongly dropped without the overlap check. Conversely an answer that
+    genuinely extends the earlier one -- "Fixed it, and here is the diff: ..."
+    -- repeats plenty of words but is much bigger, and its new material is the
+    point.
+
+    Scoped deliberately to the answer that earned the nudge. A reply that
+    re-delivers an *older* answer while answering a nudge about a newer one is
+    not flagged: that comparison is much more likely to be legitimate, and
+    widening the window to catch it would cost false drops.
+    """
+    def words(text: str) -> set[str]:
+        return {w for w in re.findall(r"[A-Za-z0-9_./-]+", text.lower()) if len(w) > 1}
+
+    prev_words = words(previous)
+    new_words = words(candidate)
+    if not prev_words or not new_words:
+        return False
+    overlap = len(prev_words & new_words) / len(prev_words)
+    grew = len(new_words) / len(prev_words)
+    return (
+        overlap >= _RESTATE_MIN_OVERLAP
+        and _RESTATE_MIN_GROWTH <= grew <= _RESTATE_MAX_GROWTH
+    )
 
 
 def _refusal_payload(code: str, explanation: str, trigger: str) -> dict:
@@ -210,6 +275,11 @@ class Agent:
         self._run_used_tools: bool = False
         self._since_nudge_tools: bool = False
         self._continuation_nudges: int = 0
+        # The answer a continuation nudge was sent about, and whether the next
+        # step's prose is being held back so it can be discarded if it only
+        # restates that answer (reset per run in run()).
+        self._nudge_answer: str | None = None
+        self._defer_nudge_text: bool = False
         # Tool output store for managed file outputs
         self._tool_output_store = get_tool_output_store(
             self.config.workspace,
@@ -295,12 +365,21 @@ class Agent:
         is also what lets the nudge survive the next iteration's cache reuse.
 
         A step that produced no text (reasoning only) adds no assistant entry:
-        there is nothing for the model to be missing.
+        there is nothing for the model to be missing, and nothing to hold the
+        reply against.
+
+        Also arms the restatement guard: now that the model can see its own
+        answer, the usual failure moves one step later. Asked to "give your final
+        answer now", it complies by restating what it already said. The reply
+        that answers a nudge is therefore buffered rather than streamed, so a
+        restatement can be dropped instead of shown and then retracted.
         """
         if assistant_text.strip():
             entry = {"role": "assistant", "content": assistant_text}
             messages.append(entry)
             history.append({**entry, "tool_calls": None, "reasoning_content": None})
+            self._nudge_answer = assistant_text
+            self._defer_nudge_text = True
         messages.append({"role": "user", "content": nudge})
 
     def reset_trust(self):
@@ -485,6 +564,8 @@ class Agent:
         self._run_used_tools = False
         self._since_nudge_tools = False
         self._continuation_nudges = 0
+        self._nudge_answer = None
+        self._defer_nudge_text = False
 
         await self.session.add_message("user", user_message, attachments=attachments)
 
@@ -750,13 +831,22 @@ class Agent:
                             break
                         if isinstance(event, TextDelta):
                             accumulated_text += event.content
-                            yield AgentEvent("text_delta", {"content": event.content})
+                            if not self._defer_nudge_text:
+                                yield AgentEvent("text_delta", {"content": event.content})
 
                         elif isinstance(event, ReasoningDelta):
                             accumulated_reasoning += event.content
                             yield AgentEvent("reasoning", {"content": event.content})
 
                         elif isinstance(event, ToolCall):
+                            # Real work: release any held-back preamble before the
+                            # call is announced, so prose still reads ahead of the
+                            # tool it introduces. From here on the step is not a
+                            # candidate for the restatement guard.
+                            if self._defer_nudge_text:
+                                self._defer_nudge_text = False
+                                if accumulated_text:
+                                    yield AgentEvent("text_delta", {"content": accumulated_text})
                             tool_calls.append(event)
                             yield AgentEvent("tool_call", {
                                 "id": event.id,
@@ -840,6 +930,32 @@ class Agent:
                 )
                 yield AgentEvent("done")
                 return
+
+            # Restatement guard for the reply that answers a continuation nudge.
+            # The model now sees its own answer (see _append_nudge), but asked to
+            # "give your final answer now" it still tends to comply by re-delivering
+            # that answer. Its prose was held back rather than streamed, so if it
+            # adds nothing beyond what the user has already read, drop it here.
+            # Clearing accumulated_text makes the normal path below treat this as a
+            # step with nothing to say: the guard recognises a final answer after a
+            # nudge, and the loop finishes.
+            if self._defer_nudge_text:
+                self._defer_nudge_text = False
+                if _restates(self._nudge_answer or "", accumulated_text):
+                    log.info(
+                        "Dropped a nudged reply that restated the answer it was "
+                        "nudged about (%d chars over %d)",
+                        len(accumulated_text), len(self._nudge_answer or ""),
+                    )
+                    # Remove the placeholder outright, not just empty it: a blank
+                    # assistant row would be replayed to the provider on every
+                    # later turn and rendered as an empty bubble on reload.
+                    await self.session.delete_message(stream_msg_id)
+                    self._messages_dirty = True
+                    accumulated_text = ""
+                elif accumulated_text:
+                    yield AgentEvent("text_delta", {"content": accumulated_text})
+            self._nudge_answer = None
 
             if tool_calls:
                 self._run_used_tools = True
