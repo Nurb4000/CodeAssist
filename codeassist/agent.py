@@ -270,6 +270,39 @@ class Agent:
         self._messages_dirty = True
         await self._answer_unrun_tool_calls(tool_calls)
 
+    def _append_nudge(
+        self,
+        messages: list[dict],
+        history: list[dict],
+        assistant_text: str,
+        nudge: str,
+    ):
+        """Queue a continuation nudge behind the assistant reply that earned it.
+
+        `messages` is rebuilt from `history` at the top of each step, before
+        that step's own assistant reply is persisted, so the transcript handed
+        back to the model for a nudge does not contain the text the user just
+        watched stream in. The nudge therefore read as if it arrived straight
+        after the tool output: the model had no record of having answered, so
+        it re-derived the same answer from the tool result and emitted it a
+        second time — the duplicated summary the user sees at the end of the
+        turn, on every model.
+
+        Put the reply back ahead of the nudge so the retry is a real
+        continuation. `history` is the agent's snapshot of the session rows
+        (`self._messages`), and it is updated in place so the snapshot stays
+        true for later steps and later turns without a re-read — that accuracy
+        is also what lets the nudge survive the next iteration's cache reuse.
+
+        A step that produced no text (reasoning only) adds no assistant entry:
+        there is nothing for the model to be missing.
+        """
+        if assistant_text.strip():
+            entry = {"role": "assistant", "content": assistant_text}
+            messages.append(entry)
+            history.append({**entry, "tool_calls": None, "reasoning_content": None})
+        messages.append({"role": "user", "content": nudge})
+
     def reset_trust(self):
         """Reset trust flags for new session."""
         self._trust_workspace_writes = False
@@ -1013,7 +1046,7 @@ class Agent:
                     self._continuation_nudges = 1
                     self._since_nudge_tools = False
                     log.warning("LLM stopped after using tools without finishing; nudging to continue.")
-                    messages.append({"role": "user", "content": CONTINUATION_NUDGE})
+                    self._append_nudge(messages, history, accumulated_text, CONTINUATION_NUDGE)
                     _cached_messages = messages
                     _cached_history_len = len(history)
                     self._messages_dirty = False
@@ -1027,7 +1060,7 @@ class Agent:
                         "LLM stopped again after using tools (nudge %d/%d); pushing further.",
                         self._continuation_nudges, MAX_CONTINUATION_NUDGES,
                     )
-                    messages.append({"role": "user", "content": CONTINUATION_NUDGE_FIRM})
+                    self._append_nudge(messages, history, accumulated_text, CONTINUATION_NUDGE_FIRM)
                     _cached_messages = messages
                     _cached_history_len = len(history)
                     self._messages_dirty = False

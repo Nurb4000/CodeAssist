@@ -6,6 +6,7 @@ import pytest
 
 from codeassist.agent import (
     CONFIRM_TOOLS,
+    CONTINUATION_NUDGE,
     MAX_CONTINUATION_NUDGES,
     SESSION_TRUST,
     Agent,
@@ -575,6 +576,82 @@ class TestAgentContinuationNudge:
             assert "done" in types
             assert "incomplete" not in types
             assert "incomplete" not in types
+
+    @pytest.mark.asyncio
+    async def test_nudge_replay_includes_the_answer_it_nudged(self, agent, mock_session):
+        """A nudge must follow the assistant reply that triggered it.
+
+        The step's reply is persisted *after* `messages` is rebuilt from the
+        history snapshot, so replaying with the nudge alone handed the model a
+        transcript that jumped from its tool output straight to the nudge. With
+        no record of having answered, it re-derived the answer from the same
+        tool output and emitted it again, which is why a turn that ended in
+        "here are the folders ... want me to look closer?" was immediately
+        followed by the same folder list a second time.
+        """
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            history = [{"role": "user", "content": "list the folders"}]
+            mock_build.return_value = [{"role": "user", "content": "list the folders"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=history)
+            agent.config.agent.max_iterations = 20
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="axolotl/\nZoe/", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            answer = "Here are the folders:\naxolotl/\nZoe/\nWant me to explore any?"
+
+            async def turn_listing():
+                yield ToolCall(id="c1", name="read", arguments={"path": "/tmp/x"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            async def turn_answer():
+                yield TextDelta(answer)
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            async def turn_done():
+                yield TextDelta("Happy to dig into any of them.")
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            turns = [turn_listing(), turn_answer(), turn_done()]
+            calls = {"n": 0}
+            seen: list[list[dict]] = []
+
+            async def fake_stream(messages, openai_tools):
+                seen.append([dict(m) for m in messages])
+                g = turns[calls["n"]]
+                calls["n"] += 1
+                async for ev in g:
+                    yield ev
+
+            agent.llm.stream = fake_stream
+
+            events = []
+            async for event in agent.run("list the folders"):
+                events.append(event)
+
+            # The nudged call must carry the answer ahead of the nudge, in order.
+            nudged = seen[2]
+            roles = [m["role"] for m in nudged]
+            assert roles[-2:] == ["assistant", "user"], roles
+            assert nudged[-2]["content"] == answer
+            assert CONTINUATION_NUDGE in nudged[-1]["content"]
+            # Exactly one copy of the answer: the replay must not re-ask for it.
+            assert [m["content"] for m in nudged].count(answer) == 1
+
+            # The snapshot later steps rebuild from must carry it too, so the
+            # nudge survives the next iteration's cache reuse instead of being
+            # rebuilt away (which would replay the step with no nudge at all).
+            assert history[-1]["role"] == "assistant"
+            assert history[-1]["content"] == answer
+            assert [e.type for e in events].count("done") == 1
 
 
 class TestAgentStepLimit:
