@@ -13,6 +13,12 @@ const API = {
 let currentPage = 'all';
 let allTools = [];
 
+/* Alphabetical by name, case-insensitively. Named rather than an inline arrow so
+ * it can be reused by both list views. */
+function byName(a, b) {
+    return String(a && a.name || '').localeCompare(String(b && b.name || ''));
+}
+
 // Navigation
 document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -56,7 +62,7 @@ async function loadAllTools() {
     try {
         const res = await fetch(API.list);
         const data = await res.json();
-        allTools = data.tools || [];
+        allTools = (data.tools || []).sort(byName);
         
         renderToolsList(allTools);
         
@@ -108,7 +114,7 @@ async function loadCustomTools() {
     try {
         const res = await fetch(API.list);
         const data = await res.json();
-        const customTools = (data.tools || []).filter(t => t.type === 'custom');
+        const customTools = (data.tools || []).filter(t => t.type === 'custom').sort(byName);
         
         const container = document.getElementById('custom-tools-list');
         

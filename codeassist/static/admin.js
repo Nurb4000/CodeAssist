@@ -8,6 +8,14 @@ function escapeHtml(s) {
     }[c]));
 }
 
+/* Alphabetical by name, case-insensitively. Declared as a named function and
+ * called from the loop head rather than written as a multi-line arrow inside
+ * `for (... of ...)`: the inline form is a SyntaxError, which kills this whole
+ * script and leaves the page with its static HTML and nothing else. */
+function byName(a, b) {
+    return String(a && a.name || '').localeCompare(String(b && b.name || ''));
+}
+
 function setStatus(msg, isError) {
     statusEl.textContent = msg || '';
     statusEl.style.color = isError ? 'var(--red, #e05252)' : 'var(--green, #4caf50)';
@@ -186,8 +194,7 @@ async function loadSkills() {
     const data = await api('GET', '/api/skills');
     const tbody = document.getElementById('skills-body');
     tbody.innerHTML = '';
-    for (const s of (data.skills || []).sort((a, b) =>
-        String(a.name || '').localeCompare(String(b.name || ''))) {
+    for (const s of (data.skills || []).sort(byName)) {
         const tr = row(
             `<td class="cell-em">${escapeHtml(s.name || '')}</td>` +
             `<td>${escapeHtml(s.description || '')}</td>` +
@@ -285,8 +292,7 @@ async function loadCustomTools() {
     const data = await api('GET', '/api/custom-tools');
     const tbody = document.getElementById('custom-body');
     tbody.innerHTML = '';
-    for (const t of (data.tools || []).sort((a, b) =>
-        String(a.name || '').localeCompare(String(b.name || ''))) {
+    for (const t of (data.tools || []).sort(byName)) {
         const tr = row(
             `<td class="cell-em">${escapeHtml(t.name || '')}</td>` +
             `<td>${escapeHtml(t.description || '')}</td>`);

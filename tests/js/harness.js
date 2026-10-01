@@ -138,6 +138,107 @@ async function boot({ fixtures = {} } = {}) {
   };
 }
 
+// Minimal responses for the admin page's boot sequence.
+const ADMIN_FIXTURES = {
+  '/api/config': { effective_model: 'test-model', provider: 'test', workspace: '/tmp/ws' },
+  '/health': { status: 'ok' },
+  '/api/status': { db_path: '/tmp/db', db_size_human: '1 KB', restart_needed: false },
+  '/api/skills': { skills: [] },
+  '/api/mcp/servers': { servers: [] },
+  '/api/lsp/servers': { servers: [] },
+  '/api/plugins': { plugins: [] },
+  '/api/custom-tools': { tools: [] },
+  '/api/agents': [{ id: 'default', name: 'CodeAssist', builtin: true, steps: 20 }],
+  '/api/settings': { settings: [] },
+};
+
+/**
+ * Boot the real admin page in jsdom.
+ *
+ * Same substitutions as {@link boot} (fetch only), plus the two browser globals
+ * admin.js uses that jsdom does not provide: CSS.escape and scrollIntoView.
+ * Returns a top-level throw instead of letting it escape, so a script that fails
+ * to parse or dies during boot surfaces as a failed assertion rather than an
+ * unhandled rejection -- an admin page that never ran still looks like valid
+ * static HTML, which is exactly how this regressed.
+ */
+async function bootAdmin({ fixtures = {} } = {}) {
+  const errors = [];
+  const routes = { ...ADMIN_FIXTURES, ...fixtures };
+  const dom = new JSDOM(readStatic('admin.html'), {
+    url: 'http://localhost:8000/static/admin.html',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  });
+  const { window } = dom;
+
+  window.addEventListener('error', (e) => errors.push(String(e.error || e.message)));
+  window.CSS = window.CSS || {};
+  if (!window.CSS.escape) window.CSS.escape = (s) => String(s);
+  window.HTMLElement.prototype.scrollIntoView = function () {};
+
+  window.fetch = async (url) => {
+    const pathOnly = String(url).split('?')[0];
+    const body = routes[pathOnly] !== undefined ? routes[pathOnly] : {};
+    return {
+      ok: true,
+      status: 200,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    };
+  };
+
+  const context = dom.getInternalVMContext();
+  try {
+    vm.runInContext(readStatic('admin.js'), context, { filename: 'admin.js' });
+  } catch (e) {
+    errors.push(`admin.js failed to run: ${e && e.message}`);
+  }
+
+  // admin.js boots with an async loadAll(); let it settle before asserting.
+  await new Promise((r) => setTimeout(r, 30));
+
+  return { window, document: window.document, errors };
+}
+
+/**
+ * Boot the real tool-manager page in jsdom.
+ *
+ * tools.js waits for DOMContentLoaded before loading, so the event is dispatched
+ * after the script is evaluated. Fetch is the only substitution.
+ */
+async function bootTools({ fixtures = {} } = {}) {
+  const errors = [];
+  const dom = new JSDOM(readStatic('tools.html'), {
+    url: 'http://localhost:8000/static/tools.html',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  });
+  const { window } = dom;
+
+  window.addEventListener('error', (e) => errors.push(String(e.error || e.message)));
+  window.fetch = async (url) => {
+    const body = fixtures[String(url).split('?')[0]] !== undefined ? fixtures[String(url).split('?')[0]] : {};
+    return {
+      ok: true,
+      status: 200,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    };
+  };
+
+  const context = dom.getInternalVMContext();
+  try {
+    vm.runInContext(readStatic('tools.js'), context, { filename: 'tools.js' });
+  } catch (e) {
+    errors.push(`tools.js failed to run: ${e && e.message}`);
+  }
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
+
+  await new Promise((r) => setTimeout(r, 30));
+  return { window, document: window.document, errors };
+}
+
 /** Start a turn: the same entry point the Send button uses. */
 function startTurn(env, text = 'hello') {
   env.window.document.getElementById('user-input').value = text;
@@ -166,4 +267,4 @@ function stepOutputs(step) {
     .filter(Boolean);
 }
 
-module.exports = { boot, startTurn, workBlock, steps, stepOutputs, FakeWebSocket };
+module.exports = { boot, bootAdmin, bootTools, startTurn, workBlock, steps, stepOutputs, FakeWebSocket };
