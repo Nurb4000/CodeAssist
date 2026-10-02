@@ -200,6 +200,91 @@ test('end of run archives all thinking into the past-thinking container', async 
     'archived reasoning keeps its text'
   );
 });
+// ── Container placement ──────────────────────────────────────────────────────
+// The reported symptom: "the past thinking container is most often up near the
+// original prompt, as expected, but sometimes it sits down just below the
+// response." Placement is decided purely by DOM insertion order, and there were
+// two anchors: tool-using turns anchored after the Work block (correct), while a
+// prose-only turn built no Work block at all and fell through to
+// messagesEl.appendChild() -- the very end of the flow, i.e. after the response.
+// The two paths were pinned only for existence and content, never for position.
+
+/** Order of #messages' children, as a comparable array of selector matches. */
+function flowOrder(doc) {
+  return Array.from(doc.querySelector('#messages').children).map((el) => {
+    if (el.classList.contains('thinking-history')) return 'past-thinking';
+    if (el.classList.contains('work-block')) return 'work';
+    if (el.classList.contains('work-active')) return 'work-active';
+    if (el.classList.contains('message')) {
+      const role = el.querySelector('.message-role');
+      return role && role.classList.contains('user') ? 'user' : 'assistant';
+    }
+    return el.className || el.tagName.toLowerCase();
+  });
+}
+
+test('a tool-using turn keeps past thinking between the prompt and the response', async () => {
+  const env = await boot();
+  startTurn(env, 'do the thing');
+  env.feed({ type: 'reasoning', content: 'Plan the change.' });
+  env.feed({ type: 'tool_call', name: 'edit', arguments: { file_path: 'a.py' }, id: 't1' });
+  env.feed({ type: 'tool_result', id: 't1', output: 'ok' });
+  env.feed({ type: 'text_delta', content: 'Done.' });
+  env.feed({ type: 'done' });
+
+  const order = flowOrder(env.document);
+  assert.ok(order.includes('past-thinking'), 'the container exists');
+  assert.ok(order.includes('assistant'), 'the turn produced a response');
+  const at = order.indexOf('past-thinking');
+  assert.ok(
+    at > order.indexOf('user') && at < order.indexOf('assistant'),
+    `past thinking must sit under the prompt and above the response, got ${JSON.stringify(order)}`
+  );
+});
+
+test('a prose-only turn keeps past thinking above the response too', async () => {
+  // No tool call, so no Work block is ever created (only openWorkStep() and
+  // commitPendingUnit() call ensureWorkBlock()). This is the path that used to
+  // append the container to the end of #messages.
+  const env = await boot();
+  startTurn(env, 'just answer me');
+  env.feed({ type: 'reasoning', content: 'Reasoning then a prose answer.' });
+  env.feed({ type: 'text_delta', content: 'The answer.' });
+  env.feed({ type: 'done' });
+
+  const order = flowOrder(env.document);
+  assert.ok(order.includes('past-thinking'), 'the container exists');
+  const at = order.indexOf('past-thinking');
+  assert.ok(
+    at > order.indexOf('user') && at < order.indexOf('assistant'),
+    `past thinking must sit under the prompt and above the response, got ${JSON.stringify(order)}`
+  );
+});
+
+test('a reloaded prose-only session keeps past thinking above the response', async () => {
+  // Same placement contract for the reload path: flushSummary() renders the
+  // assistant message *before* it files the reasoning, so a container created
+  // there had to be anchored explicitly or it landed after that message.
+  const PROSE_SESSION = [
+    { id: 'u1', role: 'user', content: 'answer without tools' },
+    { id: 'a1', role: 'assistant', content: 'The answer.', reasoning_content: 'Quietly thought.' },
+  ];
+  const env = await boot({
+    fixtures: {
+      '/api/sessions': [{ id: 'session-1', name: 'one' }],
+      '/api/sessions/session-1/messages': PROSE_SESSION,
+    },
+  });
+
+  const order = flowOrder(env.document);
+  assert.ok(order.includes('past-thinking'), 'the container exists');
+  const at = order.indexOf('past-thinking');
+  assert.ok(
+    at > order.indexOf('user') && at < order.indexOf('assistant'),
+    `past thinking must sit under the prompt and above the response, got ${JSON.stringify(order)}`
+  );
+});
+
 // ── Session switches ─────────────────────────────────────────────────────────
 // The reported symptom: "if I leave the session then return, the work container
 // is there, but not always the thinking." Work survived because loadMessages()

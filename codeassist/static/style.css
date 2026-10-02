@@ -846,9 +846,15 @@ body {
 /* Work block (Phase 2): groups tool-using steps apart from summaries. Inserted
    under the user message; the active step is always visible, completed steps
    collapse into history behind the header toggle. See
-   docs/ui-tool-grouping-plan.md. */
+   docs/ui-tool-grouping-plan.md.
+
+   It is a direct child of #messages, a sibling of .message, so it carries the
+   same 800px column and auto side margins. Without them the header and step
+   borders spanned the full scroll width while the prompt and response above and
+   below them were inset -- the section read as a different, wider layer. */
 .work-block {
-    margin: 8px 0 12px;
+    max-width: 800px;
+    margin: 8px auto 12px;
 }
 
 .work-block-header {
@@ -876,7 +882,9 @@ body {
     flex-direction: column;
     gap: 6px;
 }
-.work-active { margin: 6px 0; }
+/* The active step lives OUTSIDE the collapsible block, as a sibling of it in
+   #messages, so it needs the same 800px column as the work block and .message. */
+.work-active { max-width: 800px; margin: 6px auto; }
 .work-history { margin-top: 6px; }
 
 .work-step {
@@ -914,9 +922,12 @@ body {
 
 /* Past thinking container (Question 3): holds completed steps' reasoning,
    collapsed by default, kept separate from the active step's visible reasoning.
-   Mirrors the work-block active/history split. */
+   Mirrors the work-block active/history split. Same 800px column as the work
+   block and .message, for the same reason: it is a direct child of #messages and
+   should line up with the prompt and response around it. */
 .thinking-history {
-    margin: 6px 0;
+    max-width: 800px;
+    margin: 6px auto;
 }
 .thinking-history-header {
     padding: 6px 12px;

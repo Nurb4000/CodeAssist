@@ -659,9 +659,15 @@ function ensurePastThinkingContainer() {
     });
     pastThinkingListEl = c.querySelector('.past-thinking-list');
     // Sits after the work block / active step during a run (like the Work
-    // section). With no work block (a prose-only turn, including a reloaded
-    // summary), park it at the end of the flow so it never lands mid-message.
-    const anchor = workActiveEl || workBlockEl;
+    // section), so it reads under the prompt and above the response. A prose-only
+    // turn never builds a work block (neither path calls ensureWorkBlock()), so
+    // anchor on the user message itself: appendUserMessage() sets lastUserEl and
+    // appendAssistantMessage() deliberately leaves it alone, so it still points at
+    // this turn's prompt even though the response has already been flushed into
+    // the flow. Falling back to appendChild() here parked the container AFTER the
+    // response instead -- the "past thinking sometimes sits down here" inconsistency.
+    const userAnchor = lastUserEl && lastUserEl.isConnected ? lastUserEl : null;
+    const anchor = workActiveEl || workBlockEl || userAnchor;
     if (anchor) anchor.after(c);
     else messagesEl.appendChild(c);
     pastThinkingEl = c;
