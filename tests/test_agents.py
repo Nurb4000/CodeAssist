@@ -3,6 +3,9 @@ import pytest
 
 from codeassist.agents import AgentConfig, AgentManager, AgentPermissions, Permission
 
+# The six primary modes, each of which seeds with an integer step budget.
+PRIMARY_MODES = ("default", "research", "review", "build", "general", "explore")
+
 
 class TestPermission:
     """Test permission class."""
@@ -213,8 +216,8 @@ class TestAgentManager:
 
         by_key = {key: cfg.steps for key, cfg in manager._agents.items()}
         # The six primary modes each seed with an integer step budget.
-        assert set(by_key) >= {"default", "research", "review", "build", "general", "explore"}
-        for key in {"default", "research", "review", "build", "general", "explore"}:
+        assert set(by_key) >= set(PRIMARY_MODES)
+        for key in PRIMARY_MODES:
             assert isinstance(by_key[key], int), f"{key} missing a step budget"
         # Read-only modes get a smaller budget than the long-running build agent.
         assert by_key["explore"] < by_key["build"]
@@ -227,7 +230,8 @@ class TestAgentManager:
     async def test_builtin_step_override_applied_on_reinit(self):
         """A persisted per-agent step override for a built-in is re-applied after a
         fresh manager init — this is how the admin Agents tab tunes built-ins."""
-        from codeassist.session import Agent as AgentRecord, init_db
+        from codeassist.session import Agent as AgentRecord
+        from codeassist.session import init_db
 
         await init_db()  # create schema/tables
 
