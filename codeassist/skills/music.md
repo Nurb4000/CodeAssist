@@ -438,3 +438,17 @@ User: "Create a melancholic indie folk song, about 2 minutes long"
   "seed": 0
 }
 ```
+
+---
+
+## JSON Formatting Critical Rules
+
+1. **Lyrics must use escaped `\n`, not raw newlines.** In JSON, line breaks inside the `lyrics` string must be written as backslash-n (`\n`). A literal newline character breaks the JSON and corrupts the payload — always escape them.
+2. **Validate before outputting.** Run `python3 -c "import json; json.load(open('file.json'))"` on each file to confirm it parses cleanly before delivering it.
+
+---
+
+## Validation Steps
+
+1. **Validate JSON output** — run `python3 -c "import json; json.load(open('file.json'))"` on each file; confirm it parses cleanly before delivering.
+2. **Rebuild if broken** — if a file fails validation, regenerate it with escaped `\n` escapes (a Python `json.dump` of a line-list is the safest method).
