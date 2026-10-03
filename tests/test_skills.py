@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from codeassist.config import SkillsConfig
-from codeassist.skills import SkillRegistry, SkillTool
+from codeassist.skills import SkillRegistry, SkillTool, SkillValidationError
 from codeassist.tools import ToolResult
 
 
@@ -499,4 +499,96 @@ class TestPackagedSkills:
                               include_packaged=False)
 
         assert SkillRegistry(tmp_path, config).discover() == []
+
+
+class TestCreateSkill:
+    """Writing a new skill file into the custom skills directory."""
+
+    @staticmethod
+    def _registry(tmp_path):
+        return SkillRegistry(
+            tmp_path, SkillsConfig(directories=["codeassist/skills", "runtime/skills"],
+                                   include_packaged=False)
+        )
+
+    def test_create_writes_a_discoverable_custom_skill(self, tmp_path):
+        registry = self._registry(tmp_path)
+        registry.discover()
+
+        path = registry.create_skill("my-skill", "does a thing", "step one", "mine")
+
+        assert path == tmp_path / "runtime" / "skills" / "my-skill.md"
+        assert path.is_file()
+        # Discoverable immediately, and user-owned so it can be edited/deleted.
+        assert registry.get_skill("my-skill") is not None
+        assert registry.is_user_owned("my-skill") is True
+        assert registry.get_by_slash_command("mine") is not None
+
+    def test_create_refuses_to_clobber_an_existing_custom_skill(self, tmp_path):
+        """Overwriting is refused, so nothing the user wrote is lost silently."""
+        registry = self._registry(tmp_path)
+        registry.discover()
+        registry.create_skill("mine", "the original", "body")
+
+        with pytest.raises(FileExistsError):
+            registry.create_skill("mine", "the replacement", "other body")
+
+        registry.discover()
+        assert registry.get_skill("mine").description == "the original"
+
+    def test_create_may_shadow_a_base_skill(self, tmp_path):
+        """Creating a base skill's name is how a shipped skill gets overridden.
+
+        Discovery prefers the later directory, so the custom copy wins -- and the
+        base file is left where it is for the next `promote`/reset.
+        """
+        base_dir = tmp_path / "codeassist" / "skills"
+        base_dir.mkdir(parents=True)
+        (base_dir / "clean.md").write_text(
+            "---\nname: clean\ndescription: shipped\n---\nshipped body\n", encoding="utf-8"
+        )
+        registry = self._registry(tmp_path)
+        registry.discover()
+        assert registry.get_skill("clean").description == "shipped"
+
+        registry.create_skill("clean", "my own clean", "mine", "myclean")
+
+        assert (base_dir / "clean.md").is_file(), "the shipped file is untouched"
+        registry.discover()
+        assert registry.get_skill("clean").description == "my own clean"
+        assert registry.category_for(registry.get_skill("clean")) == "custom"
+
+    @pytest.mark.parametrize("bad_name", ["", "   ", "has space", "../../etc/passwd", "a/b"])
+    def test_create_rejects_a_name_that_would_not_reparse(self, tmp_path, bad_name):
+        """A name the frontmatter parser rejects never reaches the filesystem.
+
+        The name pattern is also what keeps the write inside the custom
+        directory, so a traversal attempt has to die here.
+        """
+        registry = self._registry(tmp_path)
+        registry.discover()
+
+        with pytest.raises(SkillValidationError):
+            registry.create_skill(bad_name, "d", "body")
+
+        assert not (tmp_path / "runtime").exists()
+
+    def test_create_requires_a_description(self, tmp_path):
+        """`description` is what the agent sees when choosing a skill."""
+        registry = self._registry(tmp_path)
+
+        with pytest.raises(SkillValidationError):
+            registry.create_skill("no-desc", "", "body")
+
+        assert not (tmp_path / "runtime").exists()
+
+    def test_created_description_survives_a_reparse(self, tmp_path):
+        """Quotes in a description must not break the naive frontmatter parser."""
+        registry = self._registry(tmp_path)
+        registry.discover()
+
+        registry.create_skill("quoted", 'He said "go" -- then left', "body")
+
+        registry.discover()
+        assert registry.get_skill("quoted").description == 'He said "go" -- then left'
 

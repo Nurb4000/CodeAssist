@@ -227,10 +227,10 @@ Each registry tab lists items in a table with an **Add/Create** form and per-ite
 
 | Section | What you can do |
 |---------|-----------------|
-| **Skills** | View skills (name, description, slash command, source). **Reload skills from disk** to pick up new/changed files without restart. **Create** a skill from the form (name, description, slash command, content). |
+| **Skills** | View skills (name, description, slash command, source). Custom skills — the ones in `runtime/skills` — can be **Edit**ed or **Delete**d; base skills that ship with the app are read-only. **Reload skills from disk** picks up new/changed files without restart. **Create** writes a new custom skill into `runtime/skills`. |
 | **MCP servers** | **Add** a server (name + config JSON). **Edit** any server via a modal (name, config, enabled toggle). **Delete** with confirmation. Requires MCP enabled in config. |
 | **LSP servers** | **Add** a server (name, command, args JSON, languages JSON). **Edit** via modal (name, command, args, languages, enabled). **Delete** with confirmation. |
-| **Plugins** | Read-only listing (name, version, enabled). Plugins load from disk; manage them by editing the plugin files and using **Reload**. |
+| **Plugins** | Listing of plugins discovered on disk (name, version, enabled), each with a **Delete** action. Plugins are executable code, so add or change them by editing the files under `codeassist/plugins/` and restarting. |
 | **Custom tools** | Listing of tools discovered in `runtime/custom_tools/`. **Reload custom tools** to re-scan the directory without restart. |
 | **Agents** | View agents (key, name, description, model). **Create** a custom agent (key, description, model, instructions). **Edit** custom agents via modal (description, instructions, model, max iterations). **Delete** custom agents with confirmation. Built-in agents (`default`, `research`, `review`, `build`, …) are marked `built-in` and cannot be edited or deleted. |
 

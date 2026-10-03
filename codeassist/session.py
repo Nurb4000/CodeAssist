@@ -262,20 +262,6 @@ async def _add_v2_tables(db):
     """)
 
     await db.execute("""
-        CREATE TABLE IF NOT EXISTS skills (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            content TEXT,
-            source TEXT,
-            slash_command TEXT,
-            enabled INTEGER DEFAULT 1,
-            created_at TEXT,
-            updated_at TEXT
-        )
-    """)
-
-    await db.execute("""
         CREATE TABLE IF NOT EXISTS plugins (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
@@ -1279,61 +1265,6 @@ class MCPServer:
     async def delete(self):
         async with get_db() as db:
             await db.execute("DELETE FROM mcp_servers WHERE id = ?", (self.id,))
-            await db.commit()
-
-
-class Skill:
-    def __init__(self, skill_id: str):
-        self.id = skill_id
-
-    @classmethod
-    async def create(
-        cls,
-        name: str,
-        description: str,
-        content: str,
-        source: str | None = None,
-        slash_command: str | None = None,
-    ) -> "Skill":
-        sid = str(uuid.uuid4())
-        now = datetime.now(UTC).isoformat()
-        async with get_db() as db:
-            await db.execute(
-                "INSERT INTO skills (id, name, description, content, source, slash_command, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (sid, name, description, content, source, slash_command, now, now),
-            )
-            await db.commit()
-        return cls(sid)
-
-    @classmethod
-    async def list_all(cls) -> list[dict]:
-        async with get_db() as db:
-            cursor = await db.execute("SELECT * FROM skills WHERE enabled = 1 ORDER BY name")
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
-
-    @classmethod
-    async def get(cls, skill_id: str) -> "Skill | None":
-        async with get_db() as db:
-            cursor = await db.execute("SELECT * FROM skills WHERE id = ?", (skill_id,))
-            row = await cursor.fetchone()
-            if row:
-                return cls(row[0])
-        return None
-
-    @classmethod
-    async def get_by_slash_command(cls, command: str) -> "Skill | None":
-        async with get_db() as db:
-            cursor = await db.execute("SELECT * FROM skills WHERE slash_command = ? AND enabled = 1", (command,))
-            row = await cursor.fetchone()
-            if row:
-                return cls(row[0])
-        return None
-
-    async def delete(self):
-        async with get_db() as db:
-            await db.execute("UPDATE skills SET enabled = 0 WHERE id = ?", (self.id,))
             await db.commit()
 
 

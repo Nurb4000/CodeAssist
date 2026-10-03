@@ -327,6 +327,7 @@ async def execute(input: str) -> ToolResult:
 ### Management
 
 - **API**: `GET /api/auto-creation/status` - View auto-creation stats
+- **API**: `POST /api/skills` - Create a custom skill (written to `runtime/skills/`, same place the `create_skill` tool writes)
 - **API**: `POST /api/skills/reload` - Reload skills from disk
 - **API**: `GET /api/skills/export` - Download a portable JSON manifest of all skills (base + custom)
 - **API**: `POST /api/skills/import` - Import skills from a manifest (`base` entries land in `codeassist/skills`, `custom` in `runtime/skills`)

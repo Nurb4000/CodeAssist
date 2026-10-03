@@ -200,6 +200,69 @@ def ws_client(tmp_path, monkeypatch):
         yield client, tmp_path
 
 
+def test_create_skill_route_writes_a_discoverable_file(ws_client):
+    """The create form used to insert a row into a table nothing read back.
+
+    The skill was reported created and never appeared in the list, because
+    every other skills endpoint reads the workspace, not the database. It now
+    lands in runtime/skills and shows up without a reload.
+    """
+    client, ws = ws_client
+    r = client.post("/api/skills", json={
+        "name": "my-new-skill",
+        "description": "does a thing",
+        "content": "step one",
+        "slash_command": "newskill",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["category"] == "custom"
+    assert body["path"] == "runtime/skills/my-new-skill.md"
+    assert (ws / "runtime" / "skills" / "my-new-skill.md").is_file()
+
+    listed = {s["name"]: s for s in client.get("/api/skills").json()["skills"]}
+    assert listed["my-new-skill"]["slash_command"] == "newskill"
+    assert listed["my-new-skill"]["category"] == "custom"
+
+
+def test_create_skill_route_rejects_bad_input(ws_client):
+    """A name that would not re-parse is a 400 and writes nothing."""
+    client, ws = ws_client
+    for bad in ("", "has space", "../../etc/passwd"):
+        r = client.post("/api/skills", json={"name": bad, "description": "d", "content": "c"})
+        assert r.status_code == 400, (bad, r.text)
+    assert not (ws / "runtime").exists()
+
+
+def test_create_skill_route_refuses_to_clobber_a_custom_skill(ws_client):
+    client, ws = ws_client
+    original = _write_custom_skill(ws, "taken", "the original")
+
+    r = client.post("/api/skills", json={"name": "taken", "description": "clobber", "content": "c"})
+
+    assert r.status_code == 409, r.text
+    assert "the original" in original.read_text()
+
+
+def test_reload_route_reports_the_live_registry(ws_client):
+    """"Reload skills from disk" has to reload the registry the server serves.
+
+    It used to reload a throwaway registry and report that one's private skill
+    count, so a skill dropped into the workspace while the server ran stayed
+    invisible until a restart.
+    """
+    client, ws = ws_client
+    _write_custom_skill(ws, "late", "added out of band")
+    assert "late" not in {s["name"] for s in client.get("/api/skills").json()["skills"]}
+
+    r = client.post("/api/skills/reload")
+    assert r.status_code == 200, r.text
+    listed = client.get("/api/skills").json()["skills"]
+    assert "late" in {s["name"] for s in listed}
+    assert r.json()["count"] == len(listed), "the count is what the server now serves"
+
+
 def test_update_skill_route(ws_client):
     client, ws = ws_client
     fp = _write_custom_skill(ws, "demo", "old desc", "old body", "demo")

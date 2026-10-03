@@ -28,6 +28,25 @@ def _discover_registry():
     return registry
 
 
+def _refresh_live_registry():
+    """Re-discover the boot-time registry so an on-disk change takes effect now.
+
+    Every mutating route needs this, and doing it by hand meant reaching into two
+    private dicts and re-implementing what ``SkillRegistry.reload()`` already
+    does -- five copies of it, all liable to drift. Returns the refreshed
+    registry so a caller can report what the server now serves, or None if the
+    app booted without one.
+    """
+    from codeassist.skills import SkillRegistry
+
+    from ..server import skill_registry
+
+    if not isinstance(skill_registry, SkillRegistry):
+        return None
+    skill_registry.reload()
+    return skill_registry
+
+
 @router.get("")
 async def list_skills():
     """List all discovered skills from configured directories."""
@@ -40,20 +59,43 @@ async def list_skills():
 
 @router.post("")
 async def create_skill(body: dict):
-    """Create a new skill stored in the database. Body must contain 'name', 'description', and 'content'."""
-    from codeassist.session import Skill
+    """Create a new custom skill on disk. Body must contain 'name' and
+    'description'; 'content' and 'slash_command' are optional.
+
+    The file lands in the custom skills directory, the same place the
+    ``create_skill`` agent tool writes, so it shows up in the list immediately.
+    This used to insert a row into the legacy ``skills`` table that nothing read
+    back: the create form reported success and the skill never appeared.
+    """
+    from codeassist.skills import SkillRegistry, SkillValidationError
 
     from ..server import get_config
+
     cfg = get_config()
     if not cfg.skills.enabled:
         raise HTTPException(status_code=400, detail="Skills are not enabled")
-    skill = await Skill.create(
-        name=body.get("name"),
-        description=body.get("description", ""),
-        content=body.get("content", ""),
-        slash_command=body.get("slash_command"),
-    )
-    return {"id": skill.id}
+
+    registry = _discover_registry()
+    name = (body.get("name") or "").strip()
+    try:
+        path = registry.create_skill(
+            name,
+            description=body.get("description", ""),
+            content=body.get("content", ""),
+            slash_command=body.get("slash_command"),
+        )
+    except SkillValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    _refresh_live_registry()
+    return {
+        "ok": True,
+        "name": name,
+        "path": path.relative_to(registry.workspace).as_posix(),
+        "category": SkillRegistry.CATEGORY_CUSTOM,
+    }
 
 
 @router.get("/list")
@@ -65,10 +107,16 @@ async def list_all_skills():
 
 @router.post("/reload")
 async def reload_skills():
-    """Hot-reload skills from disk without restarting the server."""
-    registry = _fresh_registry()
-    registry.reload()
-    return {"message": "Skills reloaded", "count": len(registry._skills)}
+    """Hot-reload skills from disk without restarting the server.
+
+    Reports the count the live registry now holds. This used to reload a
+    throwaway registry and answer with that one's private skill count, so the
+    button reported a number unrelated to what the server was serving -- and
+    never actually reloaded the live one.
+    """
+    registry = _refresh_live_registry()
+    count = len(registry.list_skills()) if registry else 0
+    return {"message": "Skills reloaded", "count": count}
 
 
 def _not_user_owned(registry, name: str, action: str) -> HTTPException:
@@ -97,10 +145,6 @@ async def update_skill(name: str, body: dict):
     is re-discovered so it takes effect immediately. Base and packaged skills are
     read-only and are rejected with a 409.
     """
-    from codeassist.skills import SkillRegistry
-
-    from ..server import skill_registry as global_registry
-
     registry = _discover_registry()
     skill = registry.get_skill(name)
     if not skill:
@@ -119,10 +163,7 @@ async def update_skill(name: str, body: dict):
                             detail=f"Skill '{name}' is not backed by a workspace file")
 
     # Refresh the live registry so subsequent sessions/tools see the edit.
-    if isinstance(global_registry, SkillRegistry):
-        global_registry._skills.clear()
-        global_registry._slash_commands.clear()
-        global_registry.discover()
+    _refresh_live_registry()
     return {"ok": True, "path": str(path)}
 
 
@@ -133,10 +174,6 @@ async def delete_skill(name: str):
     Base and packaged skills are not the user's to remove and are rejected with
     a 409 rather than deleting a shipped file.
     """
-    from codeassist.skills import SkillRegistry
-
-    from ..server import skill_registry as global_registry
-
     registry = _discover_registry()
     if not registry.get_skill(name):
         raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
@@ -148,10 +185,7 @@ async def delete_skill(name: str):
         raise HTTPException(status_code=409,
                             detail=f"Skill '{name}' is not backed by a workspace file")
 
-    if isinstance(global_registry, SkillRegistry):
-        global_registry._skills.clear()
-        global_registry._slash_commands.clear()
-        global_registry.discover()
+    _refresh_live_registry()
     return {"ok": True, "deleted": str(path)}
 
 
@@ -169,10 +203,6 @@ async def import_skills(manifest: dict):
     ``base`` entries are written to the shipped directory and ``custom`` entries
     to the runtime directory; the live registry is reloaded so imports take effect.
     """
-    from codeassist.skills import SkillRegistry
-
-    from ..server import skill_registry as global_registry
-
     registry = _discover_registry()
     try:
         result = registry.import_skills(manifest)
@@ -180,20 +210,13 @@ async def import_skills(manifest: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
     # Refresh the live registry so subsequent sessions/tools see the imports.
-    if isinstance(global_registry, SkillRegistry):
-        global_registry._skills.clear()
-        global_registry._slash_commands.clear()
-        global_registry.discover()
+    _refresh_live_registry()
     return {"ok": True, **result}
 
 
 @router.post("/{name}/promote")
 async def promote_skill(name: str):
     """Promote a custom skill into the shipped base directory."""
-    from codeassist.skills import SkillRegistry
-
-    from ..server import skill_registry as global_registry
-
     registry = _discover_registry()
     target = registry.promote_skill(name)
     if target is None:
@@ -205,8 +228,5 @@ async def promote_skill(name: str):
             ),
         )
 
-    if isinstance(global_registry, SkillRegistry):
-        global_registry._skills.clear()
-        global_registry._slash_commands.clear()
-        global_registry.discover()
+    _refresh_live_registry()
     return {"ok": True, "path": target}

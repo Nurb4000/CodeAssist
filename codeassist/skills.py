@@ -34,6 +34,18 @@ class Skill:
         }
 
 
+def _unquote_frontmatter(value: str) -> str:
+    """Read back what :func:`SkillRegistry.format_skill_file` wrote.
+
+    The writer wraps a description in quotes and escapes any ``"`` inside it, so
+    the value survives the naive ``key: value`` split in
+    ``_parse_skill_file``. Stripping the quotes without undoing the escapes left
+    them in the description the agent reads -- ``He said \\"go\\"`` for a skill
+    whose text says ``He said "go"``.
+    """
+    return value.strip().strip('"').strip("'").replace('\\"', '"')
+
+
 def validate_skill_frontmatter(frontmatter: dict[str, str], path: Path) -> None:
     """Validate skill frontmatter fields.
 
@@ -168,7 +180,7 @@ class SkillRegistry:
                 for line in fm_content.strip().split("\n"):
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        frontmatter[key.strip()] = value.strip().strip('"').strip("'")
+                        frontmatter[key.strip()] = _unquote_frontmatter(value)
 
         name = frontmatter.get("name", path.stem)
         description = frontmatter.get("description", "")
@@ -239,6 +251,37 @@ class SkillRegistry:
         """
         skill = self._skills.get(name)
         return bool(skill) and self.category_for(skill) == self.CATEGORY_CUSTOM
+
+    def create_skill(self, name: str, description: str = "", content: str = "",
+                     slash_command: str | None = None) -> Path:
+        """Write a new custom skill file under the custom skills directory and
+        return its path. Reloads, so the new skill is discoverable at once.
+
+        New skills are always custom: the base directory is what ships with the
+        app. Shadowing a base or packaged skill by name is allowed -- that is how
+        a shipped skill gets overridden, and discovery prefers the later
+        directory -- but overwriting an existing *custom* skill is refused, so
+        nothing the user wrote is silently replaced.
+
+        Raises :class:`SkillValidationError` if the frontmatter would not survive
+        a re-parse, and :class:`FileExistsError` if a custom skill of that name
+        is already there.
+        """
+        name = (name or "").strip()
+        target_dir = self.workspace / self.CUSTOM_DIR
+        target = target_dir / f"{name}.md"
+        # Validated before any filesystem write: the name pattern is what keeps
+        # `target` inside the custom directory, so a traversal attempt dies here.
+        validate_skill_frontmatter(
+            {"name": name, "description": description or "", "slash": slash_command}, target
+        )
+        if target.exists():
+            raise FileExistsError(f"A custom skill already exists at {target}")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.format_skill_file(name, description, content, slash_command),
+                          encoding="utf-8")
+        self.reload()
+        return target
 
     @staticmethod
     def format_skill_file(name: str, description: str, content: str,
