@@ -110,7 +110,15 @@ def _unquote_frontmatter(value: str) -> str:
     \\"go\\"`` for a skill whose text says ``He said "go"`` -- and a description
     written across two lines lost everything after the first.
     """
-    return _unescape_frontmatter(value.strip().strip('"').strip("'"))
+    value = value.strip()
+    # Only a matched pair around the whole value counts. ``strip('"').strip("'")``
+    # chewed one character at a time from each end, which quietly ate a real
+    # apostrophe or quote: ``"twas the night`` lost its first character, and a
+    # description ending in an apostrophe lost its last. Single quotes are not
+    # written by any of our writers, so this is only about hand-edited files.
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    return _unescape_frontmatter(value)
 
 
 def validate_skill_frontmatter(frontmatter: dict[str, str], path: Path) -> None:

@@ -626,6 +626,10 @@ class TestCreateSkill:
         "use --- as a separator",
         "colon: in the middle",
         "trailing backslash \\",
+        "'twas the night before Christmas",
+        "ends with an apostrophe'",
+        'a "quoted" word in the middle',
+        '"fully wrapped in quotes"',
     ])
     def test_a_description_survives_a_reparse(self, tmp_path, description):
         """Whatever a description contains, it must come back unchanged.
