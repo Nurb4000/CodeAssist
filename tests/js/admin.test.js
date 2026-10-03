@@ -87,9 +87,9 @@ test('skills and custom tools are listed alphabetically', async () => {
     fixtures: {
       '/api/skills': {
         skills: [
-          { name: 'zebra', description: 'z' },
-          { name: 'Alpha', description: 'a' },
-          { name: 'mid', description: 'm' },
+          { name: 'zebra', description: 'z', category: 'custom' },
+          { name: 'Alpha', description: 'a', category: 'custom' },
+          { name: 'mid', description: 'm', category: 'custom' },
         ],
       },
       '/api/custom-tools': { tools: [{ name: 'zeta' }, { name: 'beta' }] },
@@ -98,6 +98,99 @@ test('skills and custom tools are listed alphabetically', async () => {
 
   assert.deepStrictEqual(cellTexts(doc, 'skills-body'), ['Alpha', 'mid', 'zebra']);
   assert.deepStrictEqual(cellTexts(doc, 'custom-body'), ['beta', 'zeta']);
+});
+
+test('only custom skills offer edit and delete', async () => {
+  // Regression cover: every skill row used to carry an Edit and a Delete button
+  // labelled just "skill", including the base skills that ship with the app. The
+  // delete silently removed a shipped file and the label did not say what it
+  // deleted. Only custom skills are the user's to change.
+  const { document: doc } = await bootAdmin({
+    fixtures: {
+      '/api/skills': {
+        skills: [
+          { name: 'code-review', description: 'shipped', category: 'base', source: 'codeassist/skills/code-review.md' },
+          { name: 'packaged', description: 'from the wheel', category: 'packaged', source: 'package:/x/skills/packaged.md' },
+          { name: 'mine', description: 'my own', category: 'custom', source: 'runtime/skills/mine.md' },
+          { name: 'mystery', description: 'no category at all' },
+        ],
+      },
+    },
+  });
+
+  const actionsBySkill = new Map(
+    Array.from(doc.querySelectorAll('#skills-body tr')).map((tr) => [
+      tr.querySelector('td.cell-em').textContent.trim(),
+      tr.lastElementChild.textContent.trim(),
+    ]),
+  );
+
+  assert.deepStrictEqual(
+    Array.from(actionsBySkill, ([name, actions]) => [name, actions]),
+    [
+      ['code-review', 'read-only'],
+      ['mine', 'EditDelete'],
+      ['mystery', 'read-only'],
+      ['packaged', 'read-only'],
+    ],
+  );
+
+  // And no stray button hiding in another column of a non-custom row.
+  assert.strictEqual(
+    doc.querySelectorAll('#skills-body .admin-btn-danger').length,
+    1,
+    'exactly one deletable skill',
+  );
+  assert.strictEqual(
+    doc.querySelectorAll('#skills-body .admin-btn-danger')[0].textContent.trim(),
+    'Delete',
+  );
+});
+
+test('row actions get their own column, not the last data cell', async () => {
+  // Regression cover: the plugins and custom-tools tables had no actions column,
+  // so `tr.lastElementChild` -- the cell the buttons are appended to -- was the
+  // Version/Enabled/Description cell. Each row read "1.0yes[plugin]", which looks
+  // like the version cell has a control in it. Every table with row actions needs
+  // a trailing empty cell of its own, header included.
+  const { document: doc } = await bootAdmin({
+    fixtures: {
+      '/api/skills': { skills: [{ name: 'mine', description: 'd', category: 'custom' }] },
+      '/api/plugins': { plugins: [{ name: 'demo', version: '1.0', enabled: true }] },
+      '/api/custom-tools': { tools: [{ name: 'mytool', description: 'd' }] },
+      '/api/mcp/servers': { servers: [{ id: 'srv', name: 'srv', config: {}, enabled: true }] },
+    },
+  });
+
+  const tables = ['skills-body', 'mcp-body', 'plugins-body', 'custom-body'];
+  for (const id of tables) {
+    const table = doc.querySelector(`#${id}`).closest('table');
+    const ths = Array.from(table.querySelectorAll('thead th'));
+    const row = doc.querySelector(`#${id} tr`);
+
+    assert.strictEqual(
+      row.children.length,
+      ths.length,
+      `#${id}: ${row.children.length} cells against ${ths.length} headers`,
+    );
+    assert.strictEqual(
+      ths[ths.length - 1].textContent.trim(),
+      '',
+      `#${id}: the last header is the actions column and must be blank`,
+    );
+    assert.ok(
+      row.lastElementChild.querySelector('.admin-btn'),
+      `#${id}: the actions column holds the buttons, not a data cell`,
+    );
+  }
+
+  // And the noun-only danger labels are gone: they read as "plugin" /
+  // "custom tool" with no verb, which is what made the skills one confusing.
+  for (const id of ['skills-body', 'plugins-body', 'custom-body']) {
+    const labels = Array.from(doc.querySelectorAll(`#${id} .admin-btn-danger`))
+      .map((b) => b.textContent.trim());
+    assert.deepStrictEqual(labels, ['Delete'], `#${id}: delete buttons are labelled`);
+  }
 });
 
 test('built-in and custom agents are both listed', async () => {

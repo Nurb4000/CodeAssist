@@ -229,6 +229,17 @@ class SkillRegistry:
             return None
         return candidate
 
+    def is_user_owned(self, name: str) -> bool:
+        """Whether a discovered skill is the user's own, and so may be mutated.
+
+        Only custom skills qualify. Base skills ship with the app and packaged
+        ones live in the installed package: both are the app's, not the user's,
+        and deleting one either destroys a shipped file or silently does nothing.
+        Unknown names are not user-owned either.
+        """
+        skill = self._skills.get(name)
+        return bool(skill) and self.category_for(skill) == self.CATEGORY_CUSTOM
+
     @staticmethod
     def format_skill_file(name: str, description: str, content: str,
                           slash_command: str | None = None) -> str:
@@ -247,8 +258,9 @@ class SkillRegistry:
     def update_skill(self, name: str, description: str = "", content: str = "",
                      slash_command: str | None = None) -> Path | None:
         """Rewrite a discovered skill's file in place. Returns the path, or None
-        if the skill is not backed by a discoverable workspace file."""
-        path = self._resolve_skill_path(name)
+        if the skill is not a user-owned custom skill backed by a discoverable
+        workspace file."""
+        path = self._resolve_skill_path(name) if self.is_user_owned(name) else None
         if path is None:
             return None
         path.write_text(self.format_skill_file(name, description, content, slash_command),
@@ -256,17 +268,22 @@ class SkillRegistry:
         return path
 
     def remove_skill(self, name: str) -> Path | None:
-        """Delete a discovered skill's file. Returns the path, or None if not
-        backed by a discoverable workspace file."""
-        path = self._resolve_skill_path(name)
+        """Delete a discovered skill's file. Returns the path, or None if it is
+        not a user-owned custom skill backed by a discoverable workspace file."""
+        path = self._resolve_skill_path(name) if self.is_user_owned(name) else None
         if path is None:
             return None
         path.unlink()
         return path
 
     def list_skills(self) -> list[dict]:
-        """List all available skills."""
-        return [skill.to_dict() for skill in self._skills.values()]
+        """List all available skills, each tagged with its origin category.
+
+        The category is what lets a consumer tell user-owned skills (the only
+        ones safe to edit or delete) from the ones the app itself owns.
+        """
+        return [{**skill.to_dict(), "category": self.category_for(skill)}
+                for skill in self._skills.values()]
 
     # --- export / import / promote (portability) --------------------------- #
 
@@ -275,8 +292,27 @@ class SkillRegistry:
     CUSTOM_DIR = "runtime/skills"
     PACKAGE_SOURCE_PREFIX = "package:"
 
+    CATEGORY_BASE = "base"
+    CATEGORY_CUSTOM = "custom"
+    CATEGORY_PACKAGED = "packaged"
+
+    def category_for(self, skill: Skill) -> str:
+        """Classify a discovered skill as base, custom or packaged.
+
+        ``base`` skills ship under ``codeassist/skills`` and belong to the app,
+        so they are not the user's to modify. ``custom`` skills live in a
+        user-writable directory (``runtime/skills``) and are the only ones the
+        admin page may edit or delete. ``packaged`` skills come from the
+        installed package, outside the workspace entirely, so they are immutable.
+        """
+        source = skill.source or ""
+        if source.startswith(self.PACKAGE_SOURCE_PREFIX):
+            return self.CATEGORY_PACKAGED
+        return self._category_for(source)
+
     def _category_for(self, rel_posix: str) -> str:
-        return "base" if rel_posix.startswith(self.BASE_DIR + "/") else "custom"
+        return (self.CATEGORY_BASE if rel_posix.startswith(self.BASE_DIR + "/")
+                else self.CATEGORY_CUSTOM)
 
     def export_skills(self) -> dict:
         """Return a portable JSON manifest of every discovered skill.

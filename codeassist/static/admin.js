@@ -55,12 +55,12 @@ function row(cellsHtml) {
     return tr;
 }
 
-function delButton(id, label, onDelete) {
+function delButton(id, label, onDelete, confirmText) {
     const b = document.createElement('button');
     b.className = 'admin-btn admin-btn-danger';
     b.textContent = label;
     b.onclick = async () => {
-        if (!window.confirm(`Delete ${label.toLowerCase()}?`)) return;
+        if (!window.confirm(confirmText || `Delete ${label.toLowerCase()}?`)) return;
         try {
             await onDelete(id);
             setStatus('Deleted');
@@ -199,20 +199,33 @@ async function loadSkills() {
             `<td class="cell-em">${escapeHtml(s.name || '')}</td>` +
             `<td>${escapeHtml(s.description || '')}</td>` +
             `<td>${escapeHtml(s.slash_command || '')}</td>` +
-            `<td>${escapeHtml(s.source || '')}</td>`);
+            `<td>${escapeHtml(s.source || '')}</td>` +
+            '<td></td>');
         const actions = tr.lastElementChild;
-        actions.appendChild(editButton('Edit', () =>
-            openEditModal(`Skill: ${s.name}`, [
-                { key: 'description', label: 'Description', type: 'textarea', value: s.description || '' },
-                { key: 'slash_command', label: 'Slash command', type: 'text', value: s.slash_command || '' },
-            ], async (p) => {
-                await api('PUT', `/api/skills/${encodeURIComponent(s.name)}`, {
-                    description: p.description,
-                    slash_command: p.slash_command || null,
-                });
-            })));
-        actions.appendChild(delButton(s.name, 'skill', (name) =>
-            api('DELETE', `/api/skills/${encodeURIComponent(name)}`)));
+        // Custom skills are the only ones the user owns, so they are the only
+        // ones that get edit/delete. Base skills ship with the app and packaged
+        // ones live in the installed package: neither may be touched from here.
+        // A missing or unrecognised category therefore gets no actions either --
+        // a missing Delete button is cosmetic, a Delete button on a base skill
+        // destroys a shipped file.
+        if (s.category === 'custom') {
+            actions.appendChild(editButton('Edit', () =>
+                openEditModal(`Custom skill: ${s.name}`, [
+                    { key: 'description', label: 'Description', type: 'textarea', value: s.description || '' },
+                    { key: 'slash_command', label: 'Slash command', type: 'text', value: s.slash_command || '' },
+                ], async (p) => {
+                    await api('PUT', `/api/skills/${encodeURIComponent(s.name)}`, {
+                        description: p.description,
+                        slash_command: p.slash_command || null,
+                    });
+                })));
+            actions.appendChild(delButton(s.name, 'Delete',
+                (name) => api('DELETE', `/api/skills/${encodeURIComponent(name)}`),
+                `Delete custom skill "${s.name}"? Its file is removed from the workspace.`));
+        } else {
+            actions.className = 'admin-muted';
+            actions.textContent = 'read-only';
+        }
         tbody.appendChild(tr);
     }
 }
@@ -280,10 +293,12 @@ async function loadPlugins() {
         const tr = row(
             `<td class="cell-em">${escapeHtml(p.name || '')}</td>` +
             `<td>${escapeHtml(p.version || '')}</td>` +
-            `<td>${p.enabled !== false ? 'yes' : 'no'}</td>`);
+            `<td>${p.enabled !== false ? 'yes' : 'no'}</td>` +
+            '<td></td>');
         const actions = tr.lastElementChild;
-        actions.appendChild(delButton(p.name, 'plugin', (name) =>
-            api('DELETE', `/api/plugins/${encodeURIComponent(name)}`)));
+        actions.appendChild(delButton(p.name, 'Delete',
+            (name) => api('DELETE', `/api/plugins/${encodeURIComponent(name)}`),
+            `Delete plugin "${p.name}"?`));
         tbody.appendChild(tr);
     }
 }
@@ -295,10 +310,12 @@ async function loadCustomTools() {
     for (const t of (data.tools || []).sort(byName)) {
         const tr = row(
             `<td class="cell-em">${escapeHtml(t.name || '')}</td>` +
-            `<td>${escapeHtml(t.description || '')}</td>`);
+            `<td>${escapeHtml(t.description || '')}</td>` +
+            '<td></td>');
         const actions = tr.lastElementChild;
-        actions.appendChild(delButton(t.name, 'custom tool', (name) =>
-            api('DELETE', `/api/custom-tools/${encodeURIComponent(name)}`)));
+        actions.appendChild(delButton(t.name, 'Delete',
+            (name) => api('DELETE', `/api/custom-tools/${encodeURIComponent(name)}`),
+            `Delete custom tool "${t.name}"?`));
         tbody.appendChild(tr);
     }
 }

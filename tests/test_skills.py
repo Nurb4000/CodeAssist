@@ -72,6 +72,44 @@ It should be discoverable.
         assert skills[0]["name"] == "test-skill"
         assert skills[0]["description"] == "A test skill for unit tests"
 
+    def test_list_skills_tags_origin_category(self, tmp_path):
+        """Each listed skill says whether it is base, custom or packaged.
+
+        The admin page keys the edit/delete row actions off this: only `custom`
+        skills are the user's to change, so a base or packaged skill must not be
+        reported as if it were one.
+        """
+        for sub, name, desc in (
+            ("codeassist/skills", "base-one", "shipped"),
+            ("runtime/skills", "custom-one", "mine"),
+        ):
+            d = tmp_path / sub
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{name}.md").write_text(
+                f"---\nname: {name}\ndescription: {desc}\n---\nbody\n"
+            )
+
+        registry = SkillRegistry(tmp_path, SkillsConfig(include_packaged=False))
+        registry.discover()
+
+        assert {s["name"]: s["category"] for s in registry.list_skills()} == {
+            "base-one": "base",
+            "custom-one": "custom",
+        }
+
+    def test_packaged_skill_is_not_reported_as_custom(self, tmp_path):
+        """A skill loaded from the installed package is neither base nor custom.
+
+        Misreporting it as `custom` would offer the admin page a Delete button
+        that can only ever fail.
+        """
+        registry = SkillRegistry(tmp_path, SkillsConfig(include_packaged=True))
+        registry.discover()
+
+        skill = registry.get_skill("code-review")
+        assert skill is not None
+        assert registry.category_for(skill) == SkillRegistry.CATEGORY_PACKAGED
+
     def test_get_instructions(self, skill_registry):
         """Test getting skill instructions for system prompt."""
         skill_registry.discover()

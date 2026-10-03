@@ -14,14 +14,25 @@ from codeassist import server
 # --------------------------------------------------------------------------- #
 
 
-def _write_skill(ws: Path, name: str, description: str, body: str, slash: str) -> Path:
+def _write_skill(ws: Path, name: str, description: str, body: str, slash: str,
+                 directory: str = "codeassist/skills") -> Path:
     from codeassist.skills import SkillRegistry
 
-    skill_dir = ws / "codeassist" / "skills"
+    skill_dir = ws / directory
     skill_dir.mkdir(parents=True, exist_ok=True)
     p = skill_dir / f"{name}.md"
     p.write_text(SkillRegistry.format_skill_file(name, description, body, slash), encoding="utf-8")
     return p
+
+
+def _write_custom_skill(ws: Path, name: str, description: str = "d", body: str = "body",
+                        slash: str | None = None) -> Path:
+    """Plant a user-owned skill in runtime/skills -- the only kind that may be
+    edited or deleted."""
+    return _write_skill(ws, name, description, body, slash, directory="runtime/skills")
+
+
+SKILL_DIRS = ["codeassist/skills", "runtime/skills"]
 
 
 def test_skill_format_roundtrip(tmp_path):
@@ -46,8 +57,8 @@ def test_update_skill_rewrites_file(tmp_path):
     from codeassist.config import SkillsConfig
     from codeassist.skills import SkillRegistry
 
-    cfg = SkillsConfig(enabled=True, directories=["codeassist/skills"])
-    _write_skill(tmp_path, "demo", "old desc", "old body", "demo")
+    cfg = SkillsConfig(enabled=True, directories=SKILL_DIRS)
+    _write_custom_skill(tmp_path, "demo", "old desc", "old body", "demo")
     reg = SkillRegistry(tmp_path, cfg)
     reg.discover()
 
@@ -70,14 +81,41 @@ def test_remove_skill_deletes_file(tmp_path):
     from codeassist.config import SkillsConfig
     from codeassist.skills import SkillRegistry
 
-    cfg = SkillsConfig(enabled=True, directories=["codeassist/skills"])
+    cfg = SkillsConfig(enabled=True, directories=SKILL_DIRS)
     reg = SkillRegistry(tmp_path, cfg)
-    fp = _write_skill(tmp_path, "demo", "d", "body", "demo")
+    fp = _write_custom_skill(tmp_path, "demo", "d", "body", "demo")
     reg.discover()
 
     path = reg.remove_skill("demo")
     assert path is not None
     assert not fp.exists()
+
+
+def test_base_skill_is_neither_editable_nor_removable(tmp_path):
+    """A skill that ships with the app must survive an edit or delete.
+
+    The registry is the choke point every caller goes through, so it refuses
+    base skills itself rather than trusting each caller to check first.
+    """
+    from codeassist.config import SkillsConfig
+    from codeassist.skills import SkillRegistry
+
+    cfg = SkillsConfig(enabled=True, directories=SKILL_DIRS, include_packaged=False)
+    reg = SkillRegistry(tmp_path, cfg)
+    fp = _write_skill(tmp_path, "shipped", "d", "body", "shipped")
+    reg.discover()
+
+    assert reg.is_user_owned("shipped") is False
+
+    assert reg.update_skill("shipped", description="vandalised") is None
+    assert "vandalised" not in fp.read_text(encoding="utf-8")
+
+    assert reg.remove_skill("shipped") is None
+    assert fp.exists(), "a shipped skill file must never be deleted"
+
+    # And an unknown name is refused the same way.
+    assert reg.is_user_owned("no-such-skill") is False
+    assert reg.remove_skill("no-such-skill") is None
 
 
 def test_remove_skill_blocks_traversal(tmp_path):
@@ -152,7 +190,7 @@ def ws_client(tmp_path, monkeypatch):
     """Boot the app with [server] workspace pointed at an isolated tmp dir."""
     (tmp_path / "config.toml").write_text(
         f"[server]\nhost = \"127.0.0.1\"\nport = 8090\nworkspace = \"{tmp_path!s}\"\n"
-        "[skills]\nenabled = true\ndirectories = [\"codeassist/skills\"]\n"
+        "[skills]\nenabled = true\ndirectories = [\"codeassist/skills\", \"runtime/skills\"]\n"
         "[plugins]\nenabled = true\ndirectories = [\"codeassist/plugins\"]\n",
         encoding="utf-8",
     )
@@ -164,7 +202,7 @@ def ws_client(tmp_path, monkeypatch):
 
 def test_update_skill_route(ws_client):
     client, ws = ws_client
-    fp = _write_skill(ws, "demo", "old desc", "old body", "demo")
+    fp = _write_custom_skill(ws, "demo", "old desc", "old body", "demo")
     r = client.put("/api/skills/demo", json={"description": "edited", "content": "edited body"})
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True
@@ -173,14 +211,29 @@ def test_update_skill_route(ws_client):
 
 def test_delete_skill_route_404_and_ok(ws_client):
     client, ws = ws_client
-    _write_skill(ws, "demo", "d", "body", "demo")
+    fp = _write_custom_skill(ws, "demo")
 
     assert client.delete("/api/skills/nope").status_code == 404
 
-    fp = next((ws / "codeassist" / "skills").glob("*.md"))
-    r = client.delete(f"/api/skills/{fp.name[:-3]}")
+    r = client.delete("/api/skills/demo")
     assert r.status_code == 200, r.text
     assert not fp.exists()
+
+
+def test_skill_routes_refuse_to_mutate_a_base_skill(ws_client):
+    """The API refuses a shipped skill even when the UI hides the buttons."""
+    client, ws = ws_client
+    fp = _write_skill(ws, "shipped", "d", "body", "shipped")
+
+    r = client.put("/api/skills/shipped", json={"description": "vandalised"})
+    assert r.status_code == 409, r.text
+    assert "base" in r.json()["detail"]
+    assert "vandalised" not in fp.read_text()
+
+    r = client.delete("/api/skills/shipped")
+    assert r.status_code == 409, r.text
+    assert "base" in r.json()["detail"]
+    assert fp.exists(), "a shipped skill file must never be deleted"
 
 
 def test_delete_plugin_route(ws_client):

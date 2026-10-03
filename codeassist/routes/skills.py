@@ -60,8 +60,7 @@ async def create_skill(body: dict):
 async def list_all_skills():
     """List all skills discovered from disk (bypasses database)."""
     registry = _discover_registry()
-    skills = registry.discover()
-    return {"skills": [s.to_dict() for s in skills]}
+    return {"skills": registry.list_skills()}
 
 
 @router.post("/reload")
@@ -72,12 +71,31 @@ async def reload_skills():
     return {"message": "Skills reloaded", "count": len(registry._skills)}
 
 
+def _not_user_owned(registry, name: str, action: str) -> HTTPException:
+    """409 for a mutation aimed at a skill the app owns rather than the user.
+
+    The registry enforces this too (its update/remove helpers refuse anything
+    that is not a custom skill); doing it here as well lets the API explain why
+    instead of reporting a generic "no workspace file" back.
+    """
+    skill = registry.get_skill(name)
+    category = registry.category_for(skill) if skill else "unknown"
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"Skill '{name}' is a {category} skill and cannot be {action}. "
+            f"Copy it into {registry.CUSTOM_DIR}/ to change it as your own skill."
+        ),
+    )
+
+
 @router.put("/{name}")
 async def update_skill(name: str, body: dict):
-    """Update a discovered skill's description/content/slash in place on disk.
+    """Update a custom skill's description/content/slash in place on disk.
 
     The change is written back to the skill's source file and the live registry
-    is re-discovered so it takes effect immediately.
+    is re-discovered so it takes effect immediately. Base and packaged skills are
+    read-only and are rejected with a 409.
     """
     from codeassist.skills import SkillRegistry
 
@@ -87,6 +105,8 @@ async def update_skill(name: str, body: dict):
     skill = registry.get_skill(name)
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
+    if not registry.is_user_owned(name):
+        raise _not_user_owned(registry, name, "edited")
 
     path = registry.update_skill(
         name,
@@ -108,7 +128,11 @@ async def update_skill(name: str, body: dict):
 
 @router.delete("/{name}")
 async def delete_skill(name: str):
-    """Delete a discovered skill's source file from the workspace."""
+    """Delete a custom skill's source file from the workspace.
+
+    Base and packaged skills are not the user's to remove and are rejected with
+    a 409 rather than deleting a shipped file.
+    """
     from codeassist.skills import SkillRegistry
 
     from ..server import skill_registry as global_registry
@@ -116,6 +140,8 @@ async def delete_skill(name: str):
     registry = _discover_registry()
     if not registry.get_skill(name):
         raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
+    if not registry.is_user_owned(name):
+        raise _not_user_owned(registry, name, "deleted")
 
     path = registry.remove_skill(name)
     if path is None:
