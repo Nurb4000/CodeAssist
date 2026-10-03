@@ -33,18 +33,15 @@ def _refresh_live_registry():
 
     Every mutating route needs this, and doing it by hand meant reaching into two
     private dicts and re-implementing what ``SkillRegistry.reload()`` already
-    does -- five copies of it, all liable to drift. Returns the refreshed
-    registry so a caller can report what the server now serves, or None if the
-    app booted without one.
+    does -- five copies of it, all liable to drift.
+
+    Thin wrapper over ``reload_live_registry()``, which the create_skill tool
+    also calls: activating a freshly written skill has to be the same step
+    whoever wrote it.
     """
-    from codeassist.skills import SkillRegistry
+    from codeassist.skills import reload_live_registry
 
-    from ..server import skill_registry
-
-    if not isinstance(skill_registry, SkillRegistry):
-        return None
-    skill_registry.reload()
-    return skill_registry
+    return reload_live_registry()
 
 
 @router.get("")

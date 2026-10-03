@@ -117,6 +117,27 @@ def validate_skill_frontmatter(frontmatter: dict[str, str], path: Path) -> None:
         )
 
 
+def reload_live_registry() -> "SkillRegistry | None":
+    """Re-discover the boot-time registry so a skill written now works now.
+
+    Writing a skill file is only half the job: the serving registry was built
+    at startup and holds its own copy, so a file written afterwards -- by the
+    admin UI, an import, or the ``create_skill`` tool -- stays invisible to
+    ``/skill`` and to name invocation until something reloads it.
+
+    Returns the refreshed registry, or None when the app booted without one
+    (CLI use, tests, skills disabled). Safe to call from anywhere: the import is
+    deferred because ``server`` imports this module.
+    """
+    from codeassist import server
+
+    registry = getattr(server, "skill_registry", None)
+    if not isinstance(registry, SkillRegistry):
+        return None
+    registry.reload()
+    return registry
+
+
 class SkillRegistry:
     """Discovers and manages skills from the workspace."""
 

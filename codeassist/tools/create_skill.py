@@ -17,6 +17,22 @@ from . import Tool, ToolResult
 log = logging.getLogger(__name__)
 
 
+def _activate_new_skill() -> bool:
+    """Make a just-written skill usable without a restart. True if it is live.
+
+    Returns False when there is no server registry to refresh (CLI, tests) or
+    when the refresh failed -- callers report the skill as created anyway,
+    since the file exists and discovery will pick it up.
+    """
+    try:
+        from codeassist.skills import reload_live_registry
+
+        return reload_live_registry() is not None
+    except Exception as e:  # noqa: BLE001
+        log.debug("Skill activation after create skipped: %s", e)
+        return False
+
+
 class CreateSkill(Tool):
     name = "create_skill"
     description = (
@@ -86,6 +102,12 @@ class CreateSkill(Tool):
                 SkillRegistry.format_skill_file(name, description, content, slash_command),
                 encoding="utf-8",
             )
+            # The serving registry was built at startup, so the file alone leaves
+            # the skill unusable until a restart -- the agent would be told it
+            # created something it cannot invoke. Activate it here, the same
+            # step the API route does. A failure to activate is not a failure to
+            # create: the file is on disk and shows up on the next reload.
+            activated = _activate_new_skill()
 
             entry_id = await KnowledgeBase.create_knowledge_entry(
                 entry_type="skill_created",
@@ -106,7 +128,14 @@ class CreateSkill(Tool):
             except Exception as e:  # noqa: BLE001
                 log.debug("Embedding generation skipped: %s", e)
 
-            return ToolResult(output=f"Skill '{name}' created successfully!\n\nLocation: {skill_path}\n\nUse '/{slash_command}' or mention '{name}' to invoke.")
+            hint = (
+                f"Use '/{slash_command}' or mention '{name}' to invoke."
+                if slash_command
+                else f"Mention '{name}' to invoke it."
+            )
+            if not activated:
+                hint += " It will be picked up on the next skill reload."
+            return ToolResult(output=f"Skill '{name}' created successfully!\n\nLocation: {skill_path}\n\n{hint}")
 
         except Exception as e:
             log.exception("Failed to create skill")

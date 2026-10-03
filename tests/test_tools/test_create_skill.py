@@ -33,6 +33,21 @@ def skill_tool(tmp_path, monkeypatch):
     return tool
 
 
+@pytest.fixture
+def live_registry(tmp_path, monkeypatch):
+    """Stand in for the boot-time registry the server serves skills from."""
+    from codeassist import server
+
+    registry = SkillRegistry(
+        tmp_path,
+        SkillsConfig(directories=["codeassist/skills", "runtime/skills"],
+                     include_packaged=False),
+    )
+    registry.discover()
+    monkeypatch.setattr(server, "skill_registry", registry, raising=False)
+    return registry
+
+
 def _read_back(tmp_path, name):
     """Load the skill the way the server does: through a real registry."""
     registry = SkillRegistry(
@@ -83,6 +98,40 @@ class TestCreateSkillTool:
         skill = _read_back(tmp_path, "multiline")
         assert skill is not None
         assert skill.description == "First line\nSecond line"
+
+    @pytest.mark.asyncio
+    async def test_a_created_skill_is_usable_without_a_restart(
+        self, skill_tool, live_registry, tmp_path
+    ):
+        """Writing the file is only half the job.
+
+        The serving registry holds its own copy built at startup, so before this
+        the agent got "created successfully" for a skill it could not invoke
+        until the process restarted.
+        """
+        assert live_registry.get_skill("fresh") is None
+
+        result = await skill_tool.execute(
+            name="fresh", description="d", content="body", slash_command="fresh",
+        )
+
+        assert not result.error, result.output
+        assert live_registry.get_skill("fresh") is not None
+        assert live_registry.get_by_slash_command("fresh") is not None
+        assert "next skill reload" not in result.output
+
+    @pytest.mark.asyncio
+    async def test_creation_still_succeeds_when_there_is_no_server_to_activate(
+        self, skill_tool, tmp_path, monkeypatch
+    ):
+        from codeassist import server
+
+        monkeypatch.setattr(server, "skill_registry", None, raising=False)
+        result = await skill_tool.execute(name="cli", description="d", content="body")
+
+        assert not result.error, result.output
+        assert _read_back(tmp_path, "cli") is not None
+        assert "next skill reload" in result.output
 
     @pytest.mark.asyncio
     async def test_a_name_the_registry_would_skip_is_refused(self, skill_tool, tmp_path):
