@@ -79,6 +79,29 @@ def _unescape_frontmatter(value: str) -> str:
     return "".join(out)
 
 
+def _split_frontmatter(content: str) -> tuple[list[str], str]:
+    """Split a skill file into its frontmatter lines and its body.
+
+    Frontmatter is delimited by a line that is exactly ``---``, so it is found by
+    scanning lines rather than by splitting the file on the delimiter. Splitting on
+    the substring broke on any ``---`` inside the frontmatter -- a description
+    mentioning ``---`` ended the block there, which truncated the description and
+    then handed the rest of the frontmatter to the model as if it were the skill's
+    instructions.
+
+    An unterminated block yields no frontmatter and the whole file as body, which
+    is what ``str.split`` used to do too.
+    """
+    lines = content.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return [], content
+
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return lines[1:i], "\n".join(lines[i + 1:])
+    return [], content
+
+
 def _unquote_frontmatter(value: str) -> str:
     """Read back a frontmatter value written by the registry.
 
@@ -236,16 +259,11 @@ class SkillRegistry:
         body = content
 
         if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                fm_content = parts[1]
-                body = parts[2] if len(parts) > 2 else ""
-
-                # Simple frontmatter parsing (name, description, slash)
-                for line in fm_content.strip().split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        frontmatter[key.strip()] = _unquote_frontmatter(value)
+            fm_lines, body = _split_frontmatter(content)
+            for line in fm_lines:
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    frontmatter[key.strip()] = _unquote_frontmatter(value)
 
         name = frontmatter.get("name", path.stem)
         description = frontmatter.get("description", "")
@@ -359,7 +377,14 @@ class SkillRegistry:
             # parser, whatever it contains.
             lines.append(f'description: "{_escape_frontmatter(description)}"')
         if slash_command:
-            lines.append(f"slash: {slash_command}")
+            # Escaped like the description, not because ``slash`` is looser
+            # today -- ``validate_skill_frontmatter`` pins it to
+            # ``[a-zA-Z0-9_-]+`` -- but so that the writer stays correct if that
+            # regex is ever widened. A value that fits the regex cannot contain
+            # a quote or a newline, so the quoting is a no-op for every valid
+            # skill; one that does is broken today either way, and now says so
+            # in the file rather than silently truncating.
+            lines.append(f'slash: "{_escape_frontmatter(slash_command)}"')
         lines.append("---")
         body = content.strip("\n")
         return "\n".join(lines) + ("\n" if not body else "\n\n" + body) + "\n"

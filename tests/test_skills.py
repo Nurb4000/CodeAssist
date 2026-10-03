@@ -582,11 +582,50 @@ class TestCreateSkill:
 
         assert not (tmp_path / "runtime").exists()
 
+    def test_a_delimiter_inside_a_description_does_not_end_the_frontmatter(self, tmp_path):
+        """`content.split("---", 2)` cut the block at any `---` in a value.
+
+        That truncated the description *and* handed the remainder of the
+        frontmatter to the model as if it were the skill's instructions.
+        """
+        runtime = tmp_path / "runtime" / "skills"
+        runtime.mkdir(parents=True)
+        (runtime / "rule.md").write_text(
+            '---\nname: rule\ndescription: "use --- as a separator"\n'
+            "---\n\nbody\n\n---\n\nmore body\n",
+            encoding="utf-8",
+        )
+
+        registry = self._registry(tmp_path)
+        registry.discover()
+
+        skill = registry.get_skill("rule")
+        assert skill.description == "use --- as a separator"
+        assert skill.content == "body\n\n---\n\nmore body"
+
+    def test_a_delimiter_in_the_body_is_left_alone(self, tmp_path):
+        """A horizontal rule in a skill's instructions is content, not an
+        end-of-frontmarker."""
+        runtime = tmp_path / "runtime" / "skills"
+        runtime.mkdir(parents=True)
+        (runtime / "rule.md").write_text(
+            "---\nname: rule\ndescription: d\n---\n\nintro\n\n---\n\nrules\n",
+            encoding="utf-8",
+        )
+
+        registry = self._registry(tmp_path)
+        registry.discover()
+
+        assert registry.get_skill("rule").content == "intro\n\n---\n\nrules"
+
     @pytest.mark.parametrize("description", [
         'He said "go" -- then left',
         "First line\nSecond line",
         'mixed: "quoted"\nsecond\\line\twith tab',
         "100% done \\ literally",
+        "use --- as a separator",
+        "colon: in the middle",
+        "trailing backslash \\",
     ])
     def test_a_description_survives_a_reparse(self, tmp_path, description):
         """Whatever a description contains, it must come back unchanged.
