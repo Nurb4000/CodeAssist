@@ -31,6 +31,18 @@ dev = [
 [project.scripts]
 codeassist = "codeassist.cli:main"
 
+[tool.ruff]
+# ruff's default rule set is not stable across releases: it has grown from ~60
+# rules to 413 over the 0.x line, and every growth lands new findings on code
+# nobody touched. Spelling the set out here instead would mean transcribing 413
+# rule codes and hand-maintaining them, so pin the release that defines the set
+# we gate on and let a mismatch fail loudly. Patch releases only carry bugfixes,
+# so a patch bump never moves the rules.
+required-version = ">=0.16.8,<0.17.0"
+# Matches requires-python, so a rule that keys off the interpreter version does
+# not change meaning depending on which Python runs the linter.
+target-version = "py311"
+
 [tool.setuptools.packages.find]
 include = ["codeassist*"]
 
