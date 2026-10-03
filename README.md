@@ -451,6 +451,12 @@ Instructions and rules here...
 
 Skills are discovered automatically on startup.
 
+The `name` must match `[a-zA-Z0-9_-]+` — it becomes the filename. `description`
+must be a single line; if it contains a `"`, `\`, or a newline, quote the value
+and escape those characters (`\"`, `\\`, `\n`) the way the API and the
+`create_skill` tool write them, otherwise the value is truncated at the first
+line break.
+
 ## Project structure
 
 ```

@@ -34,16 +34,60 @@ class Skill:
         }
 
 
-def _unquote_frontmatter(value: str) -> str:
-    """Read back what :func:`SkillRegistry.format_skill_file` wrote.
+_FRONTMATTER_ESCAPES = {"n": "\n", "t": "\t", '"': '"', "\\": "\\"}
 
-    The writer wraps a description in quotes and escapes any ``"`` inside it, so
-    the value survives the naive ``key: value`` split in
-    ``_parse_skill_file``. Stripping the quotes without undoing the escapes left
-    them in the description the agent reads -- ``He said \\"go\\"`` for a skill
-    whose text says ``He said "go"``.
+
+def _escape_frontmatter(value: str) -> str:
+    """Escape a frontmatter value so it survives being read back verbatim.
+
+    The frontmatter parser is a line-at-a-time ``key: value`` split, so a value
+    has to fit on one line and must not be able to close its own quotes. Escaping
+    ``\\``, ``"``, newline and tab is what makes
+    :func:`SkillRegistry.format_skill_file` and ``_parse_skill_file`` inverses.
     """
-    return value.strip().strip('"').strip("'").replace('\\"', '"')
+    out = []
+    for ch in value:
+        if ch in ('\\', '"'):
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _unescape_frontmatter(value: str) -> str:
+    """Inverse of :func:`_escape_frontmatter`, applied after the quotes come off.
+
+    Single pass on purpose: rewriting the text as it is decoded would turn the
+    ``\\\\n`` written for a literal backslash-n back into a newline.
+    """
+    out = []
+    escaped = False
+    for ch in value:
+        if escaped:
+            out.append(_FRONTMATTER_ESCAPES.get(ch, "\\" + ch))
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        else:
+            out.append(ch)
+    if escaped:  # a trailing lone backslash
+        out.append("\\")
+    return "".join(out)
+
+
+def _unquote_frontmatter(value: str) -> str:
+    """Read back a frontmatter value written by the registry.
+
+    Strips the optional surrounding quotes and undoes the escapes. Stripping the
+    quotes alone left them in the description the agent reads -- ``He said
+    \\"go\\"`` for a skill whose text says ``He said "go"`` -- and a description
+    written across two lines lost everything after the first.
+    """
+    return _unescape_frontmatter(value.strip().strip('"').strip("'"))
 
 
 def validate_skill_frontmatter(frontmatter: dict[str, str], path: Path) -> None:
@@ -290,8 +334,9 @@ class SkillRegistry:
         parser used by ``_parse_skill_file``."""
         lines = ["---", f"name: {name}"]
         if description:
-            # Quote to survive the simple ``key: value`` frontmatter parser.
-            lines.append(f'description: "{description.replace(chr(34), chr(92) + chr(34))}"')
+            # Quote and escape so the description survives the ``key: value``
+            # parser, whatever it contains.
+            lines.append(f'description: "{_escape_frontmatter(description)}"')
         if slash_command:
             lines.append(f"slash: {slash_command}")
         lines.append("---")

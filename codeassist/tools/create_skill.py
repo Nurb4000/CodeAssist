@@ -6,6 +6,11 @@ import logging
 from pathlib import Path
 
 from codeassist.knowledge import KnowledgeBase
+from codeassist.skills import (
+    SkillRegistry,
+    SkillValidationError,
+    validate_skill_frontmatter,
+)
 
 from . import Tool, ToolResult
 
@@ -52,23 +57,35 @@ class CreateSkill(Tool):
                       tags: list[str] | None = None,
                       session_id: str | None = None) -> ToolResult:
         workspace = str(self.workspace) if hasattr(self, "workspace") else "."
+        skill_path = Path(workspace) / "runtime" / "skills" / f"{name}.md"
+        # Validate against the same rules the reader applies. This replaces a
+        # local `isalnum` check that was both looser and stricter than the
+        # registry: it accepted unicode names ("café") that discovery then
+        # skipped, and it never checked the description at all -- a description
+        # containing a newline produced a file nothing could parse, and the
+        # agent was told it had worked. Bad input is not an internal error, so
+        # it is reported without the traceback the catch-all below logs.
         try:
-            if not name.replace("-", "").replace("_", "").isalnum():
-                return ToolResult(output="Error: Skill name must contain only letters, numbers, hyphens, or underscores", error=True)
+            validate_skill_frontmatter(
+                {"name": name, "description": description or "", "slash": slash_command},
+                skill_path,
+            )
+        except SkillValidationError as e:
+            return ToolResult(output=f"Error creating skill: {e}", error=True)
 
-            skill_path = Path(workspace) / "runtime" / "skills" / f"{name}.md"
+        try:
             if skill_path.exists():
                 return ToolResult(output=f"Error: Skill '{name}' already exists at {skill_path}", error=True)
 
             skill_path.parent.mkdir(parents=True, exist_ok=True)
 
-            frontmatter_lines = ["---", f"name: {name}", f"description: {description}"]
-            if slash_command:
-                frontmatter_lines.append(f"slash: {slash_command}")
-            frontmatter_lines.append("---")
-
-            skill_content = "\n".join(frontmatter_lines) + "\n\n" + content
-            skill_path.write_text(skill_content, encoding="utf-8")
+            # The registry owns the on-disk format: it quotes and escapes the
+            # description, and its parser is the exact inverse. Hand-rolled
+            # frontmatter here was a second writer with the same bugs.
+            skill_path.write_text(
+                SkillRegistry.format_skill_file(name, description, content, slash_command),
+                encoding="utf-8",
+            )
 
             entry_id = await KnowledgeBase.create_knowledge_entry(
                 entry_type="skill_created",

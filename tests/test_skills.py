@@ -582,13 +582,25 @@ class TestCreateSkill:
 
         assert not (tmp_path / "runtime").exists()
 
-    def test_created_description_survives_a_reparse(self, tmp_path):
-        """Quotes in a description must not break the naive frontmatter parser."""
+    @pytest.mark.parametrize("description", [
+        'He said "go" -- then left',
+        "First line\nSecond line",
+        'mixed: "quoted"\nsecond\\line\twith tab',
+        "100% done \\ literally",
+    ])
+    def test_a_description_survives_a_reparse(self, tmp_path, description):
+        """Whatever a description contains, it must come back unchanged.
+
+        The frontmatter parser is a line-at-a-time `key: value` split, so the
+        writer has to escape a newline (which would otherwise truncate the
+        description at the first line) and a quote (which would otherwise close
+        the value early), and the reader has to undo exactly those.
+        """
         registry = self._registry(tmp_path)
         registry.discover()
 
-        registry.create_skill("quoted", 'He said "go" -- then left', "body")
+        registry.create_skill("desc", description, "body")
 
         registry.discover()
-        assert registry.get_skill("quoted").description == 'He said "go" -- then left'
+        assert registry.get_skill("desc").description == description
 
