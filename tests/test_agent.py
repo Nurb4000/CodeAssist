@@ -10,6 +10,7 @@ from codeassist.agent import (
     MAX_CONTINUATION_NUDGES,
     SESSION_TRUST,
     Agent,
+    _loop_event,
     _LoopDetector,
     _restates,
 )
@@ -1267,7 +1268,7 @@ class TestAgentLoopGuard:
             events = await _drain(agent.run("find the bug"))
 
         assert calls["n"] < 8, f"ran {calls['n']} steps with no detection"
-        looped = [e for e in events if e.type == "error" and "loop" in str(e.data).lower()]
+        looped = [e for e in events if e.type == "incomplete" and "Stopped early" in str(e.data)]
         assert looped, f"a repeated call was never flagged; events={[(e.type, e.data) for e in events]}"
         assert "read" in str(looped[0].data)
 
@@ -1336,7 +1337,7 @@ class TestAgentLoopGuard:
                                 "usage_pct": 1.0, "severity": "ok"}
             events = await _drain(agent.run("list the folders"))
 
-        looped = [e for e in events if e.type == "error" and "loop" in str(e.data).lower()]
+        looped = [e for e in events if e.type == "incomplete" and "Stopped early" in str(e.data)]
         assert looped, f"three paraphrased answers were not flagged; events={[e.type for e in events]}"
         assert "same answer" in str(looped[0].data)
         assert calls["n"] < 8, f"kept going for {calls['n']} steps after the loop was visible"
@@ -1603,6 +1604,51 @@ class TestLoopDetector:
         assert detector.note_text("") is None
         assert detector.note_text("   ") is None
 
+
+class TestLoopStopAdvice:
+    """The turn has stopped, but the message must not tell the user how to
+    make it stop again.
+
+    The nudge-budget `incomplete` ends with "Use Continue to let it keep
+    going", which is right there and wrong here: continuing is what produced
+    the loop in the first place.
+    """
+
+    @staticmethod
+    def _stop_message():
+        return _loop_event("called `read` 4 times in a row").data["message"]
+
+    def test_it_is_not_an_error(self):
+        """Nothing malfunctioned -- the detector worked.
+
+        `error` renders red in the transcript, which reads as a malfunction
+        and as the agent having crashed rather than stopped.
+        """
+        assert _loop_event("gave the same answer 3 times in a row").type == "incomplete"
+
+    def test_it_does_not_advise_pressing_continue(self):
+        message = self._stop_message().lower()
+        assert "use continue" not in message
+        assert "let it keep going" not in message
+
+    def test_it_does_admit_the_task_may_be_unfinished(self):
+        """Otherwise a stopped turn reads as a finished one.
+
+        `incomplete` shows no "Complete" badge, but saying so costs nothing
+        and keeps the reason for stopping from reading as a verdict.
+        """
+        assert "may not be complete" in self._stop_message()
+
+    def test_it_names_what_repeated(self):
+        """The user has to be able to tell the model apart from the task.
+
+        "The agent kept stopping after using tools" gives them nothing to
+        act on; which call, or which answer, does.
+        """
+        assert "`read`" in self._stop_message()
+
+    def test_it_says_why_continuing_is_unlikely_to_help(self):
+        assert "likely" in self._stop_message()
 
 class TestRestates:
     def test_the_same_answer_restates(self):

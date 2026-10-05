@@ -361,15 +361,22 @@ class AgentEvent:
 def _loop_event(reason: str) -> AgentEvent:
     """The event that ends a turn the model has gone round in circles on.
 
-    Deliberately not the `incomplete` the nudge budget reports. That says "press
-    Continue", which is the wrong advice here: continuing is what produced the
-    loop. This says what repeated, so the user can see whether the model was
-    stuck on the task or stuck on itself.
+    `incomplete` rather than `error`: nothing malfunctioned, the detector did
+    its job, and the user is looking at a turn that stopped short of the task
+    with the reason attached. It also keeps Continue available, which is now
+    safe -- if the retry circles too, this fires again and bounds the attempt,
+    rather than the turn grinding out the step budget.
+
+    What it does not do is what the nudge-budget `incomplete` does, tell the
+    user to press Continue as though that were the fix. Continuing is what
+    produced the loop, so the message names what repeated and says plainly
+    that another pass will likely repeat it too.
     """
-    return AgentEvent("error", {
+    return AgentEvent("incomplete", {
         "message": (
-            f"Detected a loop — the agent {reason}. Stopped there rather than "
-            "spend the rest of the step budget going round again."
+            f"Stopped early — the agent {reason}. The task may not be complete, "
+            "and continuing will likely go round the same way; steering it "
+            "somewhere new is more likely to help."
         ),
     })
 
