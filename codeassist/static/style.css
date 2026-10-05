@@ -1065,10 +1065,15 @@ body {
     transform: rotate(-90deg);
 }
 
-/* Cap the visible list at ~6 rows; overflow scrolls within the panel. */
+/* The list box is capped at ~6 rows; a longer plan scrolls inside it. Every task
+   is rendered, so this is a window onto the whole plan and not a truncation: the
+   scrollbar is the only cue, so keep it visible and stop the gesture from
+   scrolling the message list behind the panel. */
 .plan-list {
     max-height: 162px;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
 }
 
 .plan-container.collapsed .plan-list {

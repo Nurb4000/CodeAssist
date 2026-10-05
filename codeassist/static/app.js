@@ -459,7 +459,7 @@ async function createSession() {
     // A brand-new session has no plan, and now has its own -- nothing to clear
     // server-side. Clearing the shared list here used to wipe the plan of
     // whichever session you had been working in.
-    planDisplayEl.innerHTML = '';
+    clearPlanDisplay();
     await loadSessions();
     showWelcome();
     connectWS();
@@ -471,7 +471,7 @@ async function switchSession(id) {
     hideContinueButton();
     // Plans are persisted per session, so switching no longer destroys
     // anything: drop the old session's panel and load the new one's.
-    planDisplayEl.innerHTML = '';
+    clearPlanDisplay();
     await loadSessions();
     await loadMessages();
     await loadTodos();
@@ -484,7 +484,7 @@ async function deleteSession(id) {
     if (currentSessionId === id) {
         currentSessionId = null;
         messagesEl.innerHTML = '';
-        planDisplayEl.innerHTML = ''; // the plan went with the session
+        clearPlanDisplay(); // the plan went with the session
         resetFlowSections();
         showWelcome();
         if (ws) ws.close();
@@ -1926,9 +1926,21 @@ function updateTokenInfo(totalTokens, rate) {
     el.textContent = `${totalTokens.toLocaleString()} tokens${rateText}`;
 }
 
-// Plan panel: show at most this many task rows (the rest scroll), and keep the
-// whole list collapsible. Default is expanded; the choice persists per browser.
+// Plan panel: the list box shows about this many task rows and scrolls for the
+// rest. Every task is rendered -- the cap is a height, not a truncation -- so a
+// plan longer than the box is scrollable rather than silently cut off after the
+// sixth row. The whole list is collapsible; default is expanded and the choice
+// persists per browser.
 const PLAN_DISPLAY_MAX = 6;
+// Height of one task row (13px text plus 4px of padding above and below). Read
+// from the DOM once there is layout; this is the fallback for the first paint
+// and for jsdom, where every box measures 0.
+const PLAN_ROW_HEIGHT = 27;
+// The row the panel is scrolled to, and how far. Remembered because the panel is
+// rebuilt from scratch on every update, so without this the list would jump back
+// to the top each time the model touched a task.
+let planAnchor = -1;
+let planScroll = 0;
 let planCollapsed = false;
 try { planCollapsed = localStorage.getItem('plan-collapsed') === '1'; } catch (e) {}
 
@@ -1941,13 +1953,64 @@ function togglePlanCollapsed() {
     if (toggle) toggle.setAttribute('aria-expanded', String(!planCollapsed));
 }
 
+// Drop the panel and forget the scroll window. Used when the plan behind the
+// panel goes away (a session switch), so the next plan cannot inherit it.
+function clearPlanDisplay() {
+    planDisplayEl.innerHTML = '';
+    planAnchor = -1;
+    planScroll = 0;
+}
+
+// The row the panel should keep in view: the task in progress, or else the next
+// one still to do. -1 when everything is finished.
+function planAnchorRow(tasks) {
+    const active = tasks.findIndex((t) => t.status === 'in_progress');
+    return active !== -1 ? active : tasks.findIndex((t) => t.status === 'pending');
+}
+
+// Scroll so the active task sits one row below the top of the box, with a row of
+// finished work above it for context. That is what makes a long plan advance on
+// its own as tasks complete: the window follows the work instead of stranding the
+// next pending task below the fold.
+//
+// `liveScroll` is the offset the panel currently sits at, read from the outgoing
+// list before it is replaced. When the active row has not moved the panel is put
+// back where it was, so an update that merely rewrites statuses does not drag the
+// list away from someone who had scrolled up to read it.
+function followPlanAnchor(list, tasks, liveScroll) {
+    const anchor = planAnchorRow(tasks);
+    if (anchor < 0) {
+        planAnchor = -1;
+        planScroll = 0;
+        list.scrollTop = 0;
+        return;
+    }
+    if (anchor === planAnchor) {
+        planScroll = liveScroll === null ? planScroll : liveScroll;
+        list.scrollTop = planScroll;
+        return;
+    }
+    planAnchor = anchor;
+    const firstRow = list.firstElementChild;
+    const rowHeight = (firstRow && firstRow.offsetHeight) || PLAN_ROW_HEIGHT;
+    // Short plans fit the box outright, so there is nothing to scroll to.
+    planScroll = tasks.length <= PLAN_DISPLAY_MAX
+        ? 0
+        : Math.max(0, anchor * rowHeight - rowHeight);
+    list.scrollTop = planScroll;
+}
+
 function updatePlanDisplay(tasks) {
     if (!tasks || tasks.length === 0) {
-        planDisplayEl.innerHTML = '';
+        clearPlanDisplay();
         return;
     }
 
-    const visible = tasks.slice(0, PLAN_DISPLAY_MAX);
+    // Read before the rebuild: the list about to be thrown away is the one whose
+    // offset tells us whether the reader had moved it.
+    const outgoing = planDisplayEl.querySelector('.plan-list');
+    const liveScroll = outgoing ? outgoing.scrollTop : null;
+
     const container = document.createElement('div');
     container.className = 'plan-container' + (planCollapsed ? ' collapsed' : '');
 
@@ -1961,17 +2024,21 @@ function updatePlanDisplay(tasks) {
     toggle.onclick = togglePlanCollapsed;
     title.appendChild(toggle);
     title.appendChild(document.createTextNode('Current Plan'));
-    if (tasks.length > visible.length) {
+    if (tasks.length > PLAN_DISPLAY_MAX) {
+        const done = tasks.filter((t) => t.status === 'completed').length;
         const count = document.createElement('span');
         count.className = 'plan-count';
         count.textContent = `${tasks.length}`;
+        count.title = done
+            ? `${tasks.length} tasks, ${done} done`
+            : `${tasks.length} tasks`;
         title.appendChild(count);
     }
     container.appendChild(title);
 
     const list = document.createElement('div');
     list.className = 'plan-list';
-    for (const task of visible) {
+    for (const task of tasks) {
         const item = document.createElement('div');
         item.className = `plan-item ${task.status}`;
 
@@ -1994,6 +2061,7 @@ function updatePlanDisplay(tasks) {
     container.appendChild(list);
     planDisplayEl.innerHTML = '';
     planDisplayEl.appendChild(container);
+    followPlanAnchor(list, tasks, liveScroll);
 }
 
 async function loadTodos() {
