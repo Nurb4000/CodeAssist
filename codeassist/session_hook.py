@@ -1164,8 +1164,20 @@ This workflow is now available as a skill. The agent will use this pattern when 
                 metadata=metadata,
             )
             
-            # Generate embedding in background (non-blocking, throttled)
-            if entry_id:
+            # Generate embedding in background (non-blocking, throttled).
+            # Only when an embedding backend is actually configured: the chat
+            # backend is not necessarily an embedding backend, and without this
+            # check every stored entry queued a background task that reached a
+            # default OpenAI endpoint and logged a 401. Mirrors the guard on
+            # the near-duplicate path above.
+            try:
+                from codeassist.config import load_config
+                embeddings_configured = bool(getattr(load_config().llm, "embedding_model", ""))
+            except Exception as e:  # noqa: BLE001
+                log.debug("Embedding config check skipped: %s", e)
+                embeddings_configured = False
+
+            if entry_id and embeddings_configured:
                 try:
                     from codeassist.embeddings import get_embedding_manager
                     manager = get_embedding_manager()

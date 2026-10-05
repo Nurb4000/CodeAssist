@@ -28,23 +28,50 @@ EMBEDDING_DIMENSIONS = {
 
 
 class EmbeddingClient:
-    """Generate embeddings using OpenAI-compatible API."""
-    
+    """Generate embeddings using an OpenAI-compatible API.
+
+    Embeddings are opt-in. The chat backend is not necessarily an embedding
+    backend, and when ``base_url`` is blank the OpenAI SDK silently targets
+    api.openai.com -- so an unconfigured install would send every knowledge
+    entry to OpenAI with a placeholder key and get a 401 each time. Embeddings
+    are only attempted when the operator has configured both an endpoint and a
+    model; otherwise ``available`` is False and every call is a no-op.
+    """
+
     def __init__(self, config: Config):
         self.config = config
-        self.model = getattr(config.llm, 'embedding_model', None) or DEFAULT_EMBEDDING_MODEL
-        
-        # Create OpenAI client for embeddings. The SDK rejects an empty key, so
-        # fall back to the OPENAI_API_KEY env var then a placeholder sentinel
-        # that no-auth backends (e.g. llama.cpp) ignore.
+        self.model = getattr(config.llm, 'embedding_model', None) or ''
+        self.client = None
+
+        base_url = (getattr(config.llm, 'base_url', '') or '').strip()
+        if not self.model or not base_url:
+            log.debug(
+                "Embeddings disabled (model=%r, base_url=%r); "
+                "set llm.embedding_model and llm.base_url to enable",
+                self.model, base_url,
+            )
+            return
+
+        self.model = self.model or DEFAULT_EMBEDDING_MODEL
+        # The SDK rejects an empty key, so fall back to the OPENAI_API_KEY env
+        # var then a placeholder sentinel that no-auth backends (e.g. llama.cpp)
+        # ignore. Either way we now know we are talking to a real endpoint.
         api_key = config.llm.api_key or os.environ.get("OPENAI_API_KEY")
-        kwargs = {"api_key": api_key or "sk-no-auth"}
-        if config.llm.base_url:
-            kwargs["base_url"] = config.llm.base_url
-        self.client = openai.AsyncOpenAI(**kwargs)
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key or "sk-no-auth", base_url=base_url,
+        )
+
+    @property
+    def available(self) -> bool:
+        """True when an embedding backend is actually configured."""
+        return self.client is not None
     
     async def embed(self, text: str) -> list[float] | None:
         """Generate embedding for a single text."""
+        if not self.client:
+            # Unconfigured: stay local. Never construct a default-endpoint
+            # request as a side effect of trying.
+            return None
         try:
             response = await self.client.embeddings.create(
                 model=self.model,
@@ -114,14 +141,21 @@ class EmbeddingManager:
         self.client = client
     
     def _get_client(self) -> EmbeddingClient | None:
-        """Get or create embedding client."""
+        """Get or create embedding client.
+
+        Returns None when no embedding backend is configured, so callers skip
+        the work instead of issuing a request to a default OpenAI endpoint.
+        """
         if self.client is None:
             try:
                 config = Config.load()
-                self.client = EmbeddingClient(config)
             except Exception as e:  # noqa: BLE001
-                log.warning("Could not create embedding client: %s", e)
+                log.warning("Could not load config for embeddings: %s", e)
                 return None
+            client = EmbeddingClient(config)
+            if not client.available:
+                return None
+            self.client = client
         return self.client
     
     async def generate_and_store_embedding(self, entry_id: str, content: str) -> bool:

@@ -209,3 +209,62 @@ class TestEntryStatusRoute:
         client.get(f"/api/kb/entries/{entry_id}")
         entry = await KnowledgeBase.get_knowledge_entry(entry_id)
         assert entry["usage_count"] == 2
+
+
+def _cfg(*, embedding_model="", base_url="", api_key=""):
+    cfg = MagicMock()
+    cfg.llm.embedding_model = embedding_model
+    cfg.llm.base_url = base_url
+    cfg.llm.api_key = api_key
+    return cfg
+
+
+class TestEmbeddingsDoNotDialOpenAI:
+    """Regression: unconfigured embeddings reached api.openai.com.
+
+    With base_url blank (the shipped Docker default) the OpenAI SDK falls back
+    to api.openai.com, so every knowledge entry queued a background task that
+    POSTed to OpenAI with a placeholder key and logged a 401. Each stored entry
+    produced one failed request.
+    """
+
+    def test_docker_default_builds_no_client(self):
+        client = embeddings_mod.EmbeddingClient(_cfg())
+        assert client.available is False
+        assert client.client is None
+
+    def test_chat_backend_alone_is_not_enough(self):
+        """An LLM endpoint is not automatically an embedding endpoint."""
+        client = embeddings_mod.EmbeddingClient(
+            _cfg(base_url="http://10.0.1.27:8080/v1", api_key="local")
+        )
+        assert client.available is False
+        assert client.client is None
+
+    def test_model_without_base_url_is_disabled(self):
+        client = embeddings_mod.EmbeddingClient(_cfg(embedding_model="nomic-embed-text"))
+        assert client.available is False
+
+    def test_fully_configured_builds_client(self):
+        client = embeddings_mod.EmbeddingClient(
+            _cfg(
+                embedding_model="nomic-embed-text",
+                base_url="http://10.0.1.27:8080/v1",
+                api_key="local",
+            )
+        )
+        assert client.available is True
+        assert "10.0.1.27" in str(client.client.base_url)
+
+    @pytest.mark.asyncio
+    async def test_embed_on_unconfigured_client_makes_no_request(self):
+        client = embeddings_mod.EmbeddingClient(_cfg())
+        assert await client.embed("anything") is None
+
+    @pytest.mark.asyncio
+    async def test_manager_skips_store_when_unconfigured(self, monkeypatch):
+        """The manager must not construct a default-endpoint client."""
+        monkeypatch.setattr(embeddings_mod.Config, "load", staticmethod(lambda: _cfg()))
+        manager = embeddings_mod.EmbeddingManager()
+        assert manager._get_client() is None
+        assert await manager.generate_and_store_embedding("id-1", "content") is False
