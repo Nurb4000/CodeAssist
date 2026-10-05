@@ -144,6 +144,23 @@ _RESTATE_MIN_GROWTH = 0.6
 _RESTATE_MAX_GROWTH = 1.8
 
 
+def _words(text: str) -> set[str]:
+    """The distinct words in a piece of prose, for size-and-vocabulary compares."""
+    return {w for w in re.findall(r"[A-Za-z0-9_./-]+", text.lower()) if len(w) > 1}
+
+
+def _facts(text: str) -> set[str]:
+    """The words in a piece of prose that carry information rather than framing.
+
+    A re-delivery is reworded, so comparing raw vocabulary cannot separate it
+    from a refinement: both keep most of their words and both introduce others,
+    because a fresh phrasing is as new as a fresh finding. Dropping the words
+    that only ever appear as framing leaves what the answer is actually about,
+    which is what distinguishes the two.
+    """
+    return _words(text) - _FRAMING_WORDS
+
+
 def _restates(previous: str, candidate: str) -> bool:
     """True when ``candidate`` is ``previous`` said again, not new work.
 
@@ -174,11 +191,8 @@ def _restates(previous: str, candidate: str) -> bool:
     not flagged: that comparison is much more likely to be legitimate, and
     widening the window to catch it would cost false drops.
     """
-    def words(text: str) -> set[str]:
-        return {w for w in re.findall(r"[A-Za-z0-9_./-]+", text.lower()) if len(w) > 1}
-
-    prev_words = words(previous)
-    new_words = words(candidate)
+    prev_words = _words(previous)
+    new_words = _words(candidate)
     if not prev_words or not new_words:
         return False
     overlap = len(prev_words & new_words) / len(prev_words)
@@ -201,15 +215,130 @@ _MAX_TOOL_LOOP = 4
 # are byte-equal even though every one of them is asking for the same thing.
 _TOOL_ARG_OVERLAP = 0.8
 
-# How many answers in a row, each restating one already given, count as a loop.
+# How many answers in a row, none of which adds anything new, count as a loop.
 _MAX_TEXT_LOOP = 3
 
-# How many recent answers a new one is compared against. More than one, because
-# framing churns while the substance repeats: "Here are the folders" / "The
-# folders in this workspace" / "Listing the workspace folders" share the
-# filenames and the count but overlap their immediate predecessor by under half,
-# so comparing only against the last answer misses a loop that is plainly there.
-_TEXT_WINDOW = 3
+# Words that only ever appear as framing, never as information. They are the
+# part of a rewrite that changes without saying anything: "shall I explore",
+# "let me know", "listing the folders". Excluded from the novelty test below so
+# that rephrasing cannot pass for having found something.
+# How many content words an answer must contribute that no earlier answer in
+# the streak contained before it counts as having found something. Not one: a
+# reworded re-delivery leaks the odd content word through any framing list
+# ("any", "detail."), and one leaked word is enough to make every step look like
+# progress, so the loop is never caught. Two is the smallest count that clears
+# the leaks in a paraphrase while still letting a real second finding through.
+_TEXT_MIN_FINDING = 2
+
+_FRAMING_WORDS = frozenset([
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "being",
+    "both",
+    "but",
+    "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "each",
+    "few",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "here",
+    "him",
+    "his",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "just",
+    "may",
+    "me",
+    "might",
+    "more",
+    "most",
+    "my",
+    "no",
+    "nor",
+    "not",
+    "now",
+    "of",
+    "only",
+    "or",
+    "other",
+    "our",
+    "own",
+    "same",
+    "she",
+    "should",
+    "show",
+    "shows",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "to",
+    "too",
+    "under",
+    "up",
+    "very",
+    "want",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "why",
+    "will",
+    "with",
+    "would",
+    "you",
+    "your",
+    "shall",
+    "let",
+    "lets",
+    "explore",
+    "list",
+    "listed",
+    "listing",
+    "know",
+    "detail",
+    "close",
+    "looking",
+    "look",
+])
 
 
 def _arg_tokens(arguments: dict) -> set[str]:
@@ -252,7 +381,7 @@ class _LoopDetector:
         self._tool_name: str | None = None
         self._tool_tokens: set[str] = set()
         self._tool_streak = 0
-        self._recent_texts: list[str] = []
+        self._seen_facts: set[str] = set()
         self._text_streak = 0
 
     def note_tool_calls(self, tool_calls: list["ToolCall"]) -> str | None:
@@ -281,15 +410,37 @@ class _LoopDetector:
         return None
 
     def note_text(self, text: str) -> str | None:
-        """Record a step's reply, returning why it is a loop if it is."""
+        """Record a step's reply, returning why it is a loop if it is.
+
+        Measured by novelty rather than similarity. Similarity cannot separate
+        the two cases this has to tell apart, and getting it wrong is expensive:
+        a model refining one answer across steps -- read a file, report, read
+        another, report again -- keeps most of its wording every time, so any
+        similarity test reads it as a repeat and kills a turn that was working.
+        The looping this exists to catch is a rarer and smaller problem than the
+        work it would break.
+
+        So the question asked is the one the user is actually asking: did this
+        step tell them anything they have not been told? A re-delivery has
+        nothing left to say, and however it is phrased it contributes no content
+        the previous answers did not already contain. A refinement contributes a
+        file name, a symbol, a finding -- words genuinely not said before -- so
+        it counts as progress and resets the streak, however similar its wording
+        is to what came before.
+
+        Framing words are excluded from the test so rephrasing cannot register as
+        a discovery, and a step needs more than one new content word to count.
+        One leaked word ("any", "detail.") is what survives any framing list in a
+        reworded re-delivery, and treating that as a finding lets a loop through.
+        """
         if not text.strip():
             return None
-        if any(_restates(previous, text) for previous in self._recent_texts):
+        findings = _facts(text) - self._seen_facts
+        if self._text_streak and len(findings) < _TEXT_MIN_FINDING:
             self._text_streak += 1
         else:
             self._text_streak = 1
-        self._recent_texts.append(text)
-        del self._recent_texts[:-_TEXT_WINDOW]
+        self._seen_facts |= _facts(text)
         return self._text_reason()
 
     def note_restatement(self) -> str | None:

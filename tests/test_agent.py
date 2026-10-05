@@ -1343,6 +1343,52 @@ class TestAgentLoopGuard:
         assert calls["n"] < 8, f"kept going for {calls['n']} steps after the loop was visible"
 
     @pytest.mark.asyncio
+    async def test_answers_that_keep_finding_things_are_not_a_loop(self, agent, mock_session):
+        """One answer refined across steps, each time adding a real finding.
+
+        This is the shape a working model produces when it reads a file, reports
+        what it found, reads another and reports that too. Every step shares a
+        topic and most of its vocabulary with the last, so any similarity-based
+        test calls it a repeat and kills the turn -- which is worse than the
+        looping it was meant to catch, because this is the work succeeding.
+        """
+        answers = [
+            "The bug is in the retry loop. It retries three times with no backoff.",
+            (
+                "The bug is in the retry loop. It retries three times with no backoff, "
+                "and the third failure propagates straight to the caller."
+            ),
+            (
+                "The bug is in the retry loop. It retries three times with no backoff, "
+                "and it also swallows the timeout error on the third attempt."
+            ),
+        ]
+        turns = []
+        for i, answer in enumerate(answers):
+            turns.append(self._call(f"c{i}", "read", {"path": f"/tmp/src/mod{i}.py"}))
+            turns.append(self._say([answer]))
+        calls = self._agent_with(agent, turns)
+
+        with patch("codeassist.agent.check_context_limit") as ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            ctx.return_value = {"needs_compaction": False, "total_tokens": 10,
+                                "usage_pct": 1.0, "severity": "ok"}
+            events = await _drain(agent.run("find the retry bug"))
+
+        assert not [e for e in events if "Stopped early" in str(e.data)], (
+            "progress was reported as a loop: "
+            f"{[e.data for e in events if 'Stopped early' in str(e.data)]}"
+        )
+        # It ran past the third answer, which a loop guard firing on refinement
+        # would have prevented. The exact count is the continuation guard's
+        # business, not this one's.
+        assert calls["n"] > 3, (
+            f"the turn stopped after {calls['n']} steps; a model that is still "
+            "finding things has to be allowed to keep going"
+        )
+
+    @pytest.mark.asyncio
     async def test_a_genuine_answer_is_not_flagged(self, agent, mock_session):
         """Distinct answers that share some vocabulary are ordinary work.
 
@@ -1562,11 +1608,11 @@ class TestLoopDetector:
         assert reason == "gave the same answer 3 times in a row"
 
     def test_an_answer_reworded_every_time_still_counts(self):
-        """Framing churns while the substance holds still.
+        """Each rewording adds nothing, so nothing is being learned.
 
-        Each rewording overlaps its immediate predecessor by under half, so
-        comparing only against the last answer reads this as three unrelated
-        replies rather than one answer three times.
+        The wording is entirely fresh every time -- which is why comparing
+        vocabulary between two answers cannot see this, and why the detector
+        measures how much the answer grew instead.
         """
         detector = _LoopDetector()
         for answer in (
@@ -1576,6 +1622,69 @@ class TestLoopDetector:
         ):
             reason = detector.note_text(answer)
         assert reason == "gave the same answer 3 times in a row"
+
+    def test_an_answer_that_grows_each_time_is_progress(self):
+        """The regression this guards: reading a file, reporting, reading another.
+
+        Every step is about the same finding and shares most of its vocabulary
+        with the last, but each one finds something the previous had not. The
+        answer keeps getting longer, which is what real progress looks like, and
+        similarity-based detection killed these turns.
+        """
+        detector = _LoopDetector()
+        for answer in (
+            "The bug is in the retry loop. It retries three times with no backoff.",
+            (
+                "The bug is in the retry loop. It retries three times with no backoff, "
+                "and the third failure propagates straight to the caller."
+            ),
+            (
+                "The bug is in the retry loop. It retries three times with no backoff, "
+                "and it also swallows the timeout error on the third attempt."
+            ),
+        ):
+            assert detector.note_text(answer) is None
+
+    def test_a_late_refinement_after_a_repeat_restarts_the_streak(self):
+        """A streak is only a streak while nothing is being added.
+
+        One real finding clears it, so two repeats around a genuine step are not
+        three in a row -- the third repeat after the finding is what trips it.
+        """
+        detector = _LoopDetector()
+        assert detector.note_text(
+            "Here are the folders in the workspace:\n\naxolotl/\nzoe/\n\nWant a look?"
+        ) is None
+        assert detector.note_text(
+            "Those folders in this workspace are:\n\naxolotl/\nzoe/\n"
+        ) is None
+        # A finding the previous two steps missed: a real reason to keep going.
+        assert detector.note_text(
+            "There is also a .env in the root, and it holds the staging database "
+            "password in plain text, which is worth flagging before anything else."
+        ) is None
+        # Back to re-delivering. The finding counted as a step of its own, so
+        # two more repeats are needed rather than one -- the repeats before it
+        # are not carried over.
+        assert detector.note_text("The folders in this workspace are:\n\naxolotl/\nzoe/\n") is None
+        assert detector.note_text(
+            "Workspace folders, listed:\n\naxolotl/\nzoe/\n"
+        ) == "gave the same answer 3 times in a row"
+
+    def test_an_almost_repeat_is_not_progress(self):
+        """One leaked content word is not a finding.
+
+        Reordering a re-delivery usually surfaces a single word the earlier
+        answer lacked. Counting that as a discovery makes every repeat look like
+        progress and the loop never fires.
+        """
+        detector = _LoopDetector()
+        for answer in (
+            "The bug is in client.py, in the retry helper.",
+            "client.py line 42, in the retry helper.",
+            "The retry helper, in client.py.",
+        ):
+            assert detector.note_text(answer) is None
 
     def test_a_genuinely_different_answer_is_not_a_loop(self):
         detector = _LoopDetector()
