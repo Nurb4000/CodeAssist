@@ -1359,7 +1359,7 @@ class TestAgentLoopGuard:
         ]):
             turns.append(self._call(f"c{i}", "glob", {"pattern": f"*/{i}"}))
             turns.append(self._say([answer]))
-        calls = self._agent_with(agent, turns)
+        self._agent_with(agent, turns)
 
         with patch("codeassist.agent.check_context_limit") as ctx, \
              patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
@@ -1820,7 +1820,7 @@ class TestAgentStop:
             }
             task = asyncio.create_task(_drain(agent.run("go")))
             await asyncio.wait_for(waiting.wait(), timeout=5)
-            evs = await asyncio.wait_for(task, timeout=5)
+            await asyncio.wait_for(task, timeout=5)
 
         assert asked, "the fixture must reach a confirmation to mean anything"
         self._assert_no_dangling_tool_calls(mock_session)
