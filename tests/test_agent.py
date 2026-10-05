@@ -10,6 +10,8 @@ from codeassist.agent import (
     MAX_CONTINUATION_NUDGES,
     SESSION_TRUST,
     Agent,
+    _LoopDetector,
+    _restates,
 )
 from codeassist.llm import (
     ContextWindowExceeded,
@@ -476,15 +478,31 @@ class TestAgentContinuationNudge:
 
             def make_research(i):
                 async def gen():
-                    yield ToolCall(id=f"c{i}", name="grep", arguments={"pattern": "foo"})
+                    # A different pattern each time. Repeating one call with the
+                    # same arguments is what the loop guard is for, and it would
+                    # stop the run long before the nudge budget is spent --
+                    # which is a different test, covered in TestAgentLoopGuard.
+                    yield ToolCall(id=f"c{i}", name="grep", arguments={"pattern": f"foo{i}"})
                     yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
                 return gen()
 
+            summaries = [
+                "Grep found three callers; next I am tracing the first one.",
+                "The trace ends in the parser; I am checking its error paths.",
+                "Two of the three callers swallow the exception silently.",
+                "Now I am looking at what the tests already cover.",
+                "The existing suite misses the malformed-input case.",
+                "I have a reproduction; confirming it against the last caller.",
+            ]
+
             def make_summary(i):
                 async def gen():
-                    # Distinct text each time so the repetition guard (3 identical
-                    # responses) does not fire before the nudge budget is spent.
-                    yield TextDelta(f"Still going — check {i}.")
+                    # A materially different answer each time. The loop guard
+                    # compares substance rather than wording, so answers that
+                    # differ only in a number still read as one answer repeated
+                    # -- which is the case it is meant to catch, and a different
+                    # test. See TestAgentLoopGuard.
+                    yield TextDelta(summaries[i % len(summaries)])
                     yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
                 return gen()
 
@@ -578,16 +596,14 @@ class TestAgentContinuationNudge:
             assert "incomplete" not in types
 
     @pytest.mark.asyncio
-    async def test_nudge_replay_includes_the_answer_it_nudged(self, agent, mock_session):
-        """A nudge must follow the assistant reply that triggered it.
+    async def test_nudge_never_enters_the_session_snapshot(self, agent, mock_session):
+        """A nudge is queued for the next step, never written to the session.
 
-        The step's reply is persisted *after* `messages` is rebuilt from the
-        history snapshot, so replaying with the nudge alone handed the model a
-        transcript that jumped from its tool output straight to the nudge. With
-        no record of having answered, it re-derived the answer from the same
-        tool output and emitted it again, which is why a turn that ended in
-        "here are the folders ... want me to look closer?" was immediately
-        followed by the same folder list a second time.
+        The ordering it has to produce -- the answer ahead of the nudge, in one
+        valid transcript -- is covered end to end in test_nudge_replay.py, which
+        drives the real `build_openai_messages` over real session rows. This
+        test stubs that function out, so all it can honestly pin is where the
+        nudge is allowed to live.
         """
         with patch("codeassist.agent.build_openai_messages") as mock_build, \
              patch("codeassist.agent.check_context_limit") as mock_ctx, \
@@ -637,20 +653,19 @@ class TestAgentContinuationNudge:
             async for event in agent.run("list the folders"):
                 events.append(event)
 
-            # The nudged call must carry the answer ahead of the nudge, in order.
+            # The nudge reaches the model as the last turn of the next step.
             nudged = seen[2]
-            roles = [m["role"] for m in nudged]
-            assert roles[-2:] == ["assistant", "user"], roles
-            assert nudged[-2]["content"] == answer
+            assert nudged[-1]["role"] == "user"
             assert CONTINUATION_NUDGE in nudged[-1]["content"]
-            # Exactly one copy of the answer: the replay must not re-ask for it.
-            assert [m["content"] for m in nudged].count(answer) == 1
 
-            # The snapshot later steps rebuild from must carry it too, so the
-            # nudge survives the next iteration's cache reuse instead of being
-            # rebuilt away (which would replay the step with no nudge at all).
-            assert history[-1]["role"] == "assistant"
-            assert history[-1]["content"] == answer
+            # It is queued, not persisted. Writing it into the snapshot left it
+            # holding rows the database did not have while `_messages_dirty`
+            # claimed it did not; a turn that ended that way made the next turn
+            # replay the stale nudge and drop the user's question.
+            assert not any(
+                "Task check" in (m.get("content") or "") for m in history
+            ), "the transient nudge leaked into the session snapshot"
+            assert len(agent._pending_nudges) == 1
             assert [e.type for e in events].count("done") == 1
 
 
@@ -852,9 +867,17 @@ class TestAgentStepLimit:
             agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
             agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
 
-            async def turn_work():
-                yield ToolCall(id="c1", name="shell", arguments={"command": "echo"})
-                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+            def turn_work(i):
+                async def gen():
+                    # Distinct command each time: repeating one call with the same
+                    # arguments is a loop, and the loop guard would end the run
+                    # before the step budget was reached.
+                    yield ToolCall(
+                        id=f"c{i}", name="shell",
+                        arguments={"command": f"pytest tests/test_step_{i}.py"},
+                    )
+                    yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+                return gen()
 
             async def turn_wrapup():
                 yield TextDelta("Reached the step budget; here is what remains.")
@@ -863,7 +886,7 @@ class TestAgentStepLimit:
             # 6 working turns then the forced wrap-up on the 7th (last) step.
             # Note: one turn_work() per slot — list-mult would share a single
             # generator object and silently consume it once.
-            turns = [turn_work() for _ in range(6)] + [turn_wrapup()]
+            turns = [turn_work(i) for i in range(6)] + [turn_wrapup()]
             calls = {"n": 0}
             tool_states = []
 
@@ -1182,6 +1205,174 @@ class TestBuiltinAgentPermissions:
             assert ruleset.check(tool) == "allow", f"{key} should still allow {tool}"
 
 
+class TestAgentLoopGuard:
+    """A model going in circles has to be caught inside the turn, not at the
+    budget.
+
+    The guard that was here compared normalized strings for exact equality and
+    only ever looked at steps that produced prose. Both holes matched real
+    reports. A reasoning-heavy turn that keeps asking for the same thing never
+    repeats itself in prose, so nothing was sampled and the turn spent its whole
+    step budget re-reading the same file. And the repeats that did reach the
+    guard were paraphrases -- "Here are the folders:" / "The folders in this
+    workspace are:" -- so equality never fired either. `_restates` already
+    existed for exactly that comparison, and is what the guard uses now.
+    """
+
+    @staticmethod
+    def _agent_with(agent, turns):
+        agent.config.agent.max_iterations = 30
+        agent.config.tools.tool_output_max_tokens = 1000000
+        agent._trust_all = True
+        agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+        calls = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            g = turns[min(calls["n"], len(turns) - 1)]
+            calls["n"] += 1
+            async for ev in g():
+                yield ev
+
+        agent.llm.stream = fake_stream
+        return calls
+
+    @staticmethod
+    def _call(call_id, name, args):
+        async def gen():
+            yield ToolCall(id=call_id, name=name, arguments=args)
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+        return gen
+
+    @staticmethod
+    def _say(chunks):
+        async def gen():
+            for chunk in chunks:
+                yield TextDelta(chunk)
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_calls_are_caught(self, agent, mock_session):
+        """The same call, asked again and again, is a loop."""
+        turns = [self._call(f"c{i}", "read", {"path": "/tmp/src/module.py"})
+                 for i in range(8)]
+        calls = self._agent_with(agent, turns)
+
+        with patch("codeassist.agent.check_context_limit") as ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            ctx.return_value = {"needs_compaction": False, "total_tokens": 10,
+                                "usage_pct": 1.0, "severity": "ok"}
+            events = await _drain(agent.run("find the bug"))
+
+        assert calls["n"] < 8, f"ran {calls['n']} steps with no detection"
+        looped = [e for e in events if e.type == "error" and "loop" in str(e.data).lower()]
+        assert looped, f"a repeated call was never flagged; events={[(e.type, e.data) for e in events]}"
+        assert "read" in str(looped[0].data)
+
+    @pytest.mark.asyncio
+    async def test_a_looped_call_is_not_left_in_the_transcript(self, agent, mock_session):
+        """The step is dropped rather than persisted.
+
+        An assistant row carrying tool_calls has to be followed by one tool
+        message per call. The guard stops before the calls run, so there is
+        nothing to answer and the row must go rather than be written and
+        abandoned.
+        """
+        turns = [self._call(f"c{i}", "read", {"path": "/tmp/src/module.py"})
+                 for i in range(8)]
+        self._agent_with(agent, turns)
+
+        with patch("codeassist.agent.check_context_limit") as ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            ctx.return_value = {"needs_compaction": False, "total_tokens": 10,
+                                "usage_pct": 1.0, "severity": "ok"}
+            await _drain(agent.run("find the bug"))
+
+        assert mock_session.delete_message.await_count >= 1, (
+            "the looped step was persisted instead of dropped"
+        )
+        called, answered = set(), set()
+        for call in mock_session.add_message.call_args_list:
+            if call.args and call.args[0] == "assistant" and call.kwargs.get("tool_calls"):
+                called |= {tc["id"] for tc in call.kwargs["tool_calls"]}
+            if call.args and call.args[0] == "tool":
+                answered.add(call.kwargs.get("tool_call_id"))
+        for call in mock_session.update_message.call_args_list:
+            if call.kwargs.get("tool_calls"):
+                called |= {tc["id"] for tc in call.kwargs["tool_calls"]}
+        assert called <= answered, (
+            f"tool calls {called - answered} were persisted with no result to "
+            "answer them, which makes the next request invalid"
+        )
+
+    @pytest.mark.asyncio
+    async def test_paraphrased_answers_are_caught(self, agent, mock_session):
+        """Three answers that say the same thing in different words.
+
+        Each follows a tool call, so the continuation guard keeps handing the
+        model another step instead of ending the turn -- which is exactly how a
+        reworded repeat ran all the way to the step budget before.
+        """
+        answers = [
+            "Here are the folders in the workspace:\n\naxolotl/\nZoe/\n\nWant me to look closer?",
+            "The folders in this workspace are:\n\naxolotl/\nZoe/\n\nShall I explore any of them?",
+            "Listing the workspace folders:\n\naxolotl/\nZoe/\n\nLet me know if you want detail.",
+        ]
+        turns = []
+        for i, answer in enumerate(answers):
+            turns.append(self._call(f"c{i}", "glob", {"pattern": f"*/{i}"}))
+            turns.append(self._say([answer]))
+        turns.append(self._call("cz", "glob", {"pattern": "*/done"}))
+        turns.append(self._say(["Something different entirely."]))
+        calls = self._agent_with(agent, turns)
+
+        with patch("codeassist.agent.check_context_limit") as ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            ctx.return_value = {"needs_compaction": False, "total_tokens": 10,
+                                "usage_pct": 1.0, "severity": "ok"}
+            events = await _drain(agent.run("list the folders"))
+
+        looped = [e for e in events if e.type == "error" and "loop" in str(e.data).lower()]
+        assert looped, f"three paraphrased answers were not flagged; events={[e.type for e in events]}"
+        assert "same answer" in str(looped[0].data)
+        assert calls["n"] < 8, f"kept going for {calls['n']} steps after the loop was visible"
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_answer_is_not_flagged(self, agent, mock_session):
+        """Distinct answers that share some vocabulary are ordinary work.
+
+        A model listing files, then reporting what it found, then reporting a
+        fix, re-uses words throughout. Comparing vocabulary alone would swallow
+        every one of those, so the guard also requires each answer to be about
+        the same size as the one before it.
+        """
+        turns = []
+        for i, answer in enumerate([
+            "The workspace has two folders: axolotl and Zoe.",
+            "axolotl holds the parser; Zoe holds the fixtures.",
+            "Fixed the timeout in test_ci.py and bumped the default to 30.",
+            "Also updated the README to match the new flag.",
+        ]):
+            turns.append(self._call(f"c{i}", "glob", {"pattern": f"*/{i}"}))
+            turns.append(self._say([answer]))
+        calls = self._agent_with(agent, turns)
+
+        with patch("codeassist.agent.check_context_limit") as ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            ctx.return_value = {"needs_compaction": False, "total_tokens": 10,
+                                "usage_pct": 1.0, "severity": "ok"}
+            events = await _drain(agent.run("survey the workspace"))
+
+        assert not [e for e in events if e.type == "error"], (
+            f"ordinary progress was flagged: {[str(e.data) for e in events if e.type == 'error']}"
+        )
+
+
 class TestContextWindowRecovery:
     """A provider that refuses a request for exceeding the context window must be
     recovered from, not reported.
@@ -1306,6 +1497,136 @@ async def _drain(agen):
     """Consume an AgentEvent stream into a list."""
     return [event async for event in agen]
 
+
+class TestLoopDetector:
+    """The guard itself, where the judgement calls live.
+
+    Everything else about a looping turn is mock scaffolding; what actually has
+    to be right is where "the same thing again" stops looking like the same
+    thing.
+    """
+
+    @staticmethod
+    def _read(arguments):
+        return [ToolCall(id="c", name="read", arguments=arguments)]
+
+    def test_the_same_call_repeated_is_a_loop(self):
+        detector = _LoopDetector()
+        for _ in range(4):
+            reason = detector.note_tool_calls(self._read({"path": "/tmp/a.py"}))
+        assert reason == "called `read` 4 times in a row with nearly the same arguments"
+
+    def test_an_argument_nudged_one_segment_over_still_counts(self):
+        """A model spinning its wheels rewords rather than repeating byte for byte.
+
+        Exact comparison misses this, and it is the shape a real loop takes: the
+        path creeps, the search term is tweaked, and nothing changes.
+        """
+        detector = _LoopDetector()
+        for index in range(4):
+            reason = detector.note_tool_calls(
+                self._read({"path": f"/tmp/a{index}.py", "reason": "looking for the bug"})
+            )
+        assert reason is not None
+
+    def test_different_tools_are_not_a_loop(self):
+        detector = _LoopDetector()
+        for name in ("read", "grep", "edit", "read"):
+            reason = detector.note_tool_calls(
+                [ToolCall(id="c", name=name, arguments={"path": "/tmp/a.py"})]
+            )
+        assert reason is None
+
+    def test_a_genuinely_different_call_breaks_the_streak(self):
+        """Working through a list of files is what the tools are for."""
+        detector = _LoopDetector()
+        for path in ("/tmp/a.py", "/tmp/b.py", "/tmp/c.py", "/tmp/d.py"):
+            reason = detector.note_tool_calls(self._read({"path": path}))
+        assert reason is None
+
+    def test_different_work_resets_a_streak_in_progress(self):
+        detector = _LoopDetector()
+        for path in ("/tmp/a.py", "/tmp/a.py", "/tmp/a.py"):
+            detector.note_tool_calls(self._read({"path": path}))
+        detector.note_tool_calls(self._read({"path": "/tmp/elsewhere.py"}))
+        for _ in range(3):
+            reason = detector.note_tool_calls(self._read({"path": "/tmp/a.py"}))
+        assert reason is None
+
+    def test_an_answer_repeated_is_a_loop(self):
+        detector = _LoopDetector()
+        answer = "The bug is in the retry loop in client.py, line 42."
+        for _ in range(3):
+            reason = detector.note_text(answer)
+        assert reason == "gave the same answer 3 times in a row"
+
+    def test_an_answer_reworded_every_time_still_counts(self):
+        """Framing churns while the substance holds still.
+
+        Each rewording overlaps its immediate predecessor by under half, so
+        comparing only against the last answer reads this as three unrelated
+        replies rather than one answer three times.
+        """
+        detector = _LoopDetector()
+        for answer in (
+            "Here are the folders in the workspace:\n\naxolotl/\nzoe/\n\nWant a look?",
+            "The folders in this workspace are:\n\naxolotl/\nzoe/\n\nShall I explore?",
+            "Listing the workspace folders:\n\naxolotl/\nzoe/\n\nLet me know.",
+        ):
+            reason = detector.note_text(answer)
+        assert reason == "gave the same answer 3 times in a row"
+
+    def test_a_genuinely_different_answer_is_not_a_loop(self):
+        detector = _LoopDetector()
+        for answer in (
+            "The bug is in the retry loop in client.py.",
+            "Let me check how the session cache is invalidated.",
+            "Found it: _invalidate runs before the commit, so the cache is stale.",
+        ):
+            reason = detector.note_text(answer)
+        assert reason is None
+
+    def test_a_restatement_the_guard_dropped_still_counts(self):
+        """These are the loops that look like progress.
+
+        Each repeat is swallowed, so the user sees their answer once and then
+        tool calls that change nothing -- the turn grinds out the nudge budget
+        and reports itself incomplete. Only the drops show it was circling.
+        """
+        detector = _LoopDetector()
+        assert detector.note_text("The bug is in client.py, in the retry loop.") is None
+        assert detector.note_restatement() is None
+        assert detector.note_restatement() == "gave the same answer 3 times in a row"
+
+    def test_blank_text_is_not_a_step(self):
+        detector = _LoopDetector()
+        assert detector.note_text("") is None
+        assert detector.note_text("   ") is None
+
+
+class TestRestates:
+    def test_the_same_answer_restates(self):
+        assert _restates("the bug is in client.py", "the bug is in client.py")
+
+    def test_an_unrelated_answer_does_not(self):
+        assert not _restates("the bug is in client.py", "here is a poem about rain")
+
+    def test_a_growing_answer_is_a_new_answer_not_a_restatement(self):
+        """A longer reply that only adds detail is progress, not a repeat.
+
+        Guarding on length alone would call the second half of every real
+        answer a loop.
+        """
+        short = "The bug is in client.py, in the retry loop on line 42."
+        long = (
+            "The bug is in client.py, in the retry loop on line 42. It retries "
+            "without a backoff, so a failing dependency gets hammered. Here is "
+            "why the delay matters, and what to change."
+        )
+        assert not _restates(short, long)
+
+    def test_an_empty_reply_restates_nothing(self):
+        assert not _restates("the bug is in client.py", "")
 
 class TestAgentStop:
     """Stopping a turn must end it promptly and must not throw away work that
@@ -1451,3 +1772,121 @@ class TestAgentStop:
                      if c.args and c.args[0] == "tool"]
         assert tool_msgs, "the interrupted tool call must still be answered"
         assert tool_msgs[-1].kwargs["tool_call_id"] == "c1"
+
+    @pytest.mark.asyncio
+    async def test_stop_while_confirming_answers_every_call(self, agent, mock_session):
+        """Stop pressed during the confirmation loop still owes the transcript a
+        result for every tool call it already persisted.
+
+        The calls are written as an assistant row before the user has approved
+        any of them, so returning from the loop without answering them leaves
+        the next request carrying tool calls with no results and the provider
+        rejects it -- the session then fails on every later message.
+        """
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+        async def turn():
+            for index in range(3):
+                yield ToolCall(id=f"c{index}", name="shell",
+                               arguments={"command": f"echo {index}"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = lambda messages, openai_tools: turn()
+
+        agent.get_permission_action = AsyncMock(return_value="ask")
+
+        waiting = asyncio.Event()
+        asked = []
+
+        async def confirm(confirm_id):
+            # The user presses Stop with the first dialog still up. The
+            # remaining two calls were persisted with the assistant row and
+            # never reach a dialog at all, so nothing else will answer them.
+            asked.append(confirm_id)
+            waiting.set()
+            agent.cancel()
+            return False
+
+        agent.wait_for_confirm = confirm
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "go"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            task = asyncio.create_task(_drain(agent.run("go")))
+            await asyncio.wait_for(waiting.wait(), timeout=5)
+            evs = await asyncio.wait_for(task, timeout=5)
+
+        assert asked, "the fixture must reach a confirmation to mean anything"
+        self._assert_no_dangling_tool_calls(mock_session)
+
+    @pytest.mark.asyncio
+    async def test_hard_cancel_while_confirming_answers_every_call(self, agent, mock_session):
+        """The same, but the server cancels the task outright instead of setting
+        the cooperative flag.
+
+        `CancelledError` unwinds the confirmation loop at whatever await it
+        happened to be sitting in, so it has to be caught there rather than
+        relying on the stop flag being set.
+        """
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+        agent.get_permission_action = AsyncMock(return_value="ask")
+
+        async def turn():
+            for index in range(3):
+                yield ToolCall(id=f"c{index}", name="shell",
+                               arguments={"command": f"echo {index}"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = lambda messages, openai_tools: turn()
+
+        waiting = asyncio.Event()
+
+        async def hang(confirm_id):
+            waiting.set()
+            await asyncio.sleep(30)
+
+        agent.wait_for_confirm = hang
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "go"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            task = asyncio.create_task(_drain(agent.run("go")))
+            await asyncio.wait_for(waiting.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+
+        # The shielded write must have completed even though the task was cancelled.
+        await asyncio.sleep(0.05)
+        self._assert_no_dangling_tool_calls(mock_session)
+
+    @staticmethod
+    def _assert_no_dangling_tool_calls(mock_session):
+        """Every tool call written to the session must have a result with it."""
+        called, answered = set(), set()
+        for call in mock_session.add_message.call_args_list:
+            if call.args and call.args[0] == "assistant" and call.kwargs.get("tool_calls"):
+                called |= {tc["id"] for tc in call.kwargs["tool_calls"]}
+            if call.args and call.args[0] == "tool":
+                answered.add(call.kwargs.get("tool_call_id"))
+        for call in mock_session.update_message.call_args_list:
+            if call.kwargs.get("tool_calls"):
+                called |= {tc["id"] for tc in call.kwargs["tool_calls"]}
+        assert called, "the fixture must persist tool calls for this to mean anything"
+        assert not called - answered, (
+            f"tool calls {sorted(called - answered)} were persisted with no "
+            "result to answer them, so the next request is invalid"
+        )
+

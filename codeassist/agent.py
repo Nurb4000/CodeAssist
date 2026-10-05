@@ -189,6 +189,123 @@ def _restates(previous: str, candidate: str) -> bool:
     )
 
 
+# How many near-identical calls to the same tool, in a row, count as going in
+# circles. Two would be far too eager -- re-reading a file after editing it is
+# ordinary work -- but a model that has asked for the same thing four times
+# running is not making progress, and nothing else in the loop would notice.
+_MAX_TOOL_LOOP = 4
+
+# How much of the previous call's arguments must reappear for two calls to
+# count as the same call asked again. High on purpose: the failure mode is a
+# model nudging a path or a search pattern by a character, so no two arguments
+# are byte-equal even though every one of them is asking for the same thing.
+_TOOL_ARG_OVERLAP = 0.8
+
+# How many answers in a row, each restating one already given, count as a loop.
+_MAX_TEXT_LOOP = 3
+
+# How many recent answers a new one is compared against. More than one, because
+# framing churns while the substance repeats: "Here are the folders" / "The
+# folders in this workspace" / "Listing the workspace folders" share the
+# filenames and the count but overlap their immediate predecessor by under half,
+# so comparing only against the last answer misses a loop that is plainly there.
+_TEXT_WINDOW = 3
+
+
+def _arg_tokens(arguments: dict) -> set[str]:
+    """Flatten tool arguments to a comparable token set.
+
+    Compare the words and paths inside the arguments rather than the JSON,
+    because the argument is the part a looping model varies: a search pattern
+    reworded or a path nudged one segment over still shares nearly every token
+    with the call before it.
+    """
+    text = json.dumps(arguments, sort_keys=True, default=str).lower()
+    return {w for w in re.findall(r"[a-z0-9_./-]+", text) if len(w) > 1}
+
+
+def _overlap(tokens: set[str], previous: set[str]) -> float:
+    """Fraction of ``previous`` that reappears in ``tokens``."""
+    if not tokens or not previous:
+        return 0.0
+    return len(tokens & previous) / len(previous)
+
+
+class _LoopDetector:
+    """Catch a model going in circles within one turn, before the budget runs out.
+
+    Two shapes, both reported from real turns:
+
+    - A reasoning-heavy turn that keeps asking for the same thing. Nothing in
+      the prose repeats, so a text-only check sees nothing at all and the turn
+      spends its whole step budget re-reading the same file.
+    - A turn that keeps re-delivering the same answer. The repeats are
+      paraphrases, so comparing strings misses them. ``_restates`` compares
+      vocabulary and size instead, and is what the restatement guard already
+      uses for exactly this reason.
+
+    Tool calls match on name plus argument overlap rather than equality, since
+    a model spinning its wheels varies the argument slightly every time.
+    """
+
+    def __init__(self) -> None:
+        self._tool_name: str | None = None
+        self._tool_tokens: set[str] = set()
+        self._tool_streak = 0
+        self._recent_texts: list[str] = []
+        self._text_streak = 0
+
+    def note_tool_calls(self, tool_calls: list["ToolCall"]) -> str | None:
+        """Record a step's calls, returning why they are a loop if they are."""
+        for tc in tool_calls:
+            tokens = _arg_tokens(tc.arguments)
+            if (
+                self._tool_name == tc.name
+                and _overlap(tokens, self._tool_tokens) >= _TOOL_ARG_OVERLAP
+            ):
+                self._tool_streak += 1
+            else:
+                self._tool_name = tc.name
+                self._tool_streak = 1
+            self._tool_tokens = tokens
+            if self._tool_streak >= _MAX_TOOL_LOOP:
+                return (
+                    f"called `{tc.name}` {self._tool_streak} times in a row with "
+                    "nearly the same arguments"
+                )
+        return None
+
+    def _text_reason(self) -> str | None:
+        if self._text_streak >= _MAX_TEXT_LOOP:
+            return f"gave the same answer {self._text_streak} times in a row"
+        return None
+
+    def note_text(self, text: str) -> str | None:
+        """Record a step's reply, returning why it is a loop if it is."""
+        if not text.strip():
+            return None
+        if any(_restates(previous, text) for previous in self._recent_texts):
+            self._text_streak += 1
+        else:
+            self._text_streak = 1
+        self._recent_texts.append(text)
+        del self._recent_texts[:-_TEXT_WINDOW]
+        return self._text_reason()
+
+    def note_restatement(self) -> str | None:
+        """Record a reply the restatement guard dropped for repeating itself.
+
+        These are the loops that looked like progress. The user sees their
+        answer once and then a run of tool calls that change nothing, because
+        each repeat is silently swallowed -- so the turn grinds out the whole
+        nudge budget and finally reports itself incomplete, having delivered
+        nothing new. Counting the drops turns that into one clear "this is
+        going in circles" at the point it becomes obvious.
+        """
+        self._text_streak += 1
+        return self._text_reason()
+
+
 def _refusal_payload(code: str, explanation: str, trigger: str) -> dict:
     """Build the payload for a `refusal` event.
 
@@ -241,6 +358,22 @@ class AgentEvent:
     data: dict = field(default_factory=dict)
 
 
+def _loop_event(reason: str) -> AgentEvent:
+    """The event that ends a turn the model has gone round in circles on.
+
+    Deliberately not the `incomplete` the nudge budget reports. That says "press
+    Continue", which is the wrong advice here: continuing is what produced the
+    loop. This says what repeated, so the user can see whether the model was
+    stuck on the task or stuck on itself.
+    """
+    return AgentEvent("error", {
+        "message": (
+            f"Detected a loop — the agent {reason}. Stopped there rather than "
+            "spend the rest of the step budget going round again."
+        ),
+    })
+
+
 class Agent:
     def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str | None = None, agent_ruleset: PermissionRuleset | None = None, max_steps: int | None = None):
         self.config = config
@@ -267,6 +400,20 @@ class Agent:
         # Incremental message cache — avoids DB fetch on every iteration
         self._messages: list[dict] | None = None
         self._messages_dirty: bool = True
+        # Synthetic turns belonging to the turn in flight that were never
+        # written to the database: the continuation nudge, and the reply it is
+        # anchored to. Held apart from `_messages` on purpose. That snapshot is
+        # meant to be an exact mirror of the session rows, and appending to it
+        # in place broke that in a way that was invisible: `_messages_dirty`
+        # could then be cleared over a snapshot holding rows the database did
+        # not have, and because `_run` did not mark the snapshot dirty when it
+        # added the user's next message, the following turn replayed the stale
+        # nudge and dropped the question entirely.
+        self._pending_nudges: list[dict] = []
+        # Bumped whenever the overlay changes, including when a new nudge
+        # replaces the old one at the same length, so the step cache knows to
+        # rebuild.
+        self._nudge_version: int = 0
         # Compaction state tracking
         self._compaction_summary: str = ""
         self._compaction_count: int = 0
@@ -340,47 +487,48 @@ class Agent:
         self._messages_dirty = True
         await self._answer_unrun_tool_calls(tool_calls)
 
-    def _append_nudge(
-        self,
-        messages: list[dict],
-        history: list[dict],
-        assistant_text: str,
-        nudge: str,
-    ):
-        """Queue a continuation nudge behind the assistant reply that earned it.
+    def _append_nudge(self, assistant_text: str, nudge: str):
+        """Queue a continuation nudge for the next step of this turn.
 
-        `messages` is rebuilt from `history` at the top of each step, before
-        that step's own assistant reply is persisted, so the transcript handed
-        back to the model for a nudge does not contain the text the user just
-        watched stream in. The nudge therefore read as if it arrived straight
-        after the tool output: the model had no record of having answered, so
-        it re-derived the same answer from the tool result and emitted it a
-        second time — the duplicated summary the user sees at the end of the
-        turn, on every model.
+        `messages` is rebuilt from the session rows at the top of each step,
+        before that step's own assistant reply is persisted, so the transcript
+        handed back to the model for a nudge does not contain the text the user
+        just watched stream in. The nudge therefore read as if it arrived
+        straight after the tool output: the model had no record of having
+        answered, so it re-derived the same answer from the tool result and
+        emitted it a second time — the duplicated summary the user sees at the
+        end of the turn, on every model.
 
-        Put the reply back ahead of the nudge so the retry is a real
-        continuation. `history` is the agent's snapshot of the session rows
-        (`self._messages`), and it is updated in place so the snapshot stays
-        true for later steps and later turns without a re-read — that accuracy
-        is also what lets the nudge survive the next iteration's cache reuse.
+        The reply itself no longer needs replaying. Persisting it marks the
+        snapshot dirty, so the next step re-reads the rows and finds it, which
+        puts the answer ahead of the nudge and makes the retry a real
+        continuation. Only the nudge itself goes to `_pending_nudges`: a nudge
+        is a transient instruction that must not reach the database or a later
+        turn, but it does have to survive this turn's remaining steps.
 
-        A step that produced no text (reasoning only) adds no assistant entry:
-        there is nothing for the model to be missing, and nothing to hold the
-        reply against.
+        Kept out of the session snapshot entirely. Appending to the snapshot in
+        place made it disagree with the database while `_messages_dirty` claimed
+        it did not, and since `_run` did not mark the snapshot dirty when it
+        added the user's next message, the following turn replayed the stale
+        nudge and dropped the question entirely.
 
-        Also arms the restatement guard: now that the model can see its own
-        answer, the usual failure moves one step later. Asked to "give your final
-        answer now", it complies by restating what it already said. The reply
-        that answers a nudge is therefore buffered rather than streamed, so a
-        restatement can be dropped instead of shown and then retracted.
+        A step that produced no text (reasoning only) contributes nothing: there
+        is nothing for the model to be missing, and nothing to hold the reply
+        against.
         """
         if assistant_text.strip():
-            entry = {"role": "assistant", "content": assistant_text}
-            messages.append(entry)
-            history.append({**entry, "tool_calls": None, "reasoning_content": None})
+            # Arms the restatement guard: now that the model can see its own
+            # answer, the usual failure moves one step later. Asked to "give
+            # your final answer now", it complies by restating what it already
+            # said, so that reply is buffered rather than streamed and can be
+            # dropped instead of shown and then retracted.
             self._nudge_answer = assistant_text
             self._defer_nudge_text = True
-        messages.append({"role": "user", "content": nudge})
+        # Supersede rather than stack. A firmer nudge replaces the gentler one
+        # it follows, and one outstanding instruction keeps the transcript's
+        # roles alternating instead of trailing a run of user turns.
+        self._pending_nudges = [{"role": "user", "content": nudge}]
+        self._nudge_version += 1
 
     def reset_trust(self):
         """Reset trust flags for new session."""
@@ -566,18 +714,34 @@ class Agent:
         self._continuation_nudges = 0
         self._nudge_answer = None
         self._defer_nudge_text = False
+        # A nudge belongs to the turn that earned it. Clearing the overlay here
+        # is what stops one turn's instruction to "carry on with the task" from
+        # becoming the newest thing the model sees when the user has moved on.
+        self._pending_nudges = []
+        self._nudge_version += 1
 
         await self.session.add_message("user", user_message, attachments=attachments)
+        # The snapshot does not contain the row just written. Without this the
+        # next read is skipped whenever the previous turn left the flag clear,
+        # and the model is sent a transcript with no record of the question.
+        self._messages_dirty = True
 
         try:
+            # After Stop, keep draining the generator instead of returning on the
+            # spot. Abandoning it here closes it at whichever `yield` it happens
+            # to be sitting on, so whatever cleanup that step owes the transcript
+            # is skipped: a step mid-confirmation leaves its persisted tool calls
+            # with no results, and the next request is rejected outright. `_loop`
+            # checks the flag itself at every boundary, so draining it is prompt
+            # anyway -- and its events are dropped so nothing new reaches the UI.
+            cancelled = False
             async for event in self._loop(user_message):
                 if self.cancel_event.is_set():
-                    yield AgentEvent("cancelled")
-                    yield AgentEvent("done")
-                    return
+                    cancelled = True
+                    continue
                 yield event
             # _loop ended normally — check if it was due to cancel
-            if self.cancel_event.is_set():
+            if cancelled or self.cancel_event.is_set():
                 yield AgentEvent("cancelled")
                 yield AgentEvent("done")
                 return
@@ -633,8 +797,7 @@ class Agent:
             log.debug("Tool output cleanup failed: %s", e)
 
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
-        recent_texts: list[str] = []
-        max_repeats = 3
+        loop_detector = _LoopDetector()
         hit_max_iterations = False
 
         # Cache tool schema tokens once (they don't change within a loop)
@@ -647,6 +810,7 @@ class Agent:
         # Compaction cache: avoid re-compacting when no new messages arrived
         _cached_messages = None
         _cached_history_len = 0
+        _cached_nudge_version = -1
 
         # Graceful step budget: the per-agent 'steps' limit if configured, else
         # the global max_iterations cap. The per-agent budget BINDS — it is the
@@ -679,8 +843,14 @@ class Agent:
                 self._messages_dirty = False
             history = self._messages
 
-            # Only rebuild and re-compact when new messages have been added
-            if len(history) != _cached_history_len:
+            # Only rebuild and re-compact when new messages have been added, or
+            # when a nudge was queued since the cache was taken — the overlay is
+            # replayed into the built list, so a stale cache would drop it.
+            if (
+                _cached_messages is None
+                or len(history) != _cached_history_len
+                or self._nudge_version != _cached_nudge_version
+            ):
                 messages = build_openai_messages(self.system_prompt, history)
 
                 # Resolve the window ONCE and use it for the initial check and
@@ -782,8 +952,14 @@ class Agent:
                             "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
                         })
 
+                # Replay this turn's nudge (and the reply it is anchored to)
+                # after the real rows, so the model reads them as the most
+                # recent turns rather than as part of the persisted history.
+                messages.extend(self._pending_nudges)
+
                 _cached_messages = messages
                 _cached_history_len = len(history)
+                _cached_nudge_version = self._nudge_version
             else:
                 # Reuse cached compacted messages — no new data to process
                 messages = _cached_messages
@@ -932,14 +1108,18 @@ class Agent:
                 return
 
             # Restatement guard for the reply that answers a continuation nudge.
-            # The model now sees its own answer (see _append_nudge), but asked to
-            # "give your final answer now" it still tends to comply by re-delivering
-            # that answer. Its prose was held back rather than streamed, so if it
-            # adds nothing beyond what the user has already read, drop it here.
-            # Clearing accumulated_text makes the normal path below treat this as a
-            # step with nothing to say: the guard recognises a final answer after a
-            # nudge, and the loop finishes.
-            if self._defer_nudge_text:
+            # Asked to "give your final answer now", a model reliably complies by
+            # re-delivering the answer it already gave. Its prose is held back
+            # rather than streamed, so a repeat can be dropped instead of shown
+            # and then retracted.
+            #
+            # Held until a step actually produces prose. Clearing the flag on the
+            # next step regardless meant the guard only ever worked when the
+            # model answered straight away: a step that went back to its tools
+            # consumed the deferral with nothing to compare, and the reply that
+            # really did answer the nudge went unchecked. Using tools again and
+            # then restating is the common order, so the guard was mostly inert.
+            if self._defer_nudge_text and accumulated_text.strip():
                 self._defer_nudge_text = False
                 if _restates(self._nudge_answer or "", accumulated_text):
                     log.info(
@@ -953,11 +1133,29 @@ class Agent:
                     await self.session.delete_message(stream_msg_id)
                     self._messages_dirty = True
                     accumulated_text = ""
-                elif accumulated_text:
+                    looping = loop_detector.note_restatement()
+                    if looping:
+                        log.warning("LLM loop detected: %s", looping)
+                        yield _loop_event(looping)
+                        break
+                else:
                     yield AgentEvent("text_delta", {"content": accumulated_text})
-            self._nudge_answer = None
+                self._nudge_answer = None
 
             if tool_calls:
+                # A model that keeps asking for the same thing never repeats
+                # itself in prose, so check the calls before running them. Drop
+                # the step rather than persisting calls we will not run: an
+                # assistant row carrying tool_calls has to be followed by one
+                # tool message per call, and there is nothing here to answer.
+                looping = loop_detector.note_tool_calls(tool_calls)
+                if looping:
+                    log.warning("LLM loop detected: %s", looping)
+                    await self.session.delete_message(stream_msg_id)
+                    self._messages_dirty = True
+                    yield _loop_event(looping)
+                    break
+
                 self._run_used_tools = True
                 self._since_nudge_tools = True
                 tc_dicts = [
@@ -974,92 +1172,122 @@ class Agent:
 
                 # Phase 1: Handle confirmations and questions sequentially (interactive)
                 confirmed_tool_calls = []
-                for tc in tool_calls:
-                    if self.cancel_event.is_set():
-                        return
-                    if tc.name == "question":
-                        question_id = f"{tc.id}_question"
-                        structured_questions = tc.arguments.get("questions")
-                        legacy_question = tc.arguments.get("question", "")
-                        yield AgentEvent("question_request", {
-                            "id": question_id,
-                            "question": legacy_question,
-                            "questions": structured_questions,
-                            "options": tc.arguments.get("options"),
-                            "required": tc.arguments.get("required", False),
-                        })
-                        event = asyncio.Event()
-                        self._confirm_events[question_id] = event
-                        await event.wait()
-                        answer = self._confirm_results.pop(question_id, "")
-                        self._confirm_events.pop(question_id, None)
-                        if not answer:
+                # Every call needs a persisted result, so track which ones still
+                # lack one. The assistant row above already advertises all of
+                # them, and a call left unanswered here makes the transcript
+                # invalid for the next request — the provider rejects it, or a
+                # lenient local backend reads the rest of the conversation
+                # against a phantom call and carries on with the old task.
+                unanswered = {tc.id for tc in tool_calls}
+                try:
+                    for tc in tool_calls:
+                        if self.cancel_event.is_set():
+                            break
+                        if tc.name == "question":
+                            question_id = f"{tc.id}_question"
+                            structured_questions = tc.arguments.get("questions")
+                            legacy_question = tc.arguments.get("question", "")
+                            yield AgentEvent("question_request", {
+                                "id": question_id,
+                                "question": legacy_question,
+                                "questions": structured_questions,
+                                "options": tc.arguments.get("options"),
+                                "required": tc.arguments.get("required", False),
+                            })
+                            event = asyncio.Event()
+                            self._confirm_events[question_id] = event
+                            await event.wait()
+                            answer = self._confirm_results.pop(question_id, "")
+                            self._confirm_events.pop(question_id, None)
+                            if not answer:
+                                await self.session.add_message(
+                                    "tool",
+                                    content="Question was dismissed by user.",
+                                    tool_call_id=tc.id,
+                                )
+                            else:
+                                await self.session.add_message("tool", content=str(answer), tool_call_id=tc.id)
+                            unanswered.discard(tc.id)
+                            self._messages_dirty = True
+                            yield AgentEvent("tool_result", {"id": tc.id, "name": "question", "output": str(answer)})
+                            continue
+
+                        # Check permission action (allow/deny/ask)
+                        file_path = tc.arguments.get("file_path", tc.arguments.get("path", ""))
+                        perm_action = await self.get_permission_action(tc.name, tc.arguments)
+
+                        if perm_action == "deny":
+                            # Tool is explicitly denied — skip without asking
                             await self.session.add_message(
                                 "tool",
-                                content="Question was dismissed by user.",
+                                content=f"Tool '{tc.name}' is not permitted by your permission rules.",
                                 tool_call_id=tc.id,
                             )
-                        else:
-                            await self.session.add_message("tool", content=str(answer), tool_call_id=tc.id)
-                        self._messages_dirty = True
-                        yield AgentEvent("tool_result", {"id": tc.id, "name": "question", "output": str(answer)})
-                        continue
-
-                    # Check permission action (allow/deny/ask)
-                    file_path = tc.arguments.get("file_path", tc.arguments.get("path", ""))
-                    perm_action = await self.get_permission_action(tc.name, tc.arguments)
-
-                    if perm_action == "deny":
-                        # Tool is explicitly denied — skip without asking
-                        await self.session.add_message(
-                            "tool",
-                            content=f"Tool '{tc.name}' is not permitted by your permission rules.",
-                            tool_call_id=tc.id,
-                        )
-                        self._messages_dirty = True
-                        yield AgentEvent("tool_result", {
-                            "id": tc.id,
-                            "name": tc.name,
-                            "output": "Denied by permission rules",
-                        })
-                        continue
-
-                    if perm_action == "ask" or await self.needs_confirmation(tc.name, tc.arguments):
-                        confirm_id = f"{tc.id}_{tc.name}"
-                        # Check if there's a saved permission hint
-                        saved_hint = permission_manager.saved.check_saved(tc.name, file_path)
-                        # Bind the request context server-side so a later "remember"
-                        # decision is never derived from client-echoed values.
-                        self._confirm_requests[confirm_id] = {
-                            "tool": tc.name,
-                            "file_path": file_path,
-                            "arguments": tc.arguments,
-                        }
-                        yield AgentEvent("confirm_request", {
-                            "id": confirm_id,
-                            "tool": tc.name,
-                            "file_path": file_path,
-                            "arguments": tc.arguments,
-                            "in_workspace": self._is_in_workspace(file_path) if tc.name in ("write", "edit") else None,
-                            "permission_action": perm_action,
-                            "saved_permission": saved_hint,
-                        })
-                        self._confirm_tools[confirm_id] = tc.name
-                        approved = await self.wait_for_confirm(confirm_id)
-                        if not approved:
-                            await self.session.add_message(
-                                "tool",
-                                content=f"Tool '{tc.name}' was denied by user.",
-                                tool_call_id=tc.id,
-                            )
+                            unanswered.discard(tc.id)
                             self._messages_dirty = True
                             yield AgentEvent("tool_result", {
                                 "id": tc.id,
                                 "name": tc.name,
-                                "output": "Denied by user",
+                                "output": "Denied by permission rules",
                             })
                             continue
-                    confirmed_tool_calls.append(tc)
+
+                        if perm_action == "ask" or await self.needs_confirmation(tc.name, tc.arguments):
+                            confirm_id = f"{tc.id}_{tc.name}"
+                            # Check if there's a saved permission hint
+                            saved_hint = permission_manager.saved.check_saved(tc.name, file_path)
+                            # Bind the request context server-side so a later "remember"
+                            # decision is never derived from client-echoed values.
+                            self._confirm_requests[confirm_id] = {
+                                "tool": tc.name,
+                                "file_path": file_path,
+                                "arguments": tc.arguments,
+                            }
+                            yield AgentEvent("confirm_request", {
+                                "id": confirm_id,
+                                "tool": tc.name,
+                                "file_path": file_path,
+                                "arguments": tc.arguments,
+                                "in_workspace": self._is_in_workspace(file_path) if tc.name in ("write", "edit") else None,
+                                "permission_action": perm_action,
+                                "saved_permission": saved_hint,
+                            })
+                            self._confirm_tools[confirm_id] = tc.name
+                            approved = await self.wait_for_confirm(confirm_id)
+                            if not approved:
+                                await self.session.add_message(
+                                    "tool",
+                                    content=f"Tool '{tc.name}' was denied by user.",
+                                    tool_call_id=tc.id,
+                                )
+                                unanswered.discard(tc.id)
+                                self._messages_dirty = True
+                                yield AgentEvent("tool_result", {
+                                    "id": tc.id,
+                                    "name": tc.name,
+                                    "output": "Denied by user",
+                                })
+                                continue
+                        confirmed_tool_calls.append(tc)
+                except asyncio.CancelledError:
+                    # Stop was pressed while a confirmation was pending. Answer
+                    # what is still outstanding before unwinding, or the next
+                    # request carries an unanswered tool call. Shielded so a
+                    # second cancel cannot tear the writes off half-written.
+                    await asyncio.shield(self._answer_unrun_tool_calls(
+                        [tc for tc in tool_calls if tc.id in unanswered]
+                    ))
+                    raise
+
+                if self.cancel_event.is_set():
+                    # Stop landed between calls. Everything still unanswered —
+                    # this call, the ones after it, and any already approved but
+                    # not yet run — gets an explicit result, so the transcript
+                    # the next turn reads is valid.
+                    await self._answer_unrun_tool_calls(
+                        [tc for tc in tool_calls if tc.id in unanswered]
+                    )
+                    return
 
                 # Phase 2: Execute confirmed tools in parallel
                 async def _exec_tool(tc):
@@ -1133,14 +1361,14 @@ class Agent:
                 )
                 self._messages_dirty = True
 
-                # Repetition detection: break if the LLM keeps producing the same output
-                normalized = accumulated_text.strip().lower()
-                recent_texts.append(normalized)
-                if len(recent_texts) > max_repeats:
-                    recent_texts.pop(0)
-                if len(recent_texts) >= max_repeats and len(set(recent_texts)) == 1:
-                    log.warning("LLM repetition detected (%d identical responses), breaking loop", max_repeats)
-                    yield AgentEvent("error", {"message": f"Detected repetitive output — stopped after {max_repeats} identical responses."})
+                # Repetition detection. Matching on vocabulary and size rather
+                # than equality is the point: the repeats that reach here are
+                # paraphrases, so identical-string comparison never fires and the
+                # turn runs on re-deriving the same answer until the budget ends.
+                looping = loop_detector.note_text(accumulated_text)
+                if looping:
+                    log.warning("LLM loop detected: %s", looping)
+                    yield _loop_event(looping)
                     break
 
             # Continuation guard. If the model stopped using tools (a text-only
@@ -1162,10 +1390,7 @@ class Agent:
                     self._continuation_nudges = 1
                     self._since_nudge_tools = False
                     log.warning("LLM stopped after using tools without finishing; nudging to continue.")
-                    self._append_nudge(messages, history, accumulated_text, CONTINUATION_NUDGE)
-                    _cached_messages = messages
-                    _cached_history_len = len(history)
-                    self._messages_dirty = False
+                    self._append_nudge(accumulated_text, CONTINUATION_NUDGE)
                     continue
                 if not self._since_nudge_tools:
                     log.debug("LLM gave a final answer after a nudge; treating as complete.")
@@ -1176,10 +1401,7 @@ class Agent:
                         "LLM stopped again after using tools (nudge %d/%d); pushing further.",
                         self._continuation_nudges, MAX_CONTINUATION_NUDGES,
                     )
-                    self._append_nudge(messages, history, accumulated_text, CONTINUATION_NUDGE_FIRM)
-                    _cached_messages = messages
-                    _cached_history_len = len(history)
-                    self._messages_dirty = False
+                    self._append_nudge(accumulated_text, CONTINUATION_NUDGE_FIRM)
                     continue
                 else:
                     log.warning(

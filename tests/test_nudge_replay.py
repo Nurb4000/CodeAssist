@@ -113,7 +113,7 @@ def agent(config):
     return agent
 
 
-async def _run(agent, turns, patch_ctx=True):
+async def _run(agent, turns, patch_ctx=True, message="list the folders"):
     """Drive `turns` through the loop, returning the message list per step."""
     seen: list[list[dict]] = []
     calls = {"n": 0}
@@ -138,7 +138,7 @@ async def _run(agent, turns, patch_ctx=True):
                    new=AsyncMock(return_value=128000)), \
              patch("codeassist.agent.KnowledgeBase.log_tool_execution",
                    new=AsyncMock()):
-            async for ev in agent.run("list the folders"):
+            async for ev in agent.run(message):
                 events.append(ev)
     finally:
         if patch_ctx:
@@ -215,8 +215,13 @@ async def test_second_nudge_replays_a_valid_conversation(agent):
 
 @pytest.mark.asyncio
 async def test_nudge_after_reasoning_only_step_stays_valid(agent):
-    """A step can emit reasoning and no text. There is nothing to re-insert, so
-    the nudge follows the tool result directly and the transcript stays valid."""
+    """A step can emit reasoning and no text, so there is no answer to re-insert.
+
+    The nudge still has to follow a valid transcript. The step's own row is in
+    the session — it carries the reasoning, and dropping it would lose the only
+    record of what the model was doing — so it is replayed with empty content
+    and the nudge follows it.
+    """
     async def reasoning_only():
         from codeassist.llm import ReasoningDelta
         yield ReasoningDelta("thinking")
@@ -225,8 +230,15 @@ async def test_nudge_after_reasoning_only_step_stays_valid(agent):
     seen, _ = await _run(agent, [_list_folders(), reasoning_only, _say(["Here."])])
 
     nudged = seen[2]
-    assert _roles(nudged) == ["system", "user", "assistant", "tool", "user"]
+    assert _roles(nudged) == ["system", "user", "assistant", "tool", "assistant", "user"]
+    # The reasoning-only row is the one the nudge follows, and it is empty of
+    # prose -- so there is no answer here for the model to be missing.
+    assert nudged[4]["content"] == ""
     assert CONTINUATION_NUDGE in nudged[-1]["content"]
+    # Every step left exactly one row, including the one that only reasoned.
+    assert [r["role"] for r in agent.session.rows] == [
+        "user", "assistant", "tool", "assistant", "assistant",
+    ]
 
 
 @pytest.mark.asyncio
@@ -456,3 +468,68 @@ class TestRestateDetector:
     def test_short_prior_is_not_matched_by_a_single_word(self):
         """One shared word out of a two-word answer must not count as a repeat."""
         assert not _restates("Done.", "Done, and I checked the manifest too.")
+
+
+class TestSnapshotMirrorsTheSession:
+    """The session snapshot must hold real session rows and nothing else.
+
+    It used to be appended to in place with the nudge, which made it disagree
+    with the database while `_messages_dirty` claimed it did not. Since `_run`
+    did not mark the snapshot dirty when it added the user's message, a turn
+    that ended with the flag clear left the next turn replaying the stale nudge
+    and dropping the question -- the "I stopped it, asked something specific,
+    and it carried on with the old task" report.
+    """
+
+    @staticmethod
+    def _invented(agent):
+        """Snapshot rows the database does not have."""
+        real = {r["id"] for r in agent.session.rows}
+        return [r for r in (agent._messages or []) if r["id"] not in real]
+
+    @pytest.mark.asyncio
+    async def test_a_nudge_never_enters_the_snapshot(self, agent):
+        await _run(agent, [_list_folders(), _say([ANSWER]), _say(["Happy to dig in."])])
+
+        assert self._invented(agent) == [], "the snapshot invented rows"
+        assert not any(
+            "Task check" in (r.get("content") or "")
+            or "stopped again without finishing" in (r.get("content") or "")
+            for r in agent._messages
+        ), "a transient nudge leaked into the persisted-session snapshot"
+
+    @pytest.mark.asyncio
+    async def test_the_next_turn_rebuilds_from_the_database(self, agent):
+        """A turn that writes nothing must not pin the snapshot.
+
+        Stopping while the model waits for its first token writes nothing at all,
+        so the dirty flag is left as the last step set it.
+        """
+        async def silent():
+            return
+            yield  # pragma: no cover
+
+        await _run(agent, [_list_folders(), _say([ANSWER]), silent()])
+        agent.cancel()
+
+        seen, _ = await _run(agent, [_say(["It parses TOML."])],
+                             message="STOP. What does foo.py do?")
+
+        asked = [m["content"] for m in seen[0] if m["role"] == "user"]
+        assert any("foo.py" in (t or "") for t in asked), (
+            f"the new question never reached the model; user turns were {asked}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_nudge_does_not_outlive_its_turn(self, agent):
+        """The instruction to carry on belongs to the turn that earned it.
+
+        Left in place it becomes the newest thing the model sees after the user
+        has moved on, which is what made it resume the abandoned task.
+        """
+        await _run(agent, [_list_folders(), _say([ANSWER]), _say(["Happy to dig in."])])
+
+        seen, _ = await _run(agent, [_say(["It parses TOML."])],
+                             message="what does foo.py do")
+        assert CONTINUATION_NUDGE not in str(seen[0])
+        assert CONTINUATION_NUDGE_FIRM not in str(seen[0])

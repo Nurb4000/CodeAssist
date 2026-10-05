@@ -241,7 +241,11 @@ async def test_ws_confirm_flow_grants_per_tool_session_trust(tmp_path, monkeypat
     await asyncio.wait_for(asyncio.gather(_pump(), _approver()), timeout=15)
 
     assert confirms == ["shell"]
-    assert state["stream_calls"] == 2
+    # Three calls: the tool call, then the model's prose reply, then one more
+    # step because the continuation guard does not treat "used a tool, then
+    # stopped" as the end of the turn. That third call repeats the second
+    # verbatim, so the restatement guard drops it and the turn finishes.
+    assert state["stream_calls"] == 3
     assert "shell" in SESSION_TOOL_TRUST["sess-J"]
     assert await agent.needs_confirmation("shell", {"shell_command": "echo hi"}) is False
 
@@ -305,7 +309,10 @@ async def test_ws_confirm_flow_remember_saves_permanent_allow(tmp_path, monkeypa
     await asyncio.wait_for(asyncio.gather(_pump(), _approver()), timeout=15)
 
     assert confirms == ["write"]
-    assert state["stream_calls"] == 2
+    # Three calls: the tool call, the model's prose reply, and the extra step
+    # the continuation guard takes before calling the turn finished. See
+    # test_ws_confirm_flow_grants_per_tool_session_trust.
+    assert state["stream_calls"] == 3
     assert await agent.needs_confirmation("write", {"file_path": str(tmp_path / "remembered_target.py"), "content": "x = 1"}) is False
     # The saved permission is permanent (persisted), not just session-scoped.
     assert agent.get_confirm_context("any") is None
