@@ -631,16 +631,25 @@ class Agent:
         that returns without an update leaves it empty and the text the user
         already watched stream in is lost. Save it, then answer any tool calls
         so the transcript stays valid.
+
+        Partial reasoning is marked as interrupted so the model does not try to
+        continue the same chain of thought on the next turn. Without this marker,
+        a deterministic model (temperature=0) sees truncated reasoning and
+        re-derives the same trajectory instead of answering the new question.
         """
         tc_dicts = [
             {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
             for tc in tool_calls
         ]
+        # Mark truncated reasoning so the model knows it was cut short
+        interrupted_reasoning = accumulated_reasoning
+        if interrupted_reasoning:
+            interrupted_reasoning += "\n\n[...thinking interrupted by user...]"
         await self.session.update_message(
             stream_msg_id,
             content=accumulated_text or None,
             tool_calls=tc_dicts or None,
-            reasoning_content=accumulated_reasoning or None,
+            reasoning_content=interrupted_reasoning or None,
         )
         self._messages_dirty = True
         await self._answer_unrun_tool_calls(tool_calls)
@@ -1523,7 +1532,14 @@ class Agent:
                 # than equality is the point: the repeats that reach here are
                 # paraphrases, so identical-string comparison never fires and the
                 # turn runs on re-deriving the same answer until the budget ends.
-                looping = loop_detector.note_text(accumulated_text)
+                #
+                # Reasoning models (Ornith, o1, etc.) emit most of their output
+                # in reasoning_content. A model looping in its thinking produces
+                # near-empty text each step, so text-only detection misses it.
+                # Check reasoning alongside text: if the model is re-reasoning
+                # about the same facts, the vocabulary novelty test catches it.
+                combined = " ".join(filter(None, [accumulated_reasoning, accumulated_text]))
+                looping = loop_detector.note_text(combined)
                 if looping:
                     log.warning("LLM loop detected: %s", looping)
                     yield _loop_event(looping)

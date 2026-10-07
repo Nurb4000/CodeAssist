@@ -155,9 +155,12 @@ def build_openai_messages(system_prompt: str, history: list[dict]) -> list[dict]
 
         elif role == "assistant":
             entry: dict = {"role": "assistant", "content": msg.get("content") or ""}
+            reasoning = msg.get("reasoning_content")
+            if reasoning:
+                entry["reasoning_content"] = reasoning
             if msg.get("tool_calls"):
                 entry["tool_calls"] = json.loads(msg["tool_calls"]) if isinstance(msg["tool_calls"], str) else msg["tool_calls"]
-                if not entry["content"]:
+                if not entry["content"] and not entry.get("reasoning_content"):
                     entry["content"] = None
             messages.append(entry)
 

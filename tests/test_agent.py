@@ -1818,7 +1818,7 @@ class TestAgentStop:
 
         last = mock_session.update_message.call_args_list[-1]
         assert last.kwargs["content"] == "half an answer", "partial text is saved"
-        assert last.kwargs["reasoning_content"] == "thinking so far", "partial reasoning is saved"
+        assert last.kwargs["reasoning_content"].startswith("thinking so far"), "partial reasoning is saved"
         assert "never delivered" not in str(last.kwargs["content"])
         assert "cancelled" in [e.type for e in events]
 
