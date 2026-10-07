@@ -209,3 +209,50 @@ test('a run after deleting and recreating a session renders its work block', asy
     'the new step renders its tool output'
   );
 });
+
+// ── Step numbering across sessions ────────────────────────────────────────────
+// workStepCount is page-level state, but it numbers the CURRENT flow's steps.
+// It used to be reset only in loadMessages(), so createSession() -- which wipes
+// #messages via showWelcome() without loading messages -- resumed the count from
+// the previous session: a fresh session's first step rendered as "Step 42".
+
+test('a new session restarts work step numbering at 1', async () => {
+  const env = await boot({
+    fixtures: {
+      '/api/sessions': (method) =>
+        method === 'POST' ? { id: 'session-2' } : [{ id: 'session-1', name: 'one' }],
+    },
+  });
+  startTurn(env);
+  await turnWithOneTool(env);
+  env.feed({ type: 'text_delta', content: 'again' });
+  env.feed({ type: 'tool_call', name: 'grep', arguments: { pattern: 'z' }, id: 't2' });
+  env.feed({ type: 'tool_result', id: 't2', output: 'second' });
+  env.feed({ type: 'done' });
+  assert.strictEqual(
+    workBlock(env.document).querySelector('.work-count').textContent,
+    '2',
+    'precondition: the old session counted two steps'
+  );
+
+  await env.window.createSession();
+  await new Promise((r) => setTimeout(r, 20));
+  const socket = env.sockets[env.sockets.length - 1];
+
+  env.window.document.getElementById('user-input').value = 'fresh session';
+  env.window.sendMessage();
+  socket.receive({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't3' });
+  socket.receive({ type: 'tool_result', id: 't3', output: 'fresh' });
+
+  const [first] = steps(env.document);
+  assert.strictEqual(first.dataset.n, '1', 'the first step of a new session is Step 1');
+  assert.ok(
+    first.querySelector('.work-step-header').textContent.includes('Step 1'),
+    'the header reads "Step 1", not a carried-over number'
+  );
+  assert.strictEqual(
+    workBlock(env.document).querySelector('.work-count').textContent,
+    '1',
+    'the Work header counts only this session\'s steps'
+  );
+});

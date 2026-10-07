@@ -500,7 +500,6 @@ async function loadMessages() {
     // too or this session's steps and reasoning are built inside detached nodes.
     resetFlowSections();
     finalizeState();
-    workStepCount = 0;
     removeWelcome();
     if (msgs.length === 0) { showWelcome(); return; }
 
@@ -682,6 +681,10 @@ function ensurePastThinkingContainer() {
 function resetWorkBlock() {
     if (workBlockEl) workBlockEl.remove();
     workBlockEl = workActiveEl = workHistoryEl = null;
+    // The counter belongs to the wiped flow, not the page. Leaving it set made
+    // a brand-new session resume numbering where the last one stopped (its
+    // first step rendered as "Step 42" after a long previous session).
+    workStepCount = 0;
 }
 
 // Drop the cached past-thinking handles. Must be called anywhere #messages is
