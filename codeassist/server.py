@@ -404,9 +404,9 @@ register_routes(app)
 @app.middleware("http")
 async def auth_middleware(request, call_next):
     # Paths exempt from HTTP Basic Auth (WebSocket auth is handled separately
-    # in the WS endpoint — do NOT add new /ws/ prefixes here blindly)
+    # in the WS endpoint via sec-websocket-protocol header)
     _EXEMPT_PATHS = {"/health", "/favicon.ico"}
-    _EXEMPT_PREFIXES = ("/static/",)
+    _EXEMPT_PREFIXES = ("/static/", "/ws/")
 
     path = request.url.path
     if path in _EXEMPT_PATHS or any(path.startswith(p) for p in _EXEMPT_PREFIXES):
