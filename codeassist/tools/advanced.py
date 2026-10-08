@@ -201,6 +201,9 @@ class QuestionTool(Tool):
         self._pending_questions: dict[str, asyncio.Event] = {}
         self._answers: dict[str, str] = {}
         self._question_data: dict[str, dict] = {}
+        # Weak set of fire-and-forget tasks so they survive GC until done.
+        import weakref
+        self._pending_tasks: set[asyncio.Task] = set()
 
     async def execute(
         self,
@@ -314,22 +317,30 @@ class QuestionTool(Tool):
         self._answers[question_id] = ""
         if question_id in self._pending_questions:
             self._pending_questions[question_id].set()
-        # Update persistence
+        # Update persistence — store the task so it isn't garbage-collected
+        # before running. Using asyncio.ensure_future is safe here because
+        # reject_question is always called from within an active event loop
+        # (the WS handler in server.py).
         try:
             import asyncio
-            asyncio.create_task(self._reject_question_async(question_id))
+            self._pending_tasks.add(asyncio.ensure_future(self._reject_question_async(question_id)))
         except Exception:  # noqa: BLE001, S110
             pass
 
     async def _reject_question_async(self, question_id: str):
         """Persist rejection to database."""
-        from codeassist.session import get_db
-        async with get_db() as db:
-            await db.execute(
-                "UPDATE questions SET status = 'rejected' WHERE id = ?",
-                (question_id,),
-            )
-            await db.commit()
+        try:
+            from codeassist.session import get_db
+            async with get_db() as db:
+                await db.execute(
+                    "UPDATE questions SET status = 'rejected' WHERE id = ?",
+                    (question_id,),
+                )
+                await db.commit()
+        finally:
+            # Remove from the set so completed tasks don't accumulate.
+            task = asyncio.current_task()
+            self._pending_tasks.discard(task)
 
 
 def datetime_now() -> str:
