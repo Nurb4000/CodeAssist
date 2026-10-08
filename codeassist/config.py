@@ -307,8 +307,16 @@ class Config:
         # Allow env overrides for Docker / containerized deployments
         if os.environ.get("CODEASSIST_HOST"):
             config.server.host = os.environ["CODEASSIST_HOST"]
-        if os.environ.get("CODEASSIST_PORT"):
-            config.server.port = int(os.environ["CODEASSIST_PORT"])
+        port_str = os.environ.get("CODEASSIST_PORT")
+        if port_str:
+            try:
+                config.server.port = int(port_str)
+            except ValueError:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "CODEASSIST_PORT='%s' is not a valid integer, keeping config value %d",
+                    port_str, config.server.port,
+                )
         config._source = Path(path).resolve()
         return config
 
