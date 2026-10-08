@@ -16,6 +16,7 @@ def register_routes(app: FastAPI):
     from .mcp import router as mcp_router
     from .plugins import router as plugins_router
     from .sessions import router as sessions_router
+    from .oauth import router as oauth_router
     from .settings import router as settings_router
     from .skills import router as skills_router
     from .subagents import router as subagents_router
@@ -37,3 +38,4 @@ def register_routes(app: FastAPI):
     app.include_router(kb_router)
     app.include_router(settings_router)
     app.include_router(subagents_router)
+    app.include_router(oauth_router)
