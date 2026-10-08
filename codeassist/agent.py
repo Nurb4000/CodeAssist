@@ -719,6 +719,70 @@ class Agent:
             SESSION_TRUST.pop(self.session.id, None)
             SESSION_TOOL_TRUST.pop(self.session.id, None)
 
+    async def _retry_with_backoff(
+        self,
+        user_message: str,
+        status_code: int,
+        error_msg: str,
+        max_retries: int,
+    ):
+        """Retry a failed turn with exponential backoff.
+
+        Yields retry events to the client so the UI can show progress.
+        After exhausting retries, yields an error event.
+        """
+        import random
+
+        base_delay = 2.0
+        for attempt in range(1, max_retries + 1):
+            jitter = base_delay * random.uniform(-0.3, 0.3)
+            delay = max(0.5, base_delay + jitter)
+            log.info(
+                "Retry %d/%d after HTTP %s: backing off %.1fs — %s",
+                attempt, max_retries, status_code, delay, error_msg,
+            )
+            yield AgentEvent("retry", {
+                "attempt": attempt,
+                "max_retries": max_retries,
+                "status_code": status_code,
+                "message": f"Retrying in {delay:.1f}s (HTTP {status_code})",
+            })
+            # Re-run the loop with the same user message
+            cancelled = False
+            try:
+                async for event in self._loop(user_message):
+                    if self.cancel_event.is_set():
+                        cancelled = True
+                        continue
+                    yield event
+                if not cancelled and not self.cancel_event.is_set():
+                    return  # Success — exit retry loop
+            except openai.APIStatusError as e:
+                if e.status_code not in (429, 500, 502, 503, 504):
+                    msg = f"LLM API error (HTTP {e.status_code}): {e.message}"
+                    log.error(msg)
+                    yield AgentEvent("error", {"message": msg})
+                    yield AgentEvent("done")
+                    return
+                base_delay = min(base_delay * 2, 30.0)
+            except openai.APIConnectionError:
+                base_delay = min(base_delay * 2, 30.0)
+            except Exception as e:
+                msg = f"Retry failed: {type(e).__name__}: {e}"
+                log.exception(msg)
+                yield AgentEvent("error", {"message": msg})
+                yield AgentEvent("done")
+                return
+
+        # All retries exhausted
+        msg = (
+            f"LLM API error (HTTP {status_code}): {error_msg}. "
+            f"Tried {max_retries} time(s) with exponential backoff."
+        )
+        log.error(msg)
+        yield AgentEvent("error", {"message": msg})
+        yield AgentEvent("done")
+
     async def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False, trust_all: bool = False):
         """Set trust flags from user confirmation (persisted per session id)."""
         if trust_workspace:
@@ -942,6 +1006,17 @@ class Agent:
             yield AgentEvent("error", {"message": msg})
             yield AgentEvent("done")
         except openai.APIStatusError as e:
+            # Retry transient API errors (rate limits, server errors) with
+            # exponential backoff. Non-transient errors (400 Bad Request, etc.)
+            # are passed through immediately.
+            is_transient = e.status_code in (429, 500, 502, 503, 504)
+            max_retries = getattr(self.config.llm, "max_retries", 3) or 3
+            if is_transient and max_retries > 0:
+                async for event in self._retry_with_backoff(
+                    user_message, e.status_code, e.message, max_retries,
+                ):
+                    yield event
+                return
             msg = f"LLM API error (HTTP {e.status_code}): {e.message}"
             log.error(msg)
             yield AgentEvent("error", {"message": msg})
