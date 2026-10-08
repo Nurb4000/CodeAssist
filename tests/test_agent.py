@@ -143,24 +143,27 @@ class TestAgentCancel:
 class TestAgentTrust:
     """Test agent trust flags."""
 
-    def test_reset_trust(self, agent):
+    @pytest.mark.asyncio
+    async def test_reset_trust(self, agent):
         """Test resetting trust flags."""
-        agent.set_trust(trust_workspace=True, trust_shell=True)
+        await agent.set_trust(trust_workspace=True, trust_shell=True)
         assert agent._trust_workspace_writes == True
         assert agent._trust_shell == True
-        
-        agent.reset_trust()
+
+        await agent.reset_trust()
         assert agent._trust_workspace_writes == False
         assert agent._trust_shell == False
 
-    def test_set_trust_workspace(self, agent):
+    @pytest.mark.asyncio
+    async def test_set_trust_workspace(self, agent):
         """Test setting workspace trust."""
-        agent.set_trust(trust_workspace=True)
+        await agent.set_trust(trust_workspace=True)
         assert agent._trust_workspace_writes == True
 
-    def test_set_trust_shell(self, agent):
+    @pytest.mark.asyncio
+    async def test_set_trust_shell(self, agent):
         """Test setting shell trust."""
-        agent.set_trust(trust_shell=True)
+        await agent.set_trust(trust_shell=True)
         assert agent._trust_shell == True
 
 
@@ -181,20 +184,20 @@ class TestAgentConfirmation:
     @pytest.mark.asyncio
     async def test_needs_confirmation_shell_trusted(self, agent):
         """Test that shell doesn't need confirmation when trusted."""
-        agent.set_trust(trust_shell=True)
+        await agent.set_trust(trust_shell=True)
         assert not await agent.needs_confirmation("shell", {})
 
     @pytest.mark.asyncio
     async def test_needs_confirmation_write_in_workspace(self, mock_config, agent):
         """Test that write doesn't need confirmation for in-workspace files."""
-        agent.set_trust(trust_workspace=True)
+        await agent.set_trust(trust_workspace=True)
         file_path = str(mock_config.workspace / "test.py")
         assert not await agent.needs_confirmation("write", {"file_path": file_path})
 
     @pytest.mark.asyncio
     async def test_needs_confirmation_write_outside_workspace(self, agent):
         """Test that write still needs confirmation for outside-workspace files."""
-        agent.set_trust(trust_workspace=True)
+        await agent.set_trust(trust_workspace=True)
         assert await agent.needs_confirmation("write", {"file_path": "/tmp/test.py"})
 
     def test_is_in_workspace(self, mock_config, agent):
@@ -206,46 +209,49 @@ class TestAgentConfirmation:
         assert agent._is_in_workspace(str(test_file)) == True
         assert agent._is_in_workspace("/tmp/test.py") == False
 
-    def test_resolve_confirm_approve(self, agent):
+    @pytest.mark.asyncio
+    async def test_resolve_confirm_approve(self, agent):
         """Test approving a confirmation."""
         # Create a pending confirmation
         event = asyncio.Event()
         agent._confirm_events["test_id"] = event
         agent._confirm_results["test_id"] = None
-        
+
         # Approve it
-        agent.resolve_confirm("test_id", approved=True)
-        
+        await agent.resolve_confirm("test_id", approved=True)
+
         # Event should be set
         assert event.is_set()
         # Result should be True
         assert agent._confirm_results["test_id"] == True
 
-    def test_resolve_confirm_deny(self, agent):
+    @pytest.mark.asyncio
+    async def test_resolve_confirm_deny(self, agent):
         """Test denying a confirmation."""
         # Create a pending confirmation
         event = asyncio.Event()
         agent._confirm_events["test_id"] = event
         agent._confirm_results["test_id"] = None
-        
+
         # Deny it
-        agent.resolve_confirm("test_id", approved=False)
-        
+        await agent.resolve_confirm("test_id", approved=False)
+
         # Event should be set
         assert event.is_set()
         # Result should be False
         assert agent._confirm_results["test_id"] == False
 
-    def test_resolve_confirm_with_trust(self, agent):
+    @pytest.mark.asyncio
+    async def test_resolve_confirm_with_trust(self, agent):
         """Test approving with trust flags."""
         # Create a pending confirmation
         event = asyncio.Event()
         agent._confirm_events["test_id"] = event
         agent._confirm_results["test_id"] = None
-        
+
         # Approve with trust
-        agent.resolve_confirm("test_id", approved=True, trust_workspace=True, trust_shell=True)
-        
+        await agent.resolve_confirm("test_id", approved=True, trust_workspace=True, trust_shell=True)
+
         # Trust flags should be set
         assert agent._trust_workspace_writes == True
         assert agent._trust_shell == True
@@ -257,12 +263,12 @@ class TestAgentConfirmation:
         event = asyncio.Event()
         agent._confirm_events["test_id"] = event
         agent._confirm_results["test_id"] = None
-        
+
         # Approve in a task
         async def approve_later():
             await asyncio.sleep(0.01)
-            agent.resolve_confirm("test_id", approved=True)
-        
+            await agent.resolve_confirm("test_id", approved=True)
+
         asyncio.create_task(approve_later())
         
         # Wait for confirmation
@@ -280,7 +286,7 @@ class TestAgentConfirmation:
         # Deny in a task
         async def deny_later():
             await asyncio.sleep(0.01)
-            agent.resolve_confirm("test_id", approved=False)
+            await agent.resolve_confirm("test_id", approved=False)
         
         asyncio.create_task(deny_later())
         

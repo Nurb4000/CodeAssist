@@ -48,6 +48,19 @@ SESSION_TRUST: dict[str, dict] = {}
 # Per-session sets of tool names trusted "for the rest of this session".
 SESSION_TOOL_TRUST: dict[str, set[str]] = {}
 
+# Lock protecting SESSION_TRUST and SESSION_TOOL_TRUST from concurrent
+# modification by overlapping turns (e.g. a background subagent resolving
+# while the parent is running). asyncio.Lock is sufficient since the event
+# loop is single-threaded.
+_SESSION_TRUST_LOCK: asyncio.Lock | None = None
+
+
+def _get_trust_lock() -> asyncio.Lock:
+    global _SESSION_TRUST_LOCK
+    if _SESSION_TRUST_LOCK is None:
+        _SESSION_TRUST_LOCK = asyncio.Lock()
+    return _SESSION_TRUST_LOCK
+
 # How many times the loop will nudge a model that stops after using tools
 # before giving up and flagging the task incomplete instead of falsely
 # marking it complete.
@@ -697,15 +710,16 @@ class Agent:
         self._pending_nudges = [{"role": "user", "content": nudge}]
         self._nudge_version += 1
 
-    def reset_trust(self):
+    async def reset_trust(self):
         """Reset trust flags for new session."""
         self._trust_workspace_writes = False
         self._trust_shell = False
         self._trust_all = False
-        SESSION_TRUST.pop(self.session.id, None)
-        SESSION_TOOL_TRUST.pop(self.session.id, None)
+        async with _get_trust_lock():
+            SESSION_TRUST.pop(self.session.id, None)
+            SESSION_TOOL_TRUST.pop(self.session.id, None)
 
-    def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False, trust_all: bool = False):
+    async def set_trust(self, trust_workspace: bool = False, trust_shell: bool = False, trust_all: bool = False):
         """Set trust flags from user confirmation (persisted per session id)."""
         if trust_workspace:
             self._trust_workspace_writes = True
@@ -722,7 +736,8 @@ class Agent:
         }
         if self._trust_all:
             entry["all"] = True
-        SESSION_TRUST[self.session.id] = entry
+        async with _get_trust_lock():
+            SESSION_TRUST[self.session.id] = entry
 
     def _trust_all_active(self) -> bool:
         """Whether trust-all is enabled for this agent.
@@ -776,7 +791,10 @@ class Agent:
             return False
 
         # Per-tool session trust ("trust this tool for the rest of this session")
-        if tool_name in SESSION_TOOL_TRUST.get(self.session.id, set()):
+        # Take a snapshot under lock to avoid race with concurrent writes.
+        async with _get_trust_lock():
+            trusted_tools = SESSION_TOOL_TRUST.get(self.session.id, set()).copy()
+        if tool_name in trusted_tools:
             return False
 
         # Use permission manager for granular checks
@@ -824,15 +842,16 @@ class Agent:
         """
         return self._confirm_requests.pop(confirm_id, None)
 
-    def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False, trust_all: bool = False):
+    async def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False, trust_all: bool = False):
         """Resolve a pending confirmation from WebSocket."""
         log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, trust_tool=%s, remember=%s, trust_all=%s",
                  confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
         tool_name = self._confirm_tools.pop(confirm_id, None)
         if approved:
-            self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell, trust_all=trust_all)
+            await self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell, trust_all=trust_all)
             if trust_tool and tool_name:
-                SESSION_TOOL_TRUST.setdefault(self.session.id, set()).add(tool_name)
+                async with _get_trust_lock():
+                    SESSION_TOOL_TRUST.setdefault(self.session.id, set()).add(tool_name)
                 log.info("Tool '%s' trusted for session %s", tool_name, self.session.id)
         if confirm_id in self._confirm_events:
             self._confirm_results[confirm_id] = approved

@@ -788,7 +788,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 trust_all = data.get("trust_all", False)
                 remember = data.get("remember", False)
                 if confirm_id:
-                    agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
+                    await agent.resolve_confirm(confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
                     # Persist a remembered permission from server-bound context,
                     # never from client-echoed tool/file_path values.
                     if remember and approved:
@@ -800,7 +800,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 question_id = data.get("id")
                 answer = data.get("answer", "")
                 if question_id:
-                    agent.resolve_confirm(question_id, True)
+                    await agent.resolve_confirm(question_id, True)
                     # Also resolve the question tool itself
                     question_tool = tools.get("question")
                     if question_tool and hasattr(question_tool, "set_answer"):
@@ -809,7 +809,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             elif data.get("type") == "question_rejected":
                 question_id = data.get("id")
                 if question_id:
-                    agent.resolve_confirm(question_id, False)
+                    await agent.resolve_confirm(question_id, False)
                     question_tool = tools.get("question")
                     if question_tool and hasattr(question_tool, "reject_question"):
                         question_tool.reject_question(question_id)

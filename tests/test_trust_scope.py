@@ -42,7 +42,7 @@ def test_trust_defaults_off():
 @pytest.mark.asyncio
 async def test_trust_persists_across_agents_same_session(tmp_path):
     a1 = _agent("sess-B", tmp_path)
-    a1.set_trust(trust_shell=True, trust_workspace=True)
+    await a1.set_trust(trust_shell=True, trust_workspace=True)
     assert SESSION_TRUST["sess-B"] == {"workspace": True, "shell": True}
 
     # Reconnect: a brand-new Agent for the same session id keeps the trust.
@@ -58,7 +58,7 @@ async def test_trust_all_session_flag_skips_confirmation(tmp_path):
     """resolve_confirm(trust_all=True) gates every tool for the session (A1)."""
     agent = _agent("sess-AA", tmp_path)
     agent._confirm_tools["c1"] = "shell"
-    agent.resolve_confirm("c1", True, trust_all=True)
+    await agent.resolve_confirm("c1", True, trust_all=True)
     assert SESSION_TRUST["sess-AA"].get("all") is True
 
     # Reconnect to the same session keeps trust-all.
@@ -69,22 +69,24 @@ async def test_trust_all_session_flag_skips_confirmation(tmp_path):
     assert await reconnect.get_permission_action("shell", {"shell_command": "ls"}) == "allow"
 
 
-def test_trust_all_isolated_per_session_id(tmp_path):
+@pytest.mark.asyncio
+async def test_trust_all_isolated_per_session_id(tmp_path):
     agent = _agent("sess-AB", tmp_path)
     agent._confirm_tools["c1"] = "shell"
-    agent.resolve_confirm("c1", True, trust_all=True)
+    await agent.resolve_confirm("c1", True, trust_all=True)
     assert SESSION_TRUST["sess-AB"].get("all") is True
 
     other = _agent("sess-AC", tmp_path)
     assert other._trust_all is False
 
 
-def test_reset_trust_clears_trust_all(tmp_path):
+@pytest.mark.asyncio
+async def test_reset_trust_clears_trust_all(tmp_path):
     agent = _agent("sess-AD", tmp_path)
-    agent.set_trust(trust_all=True)
+    await agent.set_trust(trust_all=True)
     assert SESSION_TRUST["sess-AD"].get("all") is True
 
-    agent.reset_trust()
+    await agent.reset_trust()
     assert "sess-AD" not in SESSION_TRUST
 
 
@@ -123,8 +125,10 @@ async def test_config_trust_all_ask_still_confirms(tmp_path):
     assert await agent.needs_confirmation("git", {}) is True
 
 
-def test_trust_isolated_per_session_id(tmp_path):
-    _agent("sess-C", tmp_path).set_trust(trust_shell=True)
+@pytest.mark.asyncio
+async def test_trust_isolated_per_session_id(tmp_path):
+    a = _agent("sess-C", tmp_path)
+    await a.set_trust(trust_shell=True)
     assert SESSION_TRUST["sess-C"]["shell"] is True
 
     other = _agent("sess-D", tmp_path)
@@ -132,17 +136,20 @@ def test_trust_isolated_per_session_id(tmp_path):
     assert other._trust_workspace_writes is False
 
 
-def test_reset_trust_clears_store(tmp_path):
+@pytest.mark.asyncio
+async def test_reset_trust_clears_store(tmp_path):
     agent = _agent("sess-E", tmp_path)
-    agent.set_trust(trust_shell=True)
+    await agent.set_trust(trust_shell=True)
     assert SESSION_TRUST["sess-E"]["shell"] is True
 
-    agent.reset_trust()
+    await agent.reset_trust()
     assert "sess-E" not in SESSION_TRUST
 
 
-def test_shell_only_trust_keeps_writes_untrusted(tmp_path):
-    _agent("sess-F", tmp_path).set_trust(trust_shell=True)
+@pytest.mark.asyncio
+async def test_shell_only_trust_keeps_writes_untrusted(tmp_path):
+    a = _agent("sess-F", tmp_path)
+    await a.set_trust(trust_shell=True)
     reconnect = _agent("sess-F", tmp_path)
     assert reconnect._trust_shell is True
     assert reconnect._trust_workspace_writes is False
@@ -166,7 +173,7 @@ async def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch)
     agent._confirm_tools["c1"] = "shell"
     assert "shell" not in SESSION_TOOL_TRUST.get("sess-G", set())
 
-    agent.resolve_confirm("c1", True, trust_tool=True)
+    await agent.resolve_confirm("c1", True, trust_tool=True)
 
     assert "shell" in SESSION_TOOL_TRUST["sess-G"]
     assert await agent.needs_confirmation("shell", {}) is False
@@ -174,10 +181,11 @@ async def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch)
     assert "bash" not in SESSION_TOOL_TRUST["sess-G"]
 
 
-def test_per_tool_trust_isolated_between_sessions(tmp_path):
+@pytest.mark.asyncio
+async def test_per_tool_trust_isolated_between_sessions(tmp_path):
     agent = _agent("sess-H", tmp_path)
     agent._confirm_tools["c1"] = "shell"
-    agent.resolve_confirm("c1", True, trust_tool=True)
+    await agent.resolve_confirm("c1", True, trust_tool=True)
 
     assert SESSION_TOOL_TRUST.get("sess-I") is None
     assert SESSION_TOOL_TRUST.get("sess-H") == {"shell"}
@@ -236,7 +244,7 @@ async def test_ws_confirm_flow_grants_per_tool_session_trust(tmp_path, monkeypat
     async def _approver():
         await seen.wait()
         cid = next(iter(confirm_ids))
-        agent.resolve_confirm(cid, True, trust_tool=True)
+        await agent.resolve_confirm(cid, True, trust_tool=True)
 
     await asyncio.wait_for(asyncio.gather(_pump(), _approver()), timeout=15)
 
@@ -304,7 +312,7 @@ async def test_ws_confirm_flow_remember_saves_permanent_allow(tmp_path, monkeypa
         assert ctx["tool"] == "write"
         assert ctx["file_path"] == str(tmp_path / "remembered_target.py")
         await agent.save_permission(ctx["tool"], ctx["file_path"], "allow")
-        agent.resolve_confirm(cid, True, remember=True)
+        await agent.resolve_confirm(cid, True, remember=True)
 
     await asyncio.wait_for(asyncio.gather(_pump(), _approver()), timeout=15)
 
