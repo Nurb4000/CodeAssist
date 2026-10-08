@@ -5,6 +5,17 @@ import httpx
 from . import Tool, ToolResult
 from .security import validate_url
 
+# Shared client reused across calls to avoid per-request TCP overhead.
+# Lazy-initialized on first use; connection pool handles concurrency.
+_fetch_client: httpx.AsyncClient | None = None
+
+
+def _get_fetch_client() -> httpx.AsyncClient:
+    global _fetch_client
+    if _fetch_client is None:
+        _fetch_client = httpx.AsyncClient(timeout=30, follow_redirects=True)
+    return _fetch_client
+
 
 class WebFetchTool(Tool):
     name = "webfetch"
@@ -33,9 +44,9 @@ class WebFetchTool(Tool):
             )
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                response = await client.get(url, headers={"User-Agent": "CodeAssist/1.0"})
-                response.raise_for_status()
+            client = _get_fetch_client()
+            response = await client.get(url, headers={"User-Agent": "CodeAssist/1.0"})
+            response.raise_for_status()
         except httpx.TimeoutException:
             return ToolResult(output=f"Error: request timed out for {url}", error=True)
         except httpx.HTTPStatusError as e:
