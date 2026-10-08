@@ -448,9 +448,9 @@ class TestLLMEvents:
         assert len(events) == 0
 
     @pytest.mark.asyncio
-    async def test_stream_content_takes_precedence_over_reasoning(self, llm_client):
-        """When a delta has real content, it is a TextDelta even if reasoning is
-        also present — reasoning is only routed separately when content is empty."""
+    async def test_stream_content_and_reasoning_both_emitted(self, llm_client):
+        """When a delta has both content and reasoning_content, both are yielded
+        as separate events — TextDelta for content, ReasoningDelta for reasoning."""
         chunk = MagicMock()
         chunk.choices = [MagicMock()]
         chunk.choices[0].delta = MagicMock()
@@ -471,9 +471,11 @@ class TestLLMEvents:
         async for event in llm_client.stream([{"role": "user", "content": "go"}]):
             events.append(event)
 
-        assert len(events) == 1
+        assert len(events) == 2
         assert isinstance(events[0], TextDelta)
         assert events[0].content == "The answer"
+        assert isinstance(events[1], ReasoningDelta)
+        assert events[1].content == "hidden chain of thought"
 
 
 class TestModerationClassification:

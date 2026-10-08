@@ -304,10 +304,12 @@ class LLMClient:
                         delta_text = choice.delta.content or ""
                         if delta_text:
                             yield TextDelta(delta_text)
-                        else:
-                            reasoning = getattr(choice.delta, "reasoning_content", None)
-                            if isinstance(reasoning, str) and reasoning:
-                                yield ReasoningDelta(reasoning)
+
+                        # Check reasoning_content independently — models may emit
+                        # both content and reasoning_content in the same chunk.
+                        reasoning = getattr(choice.delta, "reasoning_content", None)
+                        if isinstance(reasoning, str) and reasoning:
+                            yield ReasoningDelta(reasoning)
 
                         if choice.delta.tool_calls:
                             for tc_delta in choice.delta.tool_calls:
