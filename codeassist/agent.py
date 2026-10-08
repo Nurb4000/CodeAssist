@@ -40,6 +40,67 @@ log = logging.getLogger(__name__)
 # Legacy: tools that require user confirmation (replaced by permission_manager)
 CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 
+# Shell command risk classification for arity-based approval reduction.
+# Read-only commands auto-approve; destructive commands still require confirmation.
+_READONLY_SHELL_COMMANDS = frozenset({
+    # File inspection
+    "cat", "head", "tail", "less", "more", "wc", "file", "stat", "ls", "dir",
+    "tree", "find", "locate", "which", "whereis", "type", "command",
+    # Text search
+    "grep", "rg", "ripgrep", "ack", "ag", "silver_searcher",
+    # Git read-only
+    "git diff", "git status", "git log", "git show", "git branch",
+    "git tag", "git describe", "git rev-parse", "git ls-files",
+    "git ls-tree", "git blame", "git shortlog", "git whatchanged",
+    # System info
+    "uname", "hostname", "uptime", "date", "whoami", "id", "env",
+    "printenv", "echo", "printf", "pwd", "df", "du", "free", "top",
+    "ps", "pgrep", "pidof", "lsof", "ss", "netstat",
+    # Package management (read-only)
+    "pip list", "pip show", "npm list", "npm ls", "cargo tree",
+    "apt list", "dpkg -l", "rpm -qa", "brew list",
+    # Build/test (read-only)
+    "make --dry-run", "pytest --collect-only", "cargo check",
+    "tsc --noEmit", "npm run lint", "ruff check", "mypy",
+})
+
+_DESTRUCTIVE_SHELL_PATTERNS = frozenset({
+    "rm ", "rm -", "chmod ", "chown ", "mv ", "dd if=",
+    "truncate ", "mkfs.", "fdisk ", "parted ",
+})
+
+
+def _classify_shell_risk(command: str) -> str:
+    """Classify a shell command's risk level.
+
+    Returns 'readonly', 'destructive', or 'unknown'.
+    Read-only commands auto-approve; destructive and unknown require confirmation.
+    """
+    # Extract the base command (first word, stripping leading whitespace/pipes)
+    cmd = command.strip().split("|")[0].split(";")[0].split("&")[0].strip()
+    base = cmd.split()[0] if cmd else ""
+
+    # Check for destructive patterns first (they take precedence)
+    for pattern in _DESTRUCTIVE_SHELL_PATTERNS:
+        if cmd.startswith(pattern):
+            return "destructive"
+
+    # Check exact match against read-only commands
+    if base in _READONLY_SHELL_COMMANDS or cmd in _READONLY_SHELL_COMMANDS:
+        return "readonly"
+
+    # Git subcommands that are read-only
+    if base == "git":
+        subcmd = cmd.split()[1] if len(cmd.split()) > 1 else ""
+        readonly_git = {"diff", "status", "log", "show", "branch", "tag",
+                        "describe", "rev-parse", "ls-files", "ls-tree",
+                        "blame", "shortlog", "whatchanged"}
+        if subcmd in readonly_git:
+            return "readonly"
+
+    return "unknown"
+
+
 # Session-scoped trust flags, keyed by session id. "Trust for this session"
 # survives WS reconnects (each connection builds a fresh Agent) while staying
 # isolated per session and ephemeral across server restarts.
@@ -860,6 +921,14 @@ class Agent:
             trusted_tools = SESSION_TOOL_TRUST.get(self.session.id, set()).copy()
         if tool_name in trusted_tools:
             return False
+
+        # Arity-based approval reduction for shell commands: read-only commands
+        # auto-approve while destructive commands still require confirmation.
+        if tool_name == "shell":
+            command = arguments.get("command", "")
+            risk = _classify_shell_risk(command)
+            if risk == "readonly":
+                return False
 
         # Use permission manager for granular checks
         try:
