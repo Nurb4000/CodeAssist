@@ -7,6 +7,7 @@ Saved permission preferences persist across sessions.
 
 import fnmatch
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -133,14 +134,14 @@ class SavedPermissions:
     async def load(self) -> None:
         """Load saved permissions from database."""
         try:
-            db = await get_db()
-            async with db, db.execute(
-                "SELECT tool_name, pattern, action FROM permission_saves"
-            ) as cursor:
-                rows = await cursor.fetchall()
-                for tool_name, pattern, action in rows:
-                    key = f"{tool_name}:{pattern}"
-                    self._cache[key] = action
+            async with get_db() as db:
+                async with db.execute(
+                    "SELECT tool_name, pattern, action FROM permission_saves"
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    for tool_name, pattern, action in rows:
+                        key = f"{tool_name}:{pattern}"
+                        self._cache[key] = action
         except Exception as e:  # noqa: BLE001
             log.debug("Failed to load saved permissions: %s", e)
 
@@ -149,9 +150,7 @@ class SavedPermissions:
         key = f"{tool_name}:{pattern}"
         self._cache[key] = action
         try:
-            import uuid
-            db = await get_db()
-            async with db:
+            async with get_db() as db:
                 await db.execute(
                     "INSERT OR REPLACE INTO permission_saves (id, tool_name, pattern, action, created_at) "
                     "VALUES (?, ?, ?, ?, ?)",
