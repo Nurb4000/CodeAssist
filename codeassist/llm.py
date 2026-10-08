@@ -182,6 +182,29 @@ class Finish:
 LLMEvent = TextDelta | ReasoningDelta | ToolCall | ToolResult | Finish
 
 
+class ProviderTransform:
+    """Middleware that can modify LLM requests and responses.
+
+    Subclasses override ``transform_request`` to modify the request kwargs
+    before sending, and ``transform_event`` to modify events after receiving.
+    Transforms are applied in registration order.
+    """
+
+    async def transform_request(self, kwargs: dict) -> dict:
+        """Modify request kwargs before sending to the LLM.
+
+        Return the (possibly modified) kwargs dict.
+        """
+        return kwargs
+
+    async def transform_event(self, event: LLMEvent) -> LLMEvent | None:
+        """Modify or filter an event after receiving from the LLM.
+
+        Return the (possibly modified) event, or None to suppress it.
+        """
+        return event
+
+
 class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
@@ -198,6 +221,20 @@ class LLMClient:
         # vLLM) get more than the SDK's own generous default only when asked.
         kwargs["timeout"] = config.timeout
         self.client = openai.AsyncOpenAI(**kwargs)
+        self._transforms: list[ProviderTransform] = []
+
+    def add_transform(self, transform: ProviderTransform):
+        """Add a provider transform to the pipeline.
+
+        Transforms are applied in registration order. Request transforms run
+        before the LLM call; event transforms run after each event is received.
+        """
+        self._transforms.append(transform)
+
+    def remove_transform(self, transform: ProviderTransform):
+        """Remove a previously registered provider transform."""
+        if transform in self._transforms:
+            self._transforms.remove(transform)
 
     async def stream(
         self,
@@ -219,6 +256,10 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        # Apply request transforms (pipeline runs in registration order)
+        for transform in self._transforms:
+            kwargs = await transform.transform_request(kwargs)
 
         response = None
         backoff = INITIAL_BACKOFF
@@ -303,13 +344,17 @@ class LLMClient:
                         # instead of inline with the answer (review item D2).
                         delta_text = choice.delta.content or ""
                         if delta_text:
-                            yield TextDelta(delta_text)
+                            event = await self._apply_event_transforms(TextDelta(delta_text))
+                            if event is not None:
+                                yield event
 
                         # Check reasoning_content independently — models may emit
                         # both content and reasoning_content in the same chunk.
                         reasoning = getattr(choice.delta, "reasoning_content", None)
                         if isinstance(reasoning, str) and reasoning:
-                            yield ReasoningDelta(reasoning)
+                            event = await self._apply_event_transforms(ReasoningDelta(reasoning))
+                            if event is not None:
+                                yield event
 
                         if choice.delta.tool_calls:
                             for tc_delta in choice.delta.tool_calls:
@@ -329,13 +374,17 @@ class LLMClient:
                                         current_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
                     if chunk.usage:
-                        yield Finish(
-                            finish_reason=choice.finish_reason if choice else "stop",
-                            usage=Usage(
-                                prompt_tokens=chunk.usage.prompt_tokens or 0,
-                                completion_tokens=chunk.usage.completion_tokens or 0,
-                            ),
+                        event = await self._apply_event_transforms(
+                            Finish(
+                                finish_reason=choice.finish_reason if choice else "stop",
+                                usage=Usage(
+                                    prompt_tokens=chunk.usage.prompt_tokens or 0,
+                                    completion_tokens=chunk.usage.completion_tokens or 0,
+                                ),
+                            )
                         )
+                        if event is not None:
+                            yield event
                 break
             except (openai.APIConnectionError, openai.APITimeoutError, asyncio.TimeoutError) as e:  # noqa: UP041 — keep openai's specific timeout error, not just the builtin
                 log.warning("LLM stream interrupted (attempt %d/%d): %s", stream_attempt + 1, MAX_RETRIES, e)
@@ -356,7 +405,22 @@ class LLMClient:
                 args = json.loads(tc["arguments"]) if tc["arguments"] else {}
             except json.JSONDecodeError:
                 args = {"raw": tc["arguments"]}
-            yield ToolCall(id=tc["id"], name=tc["name"], arguments=args)
+            event = await self._apply_event_transforms(
+                ToolCall(id=tc["id"], name=tc["name"], arguments=args)
+            )
+            if event is not None:
+                yield event
+
+    async def _apply_event_transforms(self, event: LLMEvent) -> LLMEvent | None:
+        """Run an event through the transform pipeline.
+
+        Returns the (possibly modified) event, or None to suppress it.
+        """
+        for transform in self._transforms:
+            event = await transform.transform_event(event)
+            if event is None:
+                return None
+        return event
 
     def format_tools(self, tool_schemas: list[dict]) -> list[dict]:
         encoded = []
