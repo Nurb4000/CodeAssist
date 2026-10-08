@@ -92,10 +92,10 @@ class GrepTool(Tool):
                         continue
                 except Exception:  # noqa: BLE001, S110
                     pass
-                try:
-                    text = path_obj.read_text(errors="replace")
-                except OSError:
-                    continue
+            try:
+                text = path_obj.read_text(errors="replace")
+            except OSError:
+                continue
 
             lines = text.splitlines()
             for i, line in enumerate(lines, 1):
