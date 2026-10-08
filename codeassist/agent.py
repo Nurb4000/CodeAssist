@@ -37,7 +37,9 @@ from .tools import ToolRegistry
 
 log = logging.getLogger(__name__)
 
-# Legacy: tools that require user confirmation (replaced by permission_manager)
+# Legacy: tools that require user confirmation (replaced by permission_manager).
+# Still used as a fallback when the permission system raises an exception.
+# TODO: Remove once all callers have migrated to the permission system.
 CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 
 # Shell command risk classification for arity-based approval reduction.
@@ -607,6 +609,25 @@ def _loop_event(reason: str) -> AgentEvent:
 
 
 class Agent:
+    """Core agent loop: prompt -> tool calls -> execute -> repeat.
+
+    Handles confirmation flow, trust management, context compaction, loop
+    detection, continuation nudging, and graceful step-budget wrap-up.
+
+    Args:
+        config: Global application configuration (LLM, server, workspace, etc.).
+        session: The session this agent belongs to (message storage, identity).
+        tools: Tool registry providing available tool schemas and execution.
+        system_prompt: Override the default system prompt. Falls back to
+            build_system_prompt() if None.
+        agent_ruleset: Agent-specific permission rules that override the global
+            ruleset. Used for read-only agents (review, explore) to enforce
+            their stated contracts.
+        max_steps: Per-agent step budget. When reached, tools are disabled and
+            the model produces a structured wrap-up. None falls back to the
+            global config.agent.max_iterations cap.
+    """
+
     def __init__(self, config: Config, session: Session, tools: ToolRegistry, system_prompt: str | None = None, agent_ruleset: PermissionRuleset | None = None, max_steps: int | None = None):
         self.config = config
         self.session = session

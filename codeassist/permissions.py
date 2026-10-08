@@ -65,7 +65,13 @@ class PermissionRuleset:
 
         for rule in rules:
             if rule.matches_path(file_path):
-                # Specificity: longer pattern = more specific
+                # Specificity scoring: longer patterns are more specific.
+                # A wildcard "*" has specificity 0 (least specific). A pattern
+                # like "/workspace/src/*.py" scores higher than "/workspace/*",
+                # so it wins when both match the same file. This is a simple
+                # heuristic — not a full glob-specificity algorithm — but it
+                # correctly handles the common case of "global default + per-file
+                # override".
                 specificity = len(rule.pattern) if rule.pattern != "*" else 0
                 if specificity > best_specificity:
                     best_specificity = specificity

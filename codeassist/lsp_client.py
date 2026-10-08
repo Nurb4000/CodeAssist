@@ -611,6 +611,24 @@ class LSPTool(Tool):
     def __init__(self, lsp_client: LSPClient):
         self.lsp_client = lsp_client
 
+    # Dispatch table maps action names to handler methods.
+    _HANDLERS = {
+        "workspace_symbols": "_handle_workspace_symbols",
+        "diagnostics": "_handle_diagnostics",
+        "format": "_handle_format",
+        "completions": "_handle_completions",
+        "definition": "_handle_definition",
+        "references": "_handle_references",
+        "hover": "_handle_hover",
+        "document_symbols": "_handle_document_symbols",
+        "rename": "_handle_rename",
+        "type_definition": "_handle_type_definition",
+        "implementation": "_handle_implementation",
+        "call_hierarchy": "_handle_call_hierarchy",
+        "incoming_calls": "_handle_incoming_calls",
+        "outgoing_calls": "_handle_outgoing_calls",
+    }
+
     async def execute(
         self,
         action: str,
@@ -628,20 +646,13 @@ class LSPTool(Tool):
             if not self.lsp_client._servers:
                 return ToolResult(output="No LSP servers available. Configure LSP in config.toml or via /api/lsp.")
 
+            handler_name = self._HANDLERS.get(action)
+            if not handler_name:
+                return ToolResult(output=f"Error: unknown action '{action}'", error=True)
+
             # workspace_symbols doesn't need a file path
             if action == "workspace_symbols":
-                if not query:
-                    return ToolResult(output="Error: query is required for workspace_symbols", error=True)
-                symbols = await self.lsp_client.get_workspace_symbols(query)
-                if not symbols:
-                    return ToolResult(output=f"No symbols found matching '{query}'.")
-                result = [f"**Workspace Symbols for '{query}':**\n"]
-                for sym in symbols[:30]:
-                    uri = Path(sym["uri"]).name if sym.get("uri") else "unknown"
-                    ln = sym.get("range", {}).get("start", {}).get("line", 0) + 1
-                    container = f" (in {sym['container_name']})" if sym.get("container_name") else ""
-                    result.append(f"- **{sym['name']}** ({sym['kind']}) at {uri}:{ln}{container}")
-                return ToolResult(output="\n".join(result))
+                return await getattr(self, handler_name)(query=query)
 
             # All other actions need file_path
             if not file_path:
@@ -653,176 +664,217 @@ class LSPTool(Tool):
             if not path.exists():
                 return ToolResult(output=f"Error: file does not exist: {file_path}", error=True)
 
-            uri = path
-
-            if action == "diagnostics":
-                diagnostics = await self.lsp_client.get_diagnostics(uri, language or "")
-                if not diagnostics:
-                    return ToolResult(output="No diagnostics found.")
-                result = ["**Diagnostics:**\n"]
-                for diag in diagnostics:
-                    severity = {
-                        LSPDiagnostic.SEVERITY_ERROR: "ERROR",
-                        LSPDiagnostic.SEVERITY_WARNING: "WARNING",
-                        LSPDiagnostic.SEVERITY_INFORMATION: "INFO",
-                        LSPDiagnostic.SEVERITY_HINT: "HINT",
-                    }.get(diag.severity, "UNKNOWN")
-                    ln = diag.range.get("start", {}).get("line", 0) + 1
-                    col = diag.range.get("start", {}).get("character", 0) + 1
-                    result.append(f"- [{severity}] Line {ln}:{col}: {diag.message}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "format":
-                text = path.read_text(encoding="utf-8")
-                formatted = await self.lsp_client.format_document(uri, text)
-                if formatted:
-                    return ToolResult(output=f"```{language or 'text'}\n{formatted}\n```")
-                return ToolResult(output="Formatting not available or no changes needed.")
-
-            elif action == "completions":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for completions", error=True)
-                completions = await self.lsp_client.get_completions(uri, line, character)
-                if not completions:
-                    return ToolResult(output="No completions available.")
-                result = ["**Completions:**\n"]
-                for comp in completions[:20]:
-                    label = comp.get("label", "")
-                    kind = comp.get("kind", "")
-                    detail = comp.get("detail", "")
-                    result.append(f"- **{label}** ({kind}): {detail}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "definition":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for definition", error=True)
-                locations = await self.lsp_client.get_definition(uri, line, character)
-                if not locations:
-                    return ToolResult(output="No definition found.")
-                result = ["**Definition:**\n"]
-                for loc in locations:
-                    fname = Path(loc["uri"]).name
-                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "references":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for references", error=True)
-                locations = await self.lsp_client.get_references(uri, line, character)
-                if not locations:
-                    return ToolResult(output="No references found.")
-                result = [f"**References ({len(locations)}):**\n"]
-                for loc in locations[:30]:
-                    fname = Path(loc["uri"]).name
-                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "hover":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for hover", error=True)
-                hover = await self.lsp_client.get_hover(uri, line, character)
-                if not hover:
-                    return ToolResult(output="No hover information available.")
-                return ToolResult(output=f"**Hover Info:**\n{hover['value']}")
-
-            elif action == "document_symbols":
-                symbols = await self.lsp_client.get_document_symbols(uri)
-                if not symbols:
-                    return ToolResult(output="No symbols found in document.")
-                result = ["**Document Symbols:**\n"]
-                for sym in symbols[:50]:
-                    ln = sym.get("range", {}).get("start", {}).get("line", 0) + 1
-                    result.append(f"- {sym['name']} ({sym['kind']}) at line {ln}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "rename":
-                if line is None or character is None or not new_name:
-                    return ToolResult(output="Error: line, character, and new_name are required for rename", error=True)
-                result = await self.lsp_client.rename_symbol(uri, line, character, new_name)
-                if not result:
-                    return ToolResult(output="Rename not available or failed.")
-                changes = result.get("changes", {})
-                total = sum(len(v) for v in changes.values())
-                return ToolResult(output=f"Rename would change {total} locations. (Preview only — use edit tool to apply.)")
-
-            elif action == "type_definition":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for type_definition", error=True)
-                locations = await self.lsp_client.get_type_definition(uri, line, character)
-                if not locations:
-                    return ToolResult(output="No type definition found.")
-                result = ["**Type Definition:**\n"]
-                for loc in locations:
-                    fname = Path(loc["uri"]).name
-                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "implementation":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for implementation", error=True)
-                locations = await self.lsp_client.get_implementation(uri, line, character)
-                if not locations:
-                    return ToolResult(output="No implementations found.")
-                result = ["**Implementations:**\n"]
-                for loc in locations:
-                    fname = Path(loc["uri"]).name
-                    result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "call_hierarchy":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for call_hierarchy", error=True)
-                items = await self.lsp_client.prepare_call_hierarchy(uri, line, character)
-                if not items:
-                    return ToolResult(output="No call hierarchy found.")
-                result = ["**Call Hierarchy:**\n"]
-                for item in items[:10]:
-                    fname = Path(item.get("uri", "")).name
-                    name = item.get("name", "unknown")
-                    kind = item.get("kind", "")
-                    ln = item.get("range", {}).get("start", {}).get("line", 0) + 1
-                    result.append(f"- **{name}** ({kind}) at {fname}:{ln}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "incoming_calls":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for incoming_calls", error=True)
-                items = await self.lsp_client.prepare_call_hierarchy(uri, line, character)
-                if not items:
-                    return ToolResult(output="No call hierarchy item found.")
-                calls = await self.lsp_client.get_incoming_calls(items[0])
-                if not calls:
-                    return ToolResult(output="No incoming calls found.")
-                result = ["**Incoming Calls (callers):**\n"]
-                for call in calls[:20]:
-                    from_item = call.get("from", {})
-                    fname = Path(from_item.get("uri", "")).name
-                    name = from_item.get("name", "unknown")
-                    ln = from_item.get("range", {}).get("start", {}).get("line", 0) + 1
-                    result.append(f"- **{name}** at {fname}:{ln}")
-                return ToolResult(output="\n".join(result))
-
-            elif action == "outgoing_calls":
-                if line is None or character is None:
-                    return ToolResult(output="Error: line and character are required for outgoing_calls", error=True)
-                items = await self.lsp_client.prepare_call_hierarchy(uri, line, character)
-                if not items:
-                    return ToolResult(output="No call hierarchy item found.")
-                calls = await self.lsp_client.get_outgoing_calls(items[0])
-                if not calls:
-                    return ToolResult(output="No outgoing calls found.")
-                result = ["**Outgoing Calls (callees):**\n"]
-                for call in calls[:20]:
-                    to_item = call.get("to", {})
-                    fname = Path(to_item.get("uri", "")).name
-                    name = to_item.get("name", "unknown")
-                    ln = to_item.get("range", {}).get("start", {}).get("line", 0) + 1
-                    result.append(f"- **{name}** at {fname}:{ln}")
-                return ToolResult(output="\n".join(result))
-
-            else:
-                return ToolResult(output=f"Error: unknown action '{action}'", error=True)
+            return await getattr(self, handler_name)(
+                path=path, language=language, line=line,
+                character=character, new_name=new_name,
+            )
 
         except Exception as e:
             log.exception("LSP tool execution failed")
             return ToolResult(output=f"Error: {e}", error=True)
+
+    # ── Action handlers ──────────────────────────────────────────────
+
+    async def _handle_workspace_symbols(self, query: str | None = None) -> ToolResult:
+        if not query:
+            return ToolResult(output="Error: query is required for workspace_symbols", error=True)
+        symbols = await self.lsp_client.get_workspace_symbols(query)
+        if not symbols:
+            return ToolResult(output=f"No symbols found matching '{query}'.")
+        result = [f"**Workspace Symbols for '{query}':**\n"]
+        for sym in symbols[:30]:
+            uri = Path(sym["uri"]).name if sym.get("uri") else "unknown"
+            ln = sym.get("range", {}).get("start", {}).get("line", 0) + 1
+            container = f" (in {sym['container_name']})" if sym.get("container_name") else ""
+            result.append(f"- **{sym['name']}** ({sym['kind']}) at {uri}:{ln}{container}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_diagnostics(
+        self, path: Path, language: str | None = None, **_kw,
+    ) -> ToolResult:
+        diagnostics = await self.lsp_client.get_diagnostics(path, language or "")
+        if not diagnostics:
+            return ToolResult(output="No diagnostics found.")
+        result = ["**Diagnostics:**\n"]
+        for diag in diagnostics:
+            severity = {
+                LSPDiagnostic.SEVERITY_ERROR: "ERROR",
+                LSPDiagnostic.SEVERITY_WARNING: "WARNING",
+                LSPDiagnostic.SEVERITY_INFORMATION: "INFO",
+                LSPDiagnostic.SEVERITY_HINT: "HINT",
+            }.get(diag.severity, "UNKNOWN")
+            ln = diag.range.get("start", {}).get("line", 0) + 1
+            col = diag.range.get("start", {}).get("character", 0) + 1
+            result.append(f"- [{severity}] Line {ln}:{col}: {diag.message}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_format(
+        self, path: Path, language: str | None = None, **_kw,
+    ) -> ToolResult:
+        text = path.read_text(encoding="utf-8")
+        formatted = await self.lsp_client.format_document(path, text)
+        if formatted:
+            return ToolResult(output=f"```{language or 'text'}\n{formatted}\n```")
+        return ToolResult(output="Formatting not available or no changes needed.")
+
+    async def _handle_completions(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for completions", error=True)
+        completions = await self.lsp_client.get_completions(path, line, character)
+        if not completions:
+            return ToolResult(output="No completions available.")
+        result = ["**Completions:**\n"]
+        for comp in completions[:20]:
+            label = comp.get("label", "")
+            kind = comp.get("kind", "")
+            detail = comp.get("detail", "")
+            result.append(f"- **{label}** ({kind}): {detail}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_definition(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for definition", error=True)
+        locations = await self.lsp_client.get_definition(path, line, character)
+        if not locations:
+            return ToolResult(output="No definition found.")
+        result = ["**Definition:**\n"]
+        for loc in locations:
+            fname = Path(loc["uri"]).name
+            result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_references(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for references", error=True)
+        locations = await self.lsp_client.get_references(path, line, character)
+        if not locations:
+            return ToolResult(output="No references found.")
+        result = [f"**References ({len(locations)}):**\n"]
+        for loc in locations[:30]:
+            fname = Path(loc["uri"]).name
+            result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_hover(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for hover", error=True)
+        hover = await self.lsp_client.get_hover(path, line, character)
+        if not hover:
+            return ToolResult(output="No hover information available.")
+        return ToolResult(output=f"**Hover Info:**\n{hover['value']}")
+
+    async def _handle_document_symbols(self, path: Path, **_kw) -> ToolResult:
+        symbols = await self.lsp_client.get_document_symbols(path)
+        if not symbols:
+            return ToolResult(output="No symbols found in document.")
+        result = ["**Document Symbols:**\n"]
+        for sym in symbols[:50]:
+            ln = sym.get("range", {}).get("start", {}).get("line", 0) + 1
+            result.append(f"- {sym['name']} ({sym['kind']}) at line {ln}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_rename(
+        self, path: Path, line: int | None = None, character: int | None = None,
+        new_name: str | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None or not new_name:
+            return ToolResult(output="Error: line, character, and new_name are required for rename", error=True)
+        result = await self.lsp_client.rename_symbol(path, line, character, new_name)
+        if not result:
+            return ToolResult(output="Rename not available or failed.")
+        changes = result.get("changes", {})
+        total = sum(len(v) for v in changes.values())
+        return ToolResult(output=f"Rename would change {total} locations. (Preview only — use edit tool to apply.)")
+
+    async def _handle_type_definition(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for type_definition", error=True)
+        locations = await self.lsp_client.get_type_definition(path, line, character)
+        if not locations:
+            return ToolResult(output="No type definition found.")
+        result = ["**Type Definition:**\n"]
+        for loc in locations:
+            fname = Path(loc["uri"]).name
+            result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_implementation(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for implementation", error=True)
+        locations = await self.lsp_client.get_implementation(path, line, character)
+        if not locations:
+            return ToolResult(output="No implementations found.")
+        result = ["**Implementations:**\n"]
+        for loc in locations:
+            fname = Path(loc["uri"]).name
+            result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_call_hierarchy(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for call_hierarchy", error=True)
+        items = await self.lsp_client.prepare_call_hierarchy(path, line, character)
+        if not items:
+            return ToolResult(output="No call hierarchy found.")
+        result = ["**Call Hierarchy:**\n"]
+        for item in items[:10]:
+            fname = Path(item.get("uri", "")).name
+            name = item.get("name", "unknown")
+            kind = item.get("kind", "")
+            ln = item.get("range", {}).get("start", {}).get("line", 0) + 1
+            result.append(f"- **{name}** ({kind}) at {fname}:{ln}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_incoming_calls(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for incoming_calls", error=True)
+        items = await self.lsp_client.prepare_call_hierarchy(path, line, character)
+        if not items:
+            return ToolResult(output="No call hierarchy item found.")
+        calls = await self.lsp_client.get_incoming_calls(items[0])
+        if not calls:
+            return ToolResult(output="No incoming calls found.")
+        result = ["**Incoming Calls (callers):**\n"]
+        for call in calls[:20]:
+            from_item = call.get("from", {})
+            fname = Path(from_item.get("uri", "")).name
+            name = from_item.get("name", "unknown")
+            ln = from_item.get("range", {}).get("start", {}).get("line", 0) + 1
+            result.append(f"- **{name}** at {fname}:{ln}")
+        return ToolResult(output="\n".join(result))
+
+    async def _handle_outgoing_calls(
+        self, path: Path, line: int | None = None, character: int | None = None, **_kw,
+    ) -> ToolResult:
+        if line is None or character is None:
+            return ToolResult(output="Error: line and character are required for outgoing_calls", error=True)
+        items = await self.lsp_client.prepare_call_hierarchy(path, line, character)
+        if not items:
+            return ToolResult(output="No call hierarchy item found.")
+        calls = await self.lsp_client.get_outgoing_calls(items[0])
+        if not calls:
+            return ToolResult(output="No outgoing calls found.")
+        result = ["**Outgoing Calls (callees):**\n"]
+        for call in calls[:20]:
+            to_item = call.get("to", {})
+            fname = Path(to_item.get("uri", "")).name
+            name = to_item.get("name", "unknown")
+            ln = to_item.get("range", {}).get("start", {}).get("line", 0) + 1
+            result.append(f"- **{name}** at {fname}:{ln}")
+        return ToolResult(output="\n".join(result))

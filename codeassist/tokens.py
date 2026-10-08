@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections import OrderedDict
 from typing import Any
 
 import tiktoken
@@ -12,18 +13,30 @@ from .prompts import COMPACTION_USER_PROMPT, SUMMARY_TEMPLATE
 
 log = logging.getLogger(__name__)
 
-# Cache for tiktoken encodings to avoid repeated lookups
-_encoding_cache: dict[str, tiktoken.Encoding] = {}
+# LRU cache for tiktoken encodings to avoid repeated lookups and unbounded
+# growth when models change. Max 16 entries covers all common models.
+_ENCODING_CACHE_MAX = 16
+_encoding_cache: OrderedDict[str, tiktoken.Encoding] = OrderedDict()
 
 
 def _get_encoding(model: str = "gpt-4") -> tiktoken.Encoding:
     """Get a cached tiktoken encoding for the given model."""
-    if model not in _encoding_cache:
-        try:
-            _encoding_cache[model] = tiktoken.encoding_for_model(model)
-        except KeyError:
-            _encoding_cache[model] = tiktoken.get_encoding("cl100k_base")
-    return _encoding_cache[model]
+    if model in _encoding_cache:
+        # Move to end (most recently used)
+        _encoding_cache.move_to_end(model)
+        return _encoding_cache[model]
+
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        enc = tiktoken.get_encoding("cl100k_base")
+
+    # Evict oldest entry if cache is full
+    while len(_encoding_cache) >= _ENCODING_CACHE_MAX:
+        _encoding_cache.popitem(last=False)
+
+    _encoding_cache[model] = enc
+    return enc
 
 
 # Estimated tokens per image_url part when counting multipart content.

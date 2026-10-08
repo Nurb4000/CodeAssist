@@ -10,10 +10,30 @@ from .security import validate_url
 _fetch_client: httpx.AsyncClient | None = None
 
 
+def _redirect_hook(response: httpx.Response) -> None:
+    """Re-validate each redirect target to prevent DNS rebinding attacks.
+
+    Between the initial URL validation and the actual HTTP fetch, the DNS entry
+    could change (rebinding attack). A redirect to an internal IP after the
+    initial check would be accepted without this hook.
+    """
+    next_url = str(response.headers.get("location", ""))
+    if next_url and not validate_url(next_url):
+        raise httpx.HTTPStatusError(
+            f"Redirect target '{next_url}' targets a private or internal network",
+            request=response.request,
+            response=response,
+        )
+
+
 def _get_fetch_client() -> httpx.AsyncClient:
     global _fetch_client
     if _fetch_client is None:
-        _fetch_client = httpx.AsyncClient(timeout=30, follow_redirects=True)
+        _fetch_client = httpx.AsyncClient(
+            timeout=30,
+            follow_redirects=True,
+            event_hooks={"response": [_redirect_hook]},
+        )
     return _fetch_client
 
 

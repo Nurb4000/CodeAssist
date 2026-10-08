@@ -89,7 +89,13 @@ class PluginRegistry:
                     version = meta.get("version")
                     config = meta.get("config", {})
 
-            # Load the plugin module
+            # Load the plugin module.
+            # SECURITY NOTE: exec_module runs arbitrary Python from workspace
+            # directories. The trust registry (trust_registry.py) gates loading,
+            # but a trusted plugin has full process access with no sandboxing.
+            # For an internal-only deployment this is acceptable. If exposing
+            # externally, consider running plugins in a subprocess sandbox or
+            # using a restricted execution environment (e.g., RestrictedPython).
             spec = importlib.util.spec_from_file_location(
                 f"codeassist_plugin_{plugin_name}",
                 str(plugin_file),

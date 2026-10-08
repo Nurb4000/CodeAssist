@@ -113,6 +113,13 @@ class SystemContextManager:
     """Manages composable system context from multiple sources.
 
     Tracks context epoch: when baseline changes, emits mid-conversation update.
+
+    .. deprecated::
+        Currently unused in the agent loop. The system prompt is built inline
+        via ``build_system_prompt()`` in ``prompts.py``. This class is kept for
+        future use (plugin-extensible context sources) but is not wired into
+        the main execution path. Callers should use ``prompts.build_system_prompt()``
+        directly until this is integrated.
     """
 
     def __init__(self):
