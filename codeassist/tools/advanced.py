@@ -14,7 +14,9 @@ class WebSearchTool(Tool):
     name = "websearch"
     description = (
         "Search the web for information. Returns search results with titles, URLs, and snippets. "
-        "Use this to find documentation, troubleshoot errors, or gather information."
+        "Use this to find documentation, troubleshoot errors, or gather information.\n\n"
+        "When depth='deep', the top 3 results are fetched and their full content is included "
+        "(truncated to a reasonable length) for comprehensive analysis."
     )
     parameters = {  # noqa: RUF012
         "type": "object",
@@ -27,6 +29,12 @@ class WebSearchTool(Tool):
                 "type": "integer",
                 "description": "Number of results to return (default: 10, max: 20)",
             },
+            "depth": {
+                "type": "string",
+                "enum": ["fast", "deep"],
+                "default": "fast",
+                "description": "Search depth. 'fast' returns titles/snippets only. 'deep' fetches and includes full content of top 3 results.",
+            },
         },
         "required": ["query"],
     }
@@ -35,18 +43,89 @@ class WebSearchTool(Tool):
         self.max_chars = 30000
         self._search_engine = "duckduckgo"  # Default search engine
 
-    async def execute(self, query: str, num_results: int = 10) -> ToolResult:
+    async def execute(self, query: str, num_results: int = 10, depth: str = "fast") -> ToolResult:
         try:
             num_results = min(max(num_results, 1), 20)
 
             if self._search_engine == "duckduckgo":
-                return await self._search_duckduckgo(query, num_results)
+                results = await self._search_duckduckgo(query, num_results)
             else:
-                return await self._search_generic(query, num_results)
+                results = await self._search_generic(query, num_results)
+
+            # Deep mode: fetch full content of top results
+            if depth == "deep" and not results.error:
+                return await self._deep_fetch(results.output, min(num_results, 3))
+
+            return results
 
         except Exception as e:
             log.exception("Web search failed")
             return ToolResult(output=f"Web search error: {e}", error=True)
+
+    async def _deep_fetch(self, search_output: str, num_to_fetch: int) -> ToolResult:
+        """Fetch full content of top search results for deep analysis."""
+        import re
+
+        # Extract URLs from the search results output
+        urls = re.findall(r"^\s*(https?://\S+)", search_output, re.MULTILINE)
+        urls = list(dict.fromkeys(urls))[:num_to_fetch]  # deduplicate, limit
+
+        if not urls:
+            return ToolResult(output=search_output + "\n\n**Deep fetch: no URLs found to fetch.**")
+
+        from .webfetch import _get_fetch_client
+
+        deep_results = []
+        for url in urls:
+            try:
+                client = _get_fetch_client()
+                resp = await client.get(url, headers={"User-Agent": "CodeAssist/1.0"})
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+
+                if "text/html" in content_type:
+                    from html.parser import HTMLParser
+
+                    class _TextExtractor(HTMLParser):
+                        def __init__(self):
+                            super().__init__()
+                            self.result = []
+                            self.skip = False
+
+                        def handle_starttag(self, tag, attrs):
+                            if tag in ("script", "style", "noscript"):
+                                self.skip = True
+
+                        def handle_endtag(self, tag):
+                            if tag in ("script", "style", "noscript"):
+                                self.skip = False
+                            if tag in ("p", "div", "br", "li", "h1", "h2", "h3"):
+                                self.result.append("\n")
+
+                        def handle_data(self, data):
+                            if not self.skip:
+                                self.result.append(data)
+
+                    text = "".join(_TextExtractor().feed(resp.text) or []).strip()
+                else:
+                    text = resp.text
+
+                # Truncate to reasonable length per result
+                max_per_result = 4000
+                if len(text) > max_per_result:
+                    text = text[:max_per_result] + "\n\n...(truncated)..."
+
+                deep_results.append(f"## {url}\n\n{text}")
+            except Exception as e:
+                deep_results.append(f"## {url}\n\n_Fetch error: {e}_")
+
+        return ToolResult(
+            output=(
+                f"**Deep Search Results for: {search_output.split(chr(10))[0]}**\n\n"
+                "Below is the full content of the top search results:\n\n"
+                + "\n\n---\n\n".join(deep_results)
+            )
+        )
 
     async def _search_duckduckgo(self, query: str, num_results: int) -> ToolResult:
         """Search using DuckDuckGo (no API key required)."""
