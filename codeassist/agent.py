@@ -1478,7 +1478,10 @@ class Agent:
 
                 if confirmed_tool_calls:
                     try:
-                        results = await asyncio.gather(*[_exec_tool(tc) for tc in confirmed_tool_calls])
+                        results = await asyncio.gather(
+                            *[_exec_tool(tc) for tc in confirmed_tool_calls],
+                            return_exceptions=True,
+                        )
                     except asyncio.CancelledError:
                         # Stop was pressed while the tools were running. The
                         # assistant message with its tool_calls is already
@@ -1489,7 +1492,22 @@ class Agent:
                         # half-written.
                         await asyncio.shield(self._answer_unrun_tool_calls(confirmed_tool_calls))
                         raise
-                    for tc, result, truncated, duration_ms in results:
+
+                    # Separate completed results from cancelled/failed ones.
+                    # return_exceptions=True lets us preserve partial results
+                    # when some tools finished before cancellation.
+                    completed = []
+                    cancelled_tcs = []
+                    for tc, res in zip(confirmed_tool_calls, results):
+                        if isinstance(res, BaseException):
+                            cancelled_tcs.append(tc)
+                        else:
+                            completed.append(res)
+
+                    if cancelled_tcs:
+                        await self._answer_unrun_tool_calls(cancelled_tcs)
+
+                    for tc, result, truncated, duration_ms in completed:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                         self._messages_dirty = True
                         yield AgentEvent("tool_result", {"id": tc.id, "name": tc.name, "output": truncated})
