@@ -444,6 +444,50 @@ class LSPClient:
                 log.debug("get_implementation failed on %s: %s", name, e)
         return []
 
+    async def prepare_call_hierarchy(self, uri: str, line: int, character: int) -> list[dict]:
+        """Get call hierarchy items for a symbol at position."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "textDocument/prepareCallHierarchy", {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    return result
+                elif isinstance(result, dict):
+                    return [result]
+            except Exception as e:  # noqa: BLE001
+                log.debug("prepare_call_hierarchy failed on %s: %s", name, e)
+        return []
+
+    async def get_incoming_calls(self, item: dict) -> list[dict]:
+        """Get incoming calls for a call hierarchy item."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "callHierarchy/incomingCalls", {
+                    "item": item,
+                    "range": {"start": 0, "end": 100},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    return result
+            except Exception as e:  # noqa: BLE001
+                log.debug("get_incoming_calls failed on %s: %s", name, e)
+        return []
+
+    async def get_outgoing_calls(self, item: dict) -> list[dict]:
+        """Get outgoing calls for a call hierarchy item."""
+        for name, proc in self._servers.items():
+            try:
+                result = await self._send_request(proc, "callHierarchy/outgoingCalls", {
+                    "item": item,
+                    "range": {"start": 0, "end": 100},
+                }, timeout=5.0)
+                if isinstance(result, list):
+                    return result
+            except Exception as e:  # noqa: BLE001
+                log.debug("get_outgoing_calls failed on %s: %s", name, e)
+        return []
+
     def _format_locations(self, locations: list) -> list[dict]:
         """Format LSP location objects for agent consumption."""
         result = []
@@ -501,7 +545,7 @@ class LSPClient:
 
 
 class LSPTool(Tool):
-    """Tool for interacting with LSP servers. Supports 9 operations."""
+    """Tool for interacting with LSP servers. Supports 12 operations."""
 
     name = "lsp"
     workspace = Path(".")
@@ -518,7 +562,10 @@ class LSPTool(Tool):
         "- workspace_symbols: Search symbols across workspace\n"
         "- rename: Rename symbol and all references\n"
         "- type_definition: Find type definition at position\n"
-        "- implementation: Find implementations at position"
+        "- implementation: Find implementations at position\n"
+        "- call_hierarchy: Get callers and callees of a function\n"
+        "- incoming_calls: Get functions that call the given function\n"
+        "- outgoing_calls: Get functions called by the given function"
     )
     parameters = {  # noqa: RUF012
         "type": "object",
@@ -528,7 +575,8 @@ class LSPTool(Tool):
                 "enum": [
                     "diagnostics", "format", "completions", "definition",
                     "references", "hover", "document_symbols",
-                    "workspace_symbols", "rename", "type_definition", "implementation"
+                    "workspace_symbols", "rename", "type_definition",
+                    "implementation", "call_hierarchy", "incoming_calls", "outgoing_calls"
                 ],
                 "description": "LSP action to perform",
             },
@@ -719,6 +767,57 @@ class LSPTool(Tool):
                 for loc in locations:
                     fname = Path(loc["uri"]).name
                     result.append(f"- {fname}:{loc['line']+1}:{loc['character']+1}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "call_hierarchy":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for call_hierarchy", error=True)
+                items = await self.lsp_client.prepare_call_hierarchy(uri, line, character)
+                if not items:
+                    return ToolResult(output="No call hierarchy found.")
+                result = ["**Call Hierarchy:**\n"]
+                for item in items[:10]:
+                    fname = Path(item.get("uri", "")).name
+                    name = item.get("name", "unknown")
+                    kind = item.get("kind", "")
+                    ln = item.get("range", {}).get("start", {}).get("line", 0) + 1
+                    result.append(f"- **{name}** ({kind}) at {fname}:{ln}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "incoming_calls":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for incoming_calls", error=True)
+                items = await self.lsp_client.prepare_call_hierarchy(uri, line, character)
+                if not items:
+                    return ToolResult(output="No call hierarchy item found.")
+                calls = await self.lsp_client.get_incoming_calls(items[0])
+                if not calls:
+                    return ToolResult(output="No incoming calls found.")
+                result = ["**Incoming Calls (callers):**\n"]
+                for call in calls[:20]:
+                    from_item = call.get("from", {})
+                    fname = Path(from_item.get("uri", "")).name
+                    name = from_item.get("name", "unknown")
+                    ln = from_item.get("range", {}).get("start", {}).get("line", 0) + 1
+                    result.append(f"- **{name}** at {fname}:{ln}")
+                return ToolResult(output="\n".join(result))
+
+            elif action == "outgoing_calls":
+                if line is None or character is None:
+                    return ToolResult(output="Error: line and character are required for outgoing_calls", error=True)
+                items = await self.lsp_client.prepare_call_hierarchy(uri, line, character)
+                if not items:
+                    return ToolResult(output="No call hierarchy item found.")
+                calls = await self.lsp_client.get_outgoing_calls(items[0])
+                if not calls:
+                    return ToolResult(output="No outgoing calls found.")
+                result = ["**Outgoing Calls (callees):**\n"]
+                for call in calls[:20]:
+                    to_item = call.get("to", {})
+                    fname = Path(to_item.get("uri", "")).name
+                    name = to_item.get("name", "unknown")
+                    ln = to_item.get("range", {}).get("start", {}).get("line", 0) + 1
+                    result.append(f"- **{name}** at {fname}:{ln}")
                 return ToolResult(output="\n".join(result))
 
             else:
