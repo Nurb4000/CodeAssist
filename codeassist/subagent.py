@@ -212,18 +212,21 @@ class SubagentManager:
             from codeassist.session import get_db
             async with get_db() as db:
                 await db.execute(
-                    "INSERT INTO todos (id, session_id, content, status, priority, created_at) "
-                    "VALUES (?, ?, ?, ?, 'medium', ?)",
+                    "INSERT OR REPLACE INTO subagent_tasks "
+                    "(id, parent_session_id, child_session_id, description, subagent_type, "
+                    "background, status, result, created_at, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task.id,
                         task.parent_session_id,
-                        json.dumps({
-                            "description": task.description,
-                            "subagent_type": task.subagent_type,
-                            "background": task.background,
-                        }),
+                        task.child_session_id,
+                        task.description,
+                        task.subagent_type,
+                        1 if task.background else 0,
                         task.status,
+                        task.result,
                         task.created_at,
+                        task.completed_at,
                     ),
                 )
                 await db.commit()

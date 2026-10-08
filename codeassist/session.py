@@ -14,7 +14,7 @@ import aiosqlite
 # volume). Defaults to <package>/data for plain local runs.
 DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class _DBPool:
@@ -191,6 +191,10 @@ async def init_db():
         if current_version < 13:
             await _add_v13_tables(db)
             current_version = 13
+
+        if current_version < 14:
+            await _add_v14_tables(db)
+            current_version = 14
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -622,6 +626,35 @@ async def _add_v13_tables(db):
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_plan_tasks_session "
         "ON plan_tasks(session_id, position)"
+    )
+    await db.commit()
+
+
+async def _add_v14_tables(db):
+    """Dedicated table for subagent task metadata.
+
+    Subagent tasks were previously persisted into the ``todos`` table alongside
+    user-facing todo items, causing pollution of the UI task list and potential
+    ID collisions. This migration creates a separate table so subagent metadata
+    is isolated from the user's plan.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS subagent_tasks (
+            id TEXT PRIMARY KEY,
+            parent_session_id TEXT NOT NULL,
+            child_session_id TEXT,
+            description TEXT NOT NULL,
+            subagent_type TEXT NOT NULL,
+            background INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            result TEXT,
+            created_at TEXT,
+            completed_at TEXT
+        )
+    """)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_subagent_tasks_parent "
+        "ON subagent_tasks(parent_session_id)"
     )
     await db.commit()
 
