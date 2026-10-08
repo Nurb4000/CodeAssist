@@ -315,6 +315,15 @@ async def llm_compact_messages(
         i -= 1
     tail_start = i + 1
 
+    # Fallback: if not enough user turns were found (e.g. after compaction the
+    # last messages are tool results or assistant-only), preserve the last
+    # tail_turns messages by index regardless of role, so recent context is
+    # not lost to summarization.
+    if turns_found < tail_turns:
+        min_tail_start = max(1, len(messages) - tail_turns)
+        if min_tail_start > tail_start:
+            tail_start = min_tail_start
+
     # Check if tail exceeds token budget; if so, shrink it
     tail_messages = messages[tail_start:]
     tail_tokens = count_tokens(tail_messages)
