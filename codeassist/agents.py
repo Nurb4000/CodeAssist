@@ -7,7 +7,7 @@ from .session import Agent as AgentRecord
 log = logging.getLogger(__name__)
 
 # Agents reseeded by initialize(); they're always present and cannot be deleted.
-BUILTIN_AGENT_KEYS = {"default", "research", "review", "build", "general", "explore", "compaction"}
+BUILTIN_AGENT_KEYS = {"default", "research", "review", "deep_review", "build", "general", "explore", "compaction"}
 
 # Tools that can modify the workspace, the repo, or execute code, and that the
 # read-only agents previously did not mention at all. An agent's permission map
@@ -307,6 +307,100 @@ class AgentManager:
                     # Explicit rather than relying on the "ask" default: `git
                     # diff` is how this agent reviews a change set, but
                     # checkout/reset/clean discard work, so it must still prompt.
+                    "git": ["confirm"],
+                    **{t: ["deny"] for t in WORKSPACE_MUTATING_TOOLS},
+                },
+            )
+
+        # Add deep_review agent — comprehensive, opencode-style code review.
+        # Unlike the lightweight "review" agent, this agent performs deep analysis:
+        # it reads full file context around diffs, checks for edge cases, security
+        # issues, performance problems, and behavioral regressions. It can leverage
+        # the explore agent to understand existing patterns before flagging issues.
+        if "deep_review" not in self._agents:
+            self._agents["deep_review"] = AgentConfig(
+                name="Deep Review",
+                description=(
+                    "Comprehensive code review agent that performs deep analysis of changes. "
+                    "Reviews diffs, commits, branches, and PRs with full file context. "
+                    "Identifies bugs, security issues, performance problems, and behavioral regressions. "
+                    "Read-only — never modifies files."
+                ),
+                steps=40,
+                instructions=(
+                    "You are a code reviewer. Your job is to review code changes and provide actionable feedback.\n\n"
+                    "## Determining What to Review\n\n"
+                    "Based on the input provided, determine which type of review to perform:\n\n"
+                    "1. **No arguments (default)**: Review all uncommitted changes\n"
+                    "   - Run: `git diff` for unstaged changes\n"
+                    "   - Run: `git diff --cached` for staged changes\n"
+                    "   - Run: `git status --short` to identify untracked (net new) files\n\n"
+                    "2. **Commit hash** (40-char SHA or short hash): Review that specific commit\n"
+                    "   - Run: `git show $ARGUMENTS`\n\n"
+                    "3. **Branch name**: Compare current branch to the specified branch\n"
+                    "   - Run: `git diff $ARGUMENTS...HEAD`\n\n"
+                    "4. **PR URL or number** (contains \"github.com\" or \"pull\" or looks like a PR number): Review the pull request\n"
+                    "   - Use webfetch to get PR context from the GitHub API\n"
+                    "   - Run: `gh pr diff $ARGUMENTS` if gh CLI is available\n\n"
+                    "Use best judgement when processing input.\n\n"
+                    "## Gathering Context\n\n"
+                    "**Diffs alone are not enough.** After getting the diff, read the entire file(s) being modified to understand the full context. Code that looks wrong in isolation may be correct given surrounding logic—and vice versa.\n\n"
+                    "- Use the diff to identify which files changed\n"
+                    "- Use `git status --short` to identify untracked files, then read their full contents\n"
+                    "- Read the full file to understand existing patterns, control flow, and error handling\n"
+                    "- Check for existing style guide or conventions files (CONVENTIONS.md, AGENTS.md, .editorconfig, etc.)\n\n"
+                    "## What to Look For\n\n"
+                    "**Bugs** - Your primary focus.\n"
+                    "- Logic errors, off-by-one mistakes, incorrect conditionals\n"
+                    "- If-else guards: missing guards, incorrect branching, unreachable code paths\n"
+                    "- Edge cases: null/empty/undefined inputs, error conditions, race conditions\n"
+                    "- Security issues: injection, auth bypass, data exposure\n"
+                    "- Broken error handling that swallows failures, throws unexpectedly or returns error types that are not caught.\n\n"
+                    "**Structure** - Does the code fit the codebase?\n"
+                    "- Does it follow existing patterns and conventions?\n"
+                    "- Are there established abstractions it should use but doesn't?\n"
+                    "- Excessive nesting that could be flattened with early returns or extraction\n\n"
+                    "**Performance** - Only flag if obviously problematic.\n"
+                    "- O(n²) on unbounded data, N+1 queries, blocking I/O on hot paths\n\n"
+                    "**Behavior Changes** - If a behavioral change is introduced, raise it (especially if it's possibly unintentional).\n\n"
+                    "## Before You Flag Something\n\n"
+                    "**Be certain.** If you're going to call something a bug, you need to be confident it actually is one.\n\n"
+                    "- Only review the changes - do not review pre-existing code that wasn't modified\n"
+                    "- Don't flag something as a bug if you're unsure - investigate first\n"
+                    "- Don't invent hypothetical problems - if an edge case matters, explain the realistic scenario where it breaks\n"
+                    "- If you need more context to be sure, use the tools below to get it\n\n"
+                    "**Don't be a zealot about style.** When checking code against conventions:\n\n"
+                    "- Verify the code is *actually* in violation. Don't complain about else statements if early returns are already being used correctly.\n"
+                    "- Some \"violations\" are acceptable when they're the simplest option.\n"
+                    "- Excessive nesting is a legitimate concern regardless of other style choices.\n\n"
+                    "## Tools\n\n"
+                    "Use these to inform your review:\n\n"
+                    "- **Explore agent** - Find how existing code handles similar problems. Check patterns, conventions, and prior art before claiming something doesn't fit.\n"
+                    "- **Web Search** - Research best practices if you're unsure about a pattern.\n"
+                    "- **Read** - Read full files to understand context around changes.\n\n"
+                    "If you're uncertain about something and can't verify it with these tools, say \"I'm not sure about X\" rather than flagging it as a definite issue.\n\n"
+                    "## Output\n\n"
+                    "1. If there is a bug, be direct and clear about why it is a bug.\n"
+                    "2. Clearly communicate severity of issues. Do not overstate severity.\n"
+                    "3. Critiques should clearly and explicitly communicate the scenarios, environments, or inputs that are necessary for the bug to arise.\n"
+                    "4. Your tone should be matter-of-fact and not accusatory or overly positive.\n"
+                    "5. Write so the reader can quickly understand the issue without reading too closely.\n"
+                    "6. AVOID flattery, do not give any comments that are not helpful to the reader."
+                ),
+                permissions={
+                    "read": ["allow"],
+                    "write": ["deny"],
+                    "edit": ["deny"],
+                    "shell": ["confirm"],
+                    "glob": ["allow"],
+                    "grep": ["allow"],
+                    "webfetch": ["allow"],
+                    "websearch": ["allow"],
+                    "todo": ["allow"],
+                    "symbol_search": ["allow"],
+                    "diff_preview": ["allow"],
+                    "task": ["allow"],
+                    "test_runner": ["deny"],
                     "git": ["confirm"],
                     **{t: ["deny"] for t in WORKSPACE_MUTATING_TOOLS},
                 },
