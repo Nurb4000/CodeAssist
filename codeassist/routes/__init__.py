@@ -18,6 +18,7 @@ def register_routes(app: FastAPI):
     from .sessions import router as sessions_router
     from .settings import router as settings_router
     from .skills import router as skills_router
+    from .subagents import router as subagents_router
     from .tools import router as tools_router
 
     app.include_router(sessions_router)
@@ -35,3 +36,4 @@ def register_routes(app: FastAPI):
     app.include_router(custom_tools_router)
     app.include_router(kb_router)
     app.include_router(settings_router)
+    app.include_router(subagents_router)
