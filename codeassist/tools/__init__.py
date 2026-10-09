@@ -63,7 +63,35 @@ def _validate_args(schema: dict, args: dict) -> str | None:
     return None
 
 
+def tool_error(message: str, exc: Exception | None = None) -> ToolResult:
+    """Create a ToolResult for a known error condition.
+
+    Use this for errors the tool expects and can describe meaningfully
+    (e.g. "file not found", "invalid argument"). Unexpected exceptions should
+    bubble up to the registry's catch-all, which logs the full traceback and
+    returns a generic error result. This avoids double-swallowing: the agent
+    loop has its own broad catch, so tools should only catch what they know
+    how to handle.
+    """
+    if exc is not None:
+        log.debug("Tool error: %s (caused by %s: %s)", message, type(exc).__name__, exc)
+    return ToolResult(output=f"Error: {message}", error=True)
+
+
 class Tool(ABC):
+    """Base class for all tools.
+
+    Every tool must return a ``ToolResult`` from ``execute()``. The registry
+    enforces this at runtime with a defensive coercion (str → ToolResult) and
+    a warning log, so third-party or dynamically loaded tools that forget the
+    return type don't abort the whole turn.
+
+    Error handling convention:
+    - Use ``tool_error()`` for known, expected errors (file not found, etc.)
+    - Let unexpected exceptions bubble up to the registry's catch-all
+    - The agent loop has its own broad catch; avoid double-swallowing
+    """
+
     name: str = ""
     description: str = ""
     parameters: dict = field(default_factory=dict)
@@ -115,7 +143,12 @@ class ToolRegistry:
         if isinstance(result, ToolResult):
             return result
         if isinstance(result, str):
+            log.warning("Tool '%s' returned str instead of ToolResult; coercing", name)
             return ToolResult(output=result)
+        log.warning(
+            "Tool '%s' returned %s instead of ToolResult; wrapping in error",
+            name, type(result).__name__,
+        )
         return ToolResult(
             output=f"Error: tool '{name}' returned {type(result).__name__}, expected a ToolResult",
             error=True,
@@ -290,63 +323,16 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
 
 def get_tools(config=None) -> dict:
-    """Get a dictionary of all built-in tools."""
-    from .advanced import QuestionTool, WebSearchTool
-    from .apply_patch import ApplyPatchTool
-    from .create_skill import CreateSkill
-    from .create_tool import CreateTool
-    from .database import DatabaseTool
-    from .diff_preview import DiffPreviewTool
-    from .directory import DirectoryTool
-    from .docker_tool import DockerTool
-    from .documentation import DocumentationTool
-    from .edit import EditTool
-    from .fossil import FossilTool
-    from .git import GitTool
-    from .git_snapshot import GitSnapshotTool
-    from .glob import GlobTool
-    from .grep import GrepTool
-    from .http import HTTPTool
-    from .image_analyze import ImageAnalyzeTool
-    from .package_manager import PackageManagerTool
-    from .process import ProcessTool
-    from .read import ReadTool
-    from .screenshot import ScreenshotTool
-    from .shell import ShellTool
-    from .symbol_search import SymbolSearchTool
-    from .test_runner import TestRunnerTool
-    from .todo import TodoTool
-    from .webfetch import WebFetchTool
-    from .write import WriteTool
+    """Get a dictionary of all built-in tools.
 
-    tools = {}
-    # Use the configured workspace so tools listed in the GUI report the same
-    # scope the agent actually runs with, rather than the process CWD.
+    Thin wrapper around ``create_registry()`` that returns a plain dict for
+    callers that don't need the full registry (e.g. the GUI tool list).
+    Consolidates with ``create_registry()`` to avoid duplicating the import
+    and instantiation logic.
+    """
     workspace = Path(config.workspace) if config is not None else Path(".")
-    
-    # Create tool instances
-    tool_classes = [
-        ReadTool, WriteTool, EditTool, ShellTool, GlobTool, GrepTool,
-        WebFetchTool, TodoTool, GitTool, FossilTool, ApplyPatchTool,
-        DirectoryTool, ProcessTool, HTTPTool, DatabaseTool, DocumentationTool,
-        WebSearchTool, QuestionTool, CreateTool, CreateSkill, DiffPreviewTool,
-        TestRunnerTool,         SymbolSearchTool, PackageManagerTool,
-        GitSnapshotTool, DockerTool, ImageAnalyzeTool,
-        ScreenshotTool,
-    ]
-    
-    for tool_cls in tool_classes:
-        tool = tool_cls()
-        tool.workspace = workspace
-        if config and hasattr(tool, "timeout"):
-            tool.timeout = config.tools.shell_timeout
-        if config and hasattr(tool, "max_output_chars"):
-            tool.max_output_chars = config.tools.max_output_chars
-        if config and hasattr(tool, "max_chars"):
-            tool.max_chars = config.tools.webfetch_max_chars
-        tools[tool.name] = tool
-    
-    return tools
+    registry = create_registry(workspace, tool_config=getattr(config, "tools", None))
+    return dict(registry._tools)
 
 
 def reload_tools(workspace: Path, registry: ToolRegistry) -> int:

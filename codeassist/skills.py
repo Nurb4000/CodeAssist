@@ -603,10 +603,11 @@ class SkillTool:
         }
 
     async def execute(self, action: str, skill_name: str | None = None) -> "ToolResult":
-        # Must return a ToolResult, not a bare str: the registry hands this
-        # straight to the agent, which reads `result.output`. Returning a str
-        # made any use of a skill -- e.g. asking for the music skill -- abort
-        # the turn with "'str' object has no attribute 'output'".
+        """Execute a skill action.
+
+        Returns a ToolResult (not a bare str). The registry enforces this at
+        runtime with defensive coercion and a warning log.
+        """
         from .tools import ToolResult
 
         if action == "list":
