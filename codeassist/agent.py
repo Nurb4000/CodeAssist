@@ -1148,6 +1148,15 @@ class Agent:
             log.debug("Tool output cleanup failed: %s", e)
 
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
+        """Main agent loop: build messages → stream LLM → execute tools → repeat.
+
+        The loop is structured in phases (marked with comments below):
+        - Phase 0: Build messages with compaction if needed
+        - Phase 1: Stream LLM response and handle events
+        - Phase 2: Handle tool calls (confirmations + execution)
+        - Phase 3: Persist text-only responses and detect repetition
+        - Phase 4: Continuation nudge logic for premature stops
+        """
         loop_detector = _LoopDetector()
         hit_max_iterations = False
 
@@ -1188,6 +1197,7 @@ class Agent:
                 yield AgentEvent("done")
                 return
 
+            # ── Phase 0: Build messages (with compaction if needed) ──────
             # Fetch messages once, then track incrementally
             if self._messages is None or self._messages_dirty:
                 self._messages = await self.session.get_messages()
@@ -1323,6 +1333,7 @@ class Agent:
                 openai_tools = None
                 messages = messages + [{"role": "user", "content": MAX_STEPS_WRAPUP}]
 
+            # ── Phase 1: Stream LLM response ─────────────────────────────
             accumulated_text = ""
             accumulated_reasoning = ""
             tool_calls: list[ToolCall] = []
@@ -1493,6 +1504,7 @@ class Agent:
                     yield AgentEvent("text_delta", {"content": accumulated_text})
                 self._nudge_answer = None
 
+            # ── Phase 2: Handle tool calls ───────────────────────────────
             if tool_calls:
                 # A model that keeps asking for the same thing never repeats
                 # itself in prose, so check the calls before running them. Drop
@@ -1722,6 +1734,7 @@ class Agent:
 
                 continue
 
+            # ── Phase 3: Text-only response ──────────────────────────────
             if accumulated_text or accumulated_reasoning:
                 await self.session.update_message(
                     stream_msg_id,
@@ -1747,6 +1760,7 @@ class Agent:
                     yield _loop_event(looping)
                     break
 
+            # ── Phase 4: Continuation nudge ──────────────────────────────
             # Continuation guard. If the model stopped using tools (a text-only
             # response) after having used tools this run, it may be wrapping up
             # prematurely. Just because tools ran does not mean the task is done,
