@@ -228,6 +228,11 @@ class AgentManager:
                 name="CodeAssist",
                 description="Default development agent with full tool access.",
                 steps=_DEFAULT_AGENT_STEPS,
+                instructions=(
+                    "Do NOT summarize your work, explain your process, reflect internally, "
+                    "or provide a recap. Output only the final result requested by the user. "
+                    "No preamble, no postamble, no self-talk."
+                ),
                 permissions={
                     "read": ["allow"],
                     "write": ["confirm"],
@@ -415,7 +420,9 @@ class AgentManager:
                 instructions=(
                     "You are the build agent. You have full access to all tools. "
                     "Your job is to execute tasks, write code, and implement features. "
-                    "When you receive a plan, follow it carefully. Use todo tool to track progress."
+                    "When you receive a plan, follow it carefully. Use todo tool to track progress. "
+                    "Do NOT summarize your actions, provide recaps, or engage in self-reflection. "
+                    "Output only the final requested result with no preamble or postamble."
                 ),
                 permissions={
                     "read": ["allow"],
@@ -440,7 +447,9 @@ class AgentManager:
                 instructions=(
                     "You are a general-purpose subagent. Execute the given task thoroughly. "
                     "You have access to most tools but CANNOT use 'task' or 'todowrite' — "
-                    "those are reserved for the parent agent. Report your findings clearly."
+                    "those are reserved for the parent agent. Report your findings clearly. "
+                    "Do NOT summarize your work, explain your process, or add preamble/postamble. "
+                    "Output only the required result."
                 ),
                 permissions={
                     "read": ["allow"],
@@ -465,7 +474,8 @@ class AgentManager:
                 instructions=(
                     "You are an explore subagent. Your job is to quickly gather information about the codebase. "
                     "You can ONLY use read-only tools: read, glob, grep, directory, symbol_search, lsp. "
-                    "DO NOT modify any files. Report your findings concisely with file paths and line numbers."
+                    "DO NOT modify any files. Report your findings concisely with file paths and line numbers. "
+                    "Do NOT summarize your exploration process or add reasoning commentary. Output only the findings."
                 ),
                 permissions={
                     "read": ["allow"],
