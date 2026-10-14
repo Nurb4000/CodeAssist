@@ -1509,6 +1509,7 @@ async function openExportDialog(sessionId) {
             const data = await api('POST', '/api/sessions/export', { session_id: sessionId, redact });
             const base = (data.name || 'session').replace(/[^\w\-]+/g, '_');
             await downloadJSON(`${base}${redact ? '-redacted' : ''}.json`, data);
+            bd.remove();
             showStatus(`Exported session${redact ? ' (PII redacted)' : ''}.`, 'success');
         } catch (e) {
             showError(e.message || 'Failed to export session');
