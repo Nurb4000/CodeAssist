@@ -421,7 +421,8 @@ class AgentManager:
                     "You are the build agent. You have full access to all tools. "
                     "Your job is to execute tasks, write code, and implement features. "
                     "When you receive a plan, follow it carefully. Use todo tool to track progress. "
-                    "Do NOT summarize your actions, provide recaps, or engage in self-reflection. "
+                    "Do NOT summarize your actions, provide recaps, narrate steps, or engage in self-reflection or self-talk. "
+                    "Do not use phrases like 'Let me', 'I need to', 'Now let me', 'I should', or repeat statements. "
                     "Output only the final requested result with no preamble or postamble."
                 ),
                 permissions={
