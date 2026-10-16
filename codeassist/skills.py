@@ -500,6 +500,8 @@ class SkillRegistry:
         imported = []
         for entry in manifest.get("data", {}).get("skills", []):
             name = entry["name"]
+            if not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+                continue  # path traversal attempt — skip
             target_dir = self.workspace / (self.BASE_DIR
                                           if entry.get("category") == "base"
                                           else self.CUSTOM_DIR)

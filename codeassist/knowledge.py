@@ -589,7 +589,8 @@ class KnowledgeBase:
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
             )
-            return await cursor.fetchall()
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
 
     @staticmethod
     async def delete_knowledge_entry(entry_id: str) -> bool:

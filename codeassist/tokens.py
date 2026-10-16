@@ -53,7 +53,12 @@ def count_tokens(messages: list[dict], model: str = "gpt-4", tool_schemas: list[
     for msg in messages:
         total += 4  # every message format: <|start|>{role}\n{content}\n<|end|>
         for key, value in msg.items():
-            if isinstance(value, list):
+            if key == "tool_calls":
+                # Use JSON serialization for more accurate OpenAI wire format.
+                # Must be checked before the list branch below — tool_calls is
+                # a list, but its parts are function calls, not text/image.
+                total += len(encoding.encode(json.dumps(value, separators=(",", ":"))))
+            elif isinstance(value, list):
                 # Multipart content (text + image_url parts)
                 for part in value:
                     if isinstance(part, dict):
@@ -62,11 +67,6 @@ def count_tokens(messages: list[dict], model: str = "gpt-4", tool_schemas: list[
                         elif part.get("type") == "image_url":
                             total += IMAGE_TOKEN_ESTIMATE
             elif isinstance(value, str):
-                total += len(encoding.encode(value))
-            elif key == "tool_calls":
-                # Use JSON serialization for more accurate OpenAI wire format
-                total += len(encoding.encode(json.dumps(value, separators=(",", ":"))))
-            elif key == "tool_call_id":
                 total += len(encoding.encode(value))
     total += 2  # every reply is primed with <|start|>assistant<|message|>
 

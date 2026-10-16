@@ -106,7 +106,9 @@ class WebSearchTool(Tool):
                             if not self.skip:
                                 self.result.append(data)
 
-                    text = "".join(_TextExtractor().feed(resp.text) or []).strip()
+                    extractor = _TextExtractor()
+                    extractor.feed(resp.text)
+                    text = "".join(extractor.result).strip()
                 else:
                     text = resp.text
 

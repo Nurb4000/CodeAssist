@@ -159,7 +159,7 @@ async def test_connection(payload: dict | None = None):
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     timeout = 10.0
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(endpoint, headers=headers)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}

@@ -548,6 +548,7 @@ class GitTool(Tool):
         return ToolResult(output="Patch applied successfully")
 
     async def _rebase(self, repo_path: Path, kwargs: dict) -> ToolResult:
+        upstream = None
         if kwargs.get("abort"):
             args = ["rebase", "--abort"]
         elif kwargs.get("rebase_continue"):
@@ -562,7 +563,9 @@ class GitTool(Tool):
         if rc != 0:
             return ToolResult(output=f"Rebase failed: {stderr}", error=True)
 
-        return ToolResult(output=f"Rebased onto {upstream}")
+        if upstream:
+            return ToolResult(output=f"Rebased onto {upstream}")
+        return ToolResult(output="Rebase operation completed")
 
     async def _merge(self, repo_path: Path, kwargs: dict) -> ToolResult:
         if kwargs.get("abort"):

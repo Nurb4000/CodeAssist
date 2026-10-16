@@ -250,9 +250,15 @@ class CustomToolRegistry:
             raise ValueError("not a CodeAssist tool bundle")
 
         self.tools_dir.mkdir(parents=True, exist_ok=True)
+        tools_root = self.tools_dir.resolve()
         imported = []
         for entry in manifest.get("data", {}).get("tools", []):
-            target = self.tools_dir / entry["filename"]
+            filename = entry["filename"]
+            target = (self.tools_dir / filename).resolve()
+            try:
+                target.relative_to(tools_root)
+            except ValueError:
+                continue  # path traversal attempt — skip
             target.write_text(entry["source"], encoding="utf-8")
             imported.append(target.relative_to(self.workspace).as_posix())
 
