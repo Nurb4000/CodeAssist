@@ -206,3 +206,28 @@ class TestSkillToolThroughTheAgent:
             assert isinstance(result, ToolResult)
             # The agent's access pattern.
             _ = result.output
+
+
+class TestGetToolsWorkspace:
+    """get_tools() must never default to the process CWD."""
+
+    def test_raises_without_config_or_workspace(self):
+        from codeassist.tools import get_tools
+
+        with pytest.raises(ValueError, match="workspace"):
+            get_tools()
+
+    def test_accepts_explicit_workspace(self, tmp_path):
+        from codeassist.tools import get_tools
+
+        tools = get_tools(workspace=tmp_path)
+        assert "read" in tools
+        assert "write" in tools
+
+    def test_accepts_config(self, tmp_path):
+        from codeassist.tools import get_tools
+
+        config = type("C", (), {"workspace": tmp_path, "tools": None})()
+        tools = get_tools(config)
+        assert "read" in tools
+

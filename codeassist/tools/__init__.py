@@ -322,16 +322,30 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     return registry
 
 
-def get_tools(config=None) -> dict:
+def get_tools(config=None, workspace: Path | None = None) -> dict:
     """Get a dictionary of all built-in tools.
 
     Thin wrapper around ``create_registry()`` that returns a plain dict for
     callers that don't need the full registry (e.g. the GUI tool list).
     Consolidates with ``create_registry()`` to avoid duplicating the import
     and instantiation logic.
+
+    A workspace is required, taken from ``config.workspace`` or the explicit
+    ``workspace`` argument. It previously defaulted to the process CWD, which
+    silently pointed every tool at the server's own directory — the exact
+    failure the README warns about — so that default was removed and this now
+    fails loudly instead.
     """
-    workspace = Path(config.workspace) if config is not None else Path(".")
-    registry = create_registry(workspace, tool_config=getattr(config, "tools", None))
+    if config is not None:
+        resolved_workspace = Path(config.workspace)
+    elif workspace is not None:
+        resolved_workspace = Path(workspace)
+    else:
+        raise ValueError(
+            "get_tools() requires a config with a workspace, or an explicit "
+            "workspace argument; refusing to default to the process CWD."
+        )
+    registry = create_registry(resolved_workspace, tool_config=getattr(config, "tools", None))
     return dict(registry._tools)
 
 
