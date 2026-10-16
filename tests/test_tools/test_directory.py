@@ -110,3 +110,49 @@ class TestDirectoryTool:
         assert "description" in schema
         assert "parameters" in schema
         assert "path" in schema["parameters"]["properties"]
+
+
+class TestDirectoryToolMaxDepth:
+    """`max_depth` counts total levels listed, mirroring `find -maxdepth`.
+
+    0 = unlimited, 1 = only the given directory, 2 = also its children, ...
+    """
+
+    @pytest.fixture
+    def nested(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "b").mkdir()
+        (tmp_path / "a" / "b" / "c").mkdir()
+        (tmp_path / "a" / "f1.txt").write_text("1")
+        (tmp_path / "a" / "b" / "f2.txt").write_text("2")
+        (tmp_path / "a" / "b" / "c" / "f3.txt").write_text("3")
+        return tmp_path
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("max_depth", "expected"),
+        [
+            (0, ["a", "b", "c", "f1.txt", "f2.txt", "f3.txt"]),
+            (1, ["a"]),
+            (2, ["a", "b", "f1.txt"]),
+            (3, ["a", "b", "c", "f1.txt", "f2.txt"]),
+            (4, ["a", "b", "c", "f1.txt", "f2.txt", "f3.txt"]),
+        ],
+    )
+    async def test_max_depth_levels(self, nested, max_depth, expected):
+        tool = DirectoryTool()
+        tool.workspace = nested
+
+        entries = await tool._list_directory(nested, True, max_depth, False, "name")
+
+        assert sorted(e["name"] for e in entries) == sorted(expected)
+
+    @pytest.mark.asyncio
+    async def test_max_depth_ignored_when_not_recursive(self, nested):
+        tool = DirectoryTool()
+        tool.workspace = nested
+
+        entries = await tool._list_directory(nested, False, 5, False, "name")
+
+        assert [e["name"] for e in entries] == ["a"]
+

@@ -29,7 +29,11 @@ class DirectoryTool(Tool):
             },
             "max_depth": {
                 "type": "integer",
-                "description": "Maximum depth for recursive listing (0 = unlimited)",
+                "description": (
+                    "Maximum number of directory levels to list when recursive "
+                    "(1 = only the given directory, 2 = also its children, "
+                    "...; 0 = unlimited). Mirrors `find -maxdepth`/`tree -L`."
+                ),
             },
             "include_hidden": {
                 "type": "boolean",
@@ -100,7 +104,11 @@ class DirectoryTool(Tool):
 
                     entries.append(entry_data)
 
-                    # Recurse into subdirectories if requested
+                    # Recurse into subdirectories if requested. `max_depth` is
+                    # the total number of levels to list (0 = unlimited), so the
+                    # current level consumes one and we only descend when more
+                    # than one level of budget remains.
+
                     if recursive and entry.is_dir() and (max_depth == 0 or max_depth > 1):
                         new_max_depth = max_depth - 1 if max_depth > 0 else 0
                         sub_entries = await self._list_directory(
