@@ -1,10 +1,16 @@
 """Cost Tracker - Real-time token budget enforcement for the agent loop."""
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 log = logging.getLogger(__name__)
+
+# How many per-completion usage records to retain for inspection. Records are
+# kept as a ring buffer so a very long-running session cannot grow the list
+# without bound; running totals are tracked in scalar counters instead.
+_MAX_RECORDS = 1000
 
 
 @dataclass
@@ -88,7 +94,9 @@ class CostTracker:
 
     def __init__(self, config: BudgetConfig | None = None):
         self.config = config or BudgetConfig()
-        self.records: list[UsageRecord] = []
+        # Ring buffer of recent records; `maxlen` caps memory for long sessions.
+        self.records: deque[UsageRecord] = deque(maxlen=_MAX_RECORDS)
+        self._num_completions = 0
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cost = 0.0
@@ -113,6 +121,7 @@ class CostTracker:
             model=model,
         )
         self.records.append(record)
+        self._num_completions += 1
         self._total_prompt_tokens += prompt_tokens
         self._total_completion_tokens += completion_tokens
         self._total_cost += cost
@@ -158,7 +167,7 @@ class CostTracker:
             "total_completion_tokens": self._total_completion_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
             "total_cost_usd": round(self._total_cost, 6),
-            "num_completions": len(self.records),
+            "num_completions": self._num_completions,
             "budget_enabled": self.config.enabled,
             "budget_remaining_tokens": max(0, self.config.max_tokens_per_session - self._total_prompt_tokens - self._total_completion_tokens) if self.config.max_tokens_per_session > 0 else None,
             "budget_remaining_cost": max(0, self.config.max_cost_per_session - self._total_cost) if self.config.max_cost_per_session > 0 else None,
@@ -167,6 +176,7 @@ class CostTracker:
     def reset(self):
         """Reset all usage tracking."""
         self.records.clear()
+        self._num_completions = 0
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cost = 0.0

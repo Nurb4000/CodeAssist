@@ -139,3 +139,30 @@ def test_model_costs_table_is_non_empty():
     for model, prices in MODEL_COSTS.items():
         assert prices["input"] > 0, model
         assert prices["output"] > 0, model
+
+
+class TestRecordRetention:
+    """Usage records are a bounded ring buffer so a long session cannot grow
+    the tracker without limit, while completion counts stay exact."""
+
+    def test_records_are_capped_but_count_stays_exact(self):
+        tracker = CostTracker()
+        for _ in range(ct._MAX_RECORDS + 500):
+            tracker.record_usage("ornith", 1, 1, local=True)
+        assert len(tracker.records) == ct._MAX_RECORDS
+        assert tracker.get_summary()["num_completions"] == ct._MAX_RECORDS + 500
+
+    def test_most_recent_records_are_retained(self):
+        tracker = CostTracker()
+        for i in range(ct._MAX_RECORDS + 5):
+            tracker.record_usage("ornith", i, 0, local=True)
+        # Oldest entries evicted, newest retained.
+        assert tracker.records[0].prompt_tokens == 5
+        assert tracker.records[-1].prompt_tokens == ct._MAX_RECORDS + 4
+
+    def test_reset_clears_records_and_count(self):
+        tracker = CostTracker()
+        tracker.record_usage("gpt-4o", 1000, 1000)
+        tracker.reset()
+        assert len(tracker.records) == 0
+        assert tracker.get_summary()["num_completions"] == 0
