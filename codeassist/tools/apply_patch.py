@@ -44,68 +44,53 @@ class ApplyPatchTool(Tool):
             if not patch_content or not patch_content.strip():
                 return ToolResult(output="Error: patch_content cannot be empty", error=True)
 
-            import os
-            import tempfile
+            args = ["apply"]
 
-            with tempfile.NamedTemporaryFile(
-                mode='w',
-                suffix='.patch',
-                delete=False,
-                dir=str(self.workspace)
-            ) as f:
-                f.write(patch_content)
-                patch_file = f.name
+            if dry_run:
+                args.append("--check")
 
-            try:
-                args = ["apply"]
-                
-                if dry_run:
-                    args.append("--check")
-                
-                if reverse:
-                    args.append("--reverse")
+            if reverse:
+                args.append("--reverse")
 
-                args.append(patch_file)
+            # Feed the patch on stdin ("-") instead of writing a temp file into
+            # the workspace. A crash between the write and the unlink used to
+            # leave a stray .patch artifact behind.
+            args.append("-")
 
-                proc = await asyncio.create_subprocess_exec(
-                    "git", *args,
-                    cwd=str(self.workspace),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+            proc = await asyncio.create_subprocess_exec(
+                "git", *args,
+                cwd=str(self.workspace),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            _, stderr = await proc.communicate(patch_content.encode("utf-8"))
+            rc = proc.returncode
+
+            if rc != 0:
+                error_msg = stderr.decode('utf-8', errors='replace')
+                return ToolResult(
+                    output=f"Patch application failed:\n{error_msg}",
+                    error=True
                 )
 
-                _, stderr = await proc.communicate()
-                rc = proc.returncode
+            if dry_run:
+                return ToolResult(output="Dry run complete. Patch would apply successfully.")
 
-                if rc != 0:
-                    error_msg = stderr.decode('utf-8', errors='replace')
-                    return ToolResult(
-                        output=f"Patch application failed:\n{error_msg}",
-                        error=True
-                    )
+            # Show what was changed with structured metadata
+            status_result = await self._get_status()
+            changed_files = self._parse_changed_files(patch_content, status_result)
 
-                if dry_run:
-                    return ToolResult(output="Dry run complete. Patch would apply successfully.")
-                
-                # Show what was changed with structured metadata
-                status_result = await self._get_status()
-                changed_files = self._parse_changed_files(patch_content, status_result)
-                
-                output_parts = [f"Patch applied successfully.\n\nChanged files:\n{status_result}"]
-                
-                # Add LSP diagnostics feedback for changed files
-                if self.lsp_client and changed_files:
-                    lsp_feedback = await self._get_lsp_diagnostics(changed_files)
-                    if lsp_feedback:
-                        output_parts.append(lsp_feedback)
+            output_parts = [f"Patch applied successfully.\n\nChanged files:\n{status_result}"]
 
-                return ToolResult(output="\n\n".join(output_parts))
+            # Add LSP diagnostics feedback for changed files
+            if self.lsp_client and changed_files:
+                lsp_feedback = await self._get_lsp_diagnostics(changed_files)
+                if lsp_feedback:
+                    output_parts.append(lsp_feedback)
 
-            finally:
-                try:
-                    os.unlink(patch_file)
-                except OSError:
-                    pass
+            return ToolResult(output="\n\n".join(output_parts))
 
         except WorkspaceViolationError as e:
             return ToolResult(output=f"Error: {e}", error=True)
