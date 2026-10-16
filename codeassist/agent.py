@@ -228,6 +228,12 @@ REFUSAL_SUGGESTIONS = (
 # history, and a third would only repeat work before reporting failure.
 MAX_CONTEXT_RETRIES = 2
 
+# First delay before retrying a transient LLM error, in seconds. Each further
+# retry doubles it up to the cap. The wait is real (not just advisory): a
+# rate-limited request retried instantly is simply rate-limited again.
+_RETRY_BASE_DELAY = 2.0
+_RETRY_MAX_DELAY = 30.0
+
 _REFUSAL_TRIGGER_LIMIT = 280
 
 # What makes a reply a restatement rather than new work: it re-uses most of the
@@ -850,6 +856,21 @@ class Agent:
             SESSION_TRUST.pop(self.session.id, None)
             SESSION_TOOL_TRUST.pop(self.session.id, None)
 
+    async def _backoff_delay(self, delay: float) -> bool:
+        """Wait out a retry backoff; return True if the run was cancelled first.
+
+        A blind sleep would hold Stop unresponsive for the whole delay (up to
+        the cap) while a rate-limited turn backs off, so wait on the cancel
+        event instead and unwind the moment the user stops the run.
+        """
+        if delay <= 0:
+            return self.cancel_event.is_set()
+        try:
+            await asyncio.wait_for(self.cancel_event.wait(), timeout=delay)
+        except TimeoutError:
+            return False
+        return True
+
     async def _retry_with_backoff(
         self,
         user_message: str,
@@ -859,12 +880,13 @@ class Agent:
     ):
         """Retry a failed turn with exponential backoff.
 
-        Yields retry events to the client so the UI can show progress.
-        After exhausting retries, yields an error event.
+        Waits the computed delay between attempts, yields retry events to the
+        client so the UI can show progress, and after exhausting retries yields
+        an error event.
         """
         import random
 
-        base_delay = 2.0
+        base_delay = _RETRY_BASE_DELAY
         for attempt in range(1, max_retries + 1):
             jitter = base_delay * random.uniform(-0.3, 0.3)
             delay = max(0.5, base_delay + jitter)
@@ -878,10 +900,17 @@ class Agent:
                 "status_code": status_code,
                 "message": f"Retrying in {delay:.1f}s (HTTP {status_code})",
             })
-            # Re-run the loop with the same user message. Drop the blank
-            # assistant row the failed attempt left behind first, or every retry
-            # would stack another empty bubble into the transcript.
+            # Drop the blank assistant row the failed attempt left behind before
+            # sleeping, so a cancel during the backoff leaves nothing dangling.
             await self._discard_active_placeholder()
+            # Actually wait out the backoff. A rate-limited request retried
+            # immediately is just rate-limited again, so the delay the UI
+            # advertises has to be the delay we serve.
+            if await self._backoff_delay(delay):
+                log.info("Retry cancelled during backoff (HTTP %s)", status_code)
+                yield AgentEvent("cancelled")
+                yield AgentEvent("done")
+                return
             cancelled = False
             try:
                 async for event in self._loop(user_message):
@@ -898,9 +927,9 @@ class Agent:
                     yield AgentEvent("error", {"message": msg})
                     yield AgentEvent("done")
                     return
-                base_delay = min(base_delay * 2, 30.0)
+                base_delay = min(base_delay * 2, _RETRY_MAX_DELAY)
             except openai.APIConnectionError:
-                base_delay = min(base_delay * 2, 30.0)
+                base_delay = min(base_delay * 2, _RETRY_MAX_DELAY)
             except Exception as e:
                 msg = f"Retry failed: {type(e).__name__}: {e}"
                 log.exception(msg)

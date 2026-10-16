@@ -669,10 +669,16 @@ class TestAgentPlaceholderCleanup:
             yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
         agent.llm.stream = fake_stream
+        # Don't actually wait out the backoff in the test; assert that a real,
+        # positive delay was served first.
+        agent._backoff_delay = AsyncMock(return_value=False)
 
         events = [e async for e in agent.run("Hello")]
 
         assert calls["n"] == 2
+        # The backoff is served, not just displayed: one awaited delay > 0.
+        agent._backoff_delay.assert_awaited_once()
+        assert agent._backoff_delay.await_args.args[0] > 0
         deleted = [c.args[0] for c in mock_session.delete_message.call_args_list]
         # The failed attempt's placeholder is gone; the successful one survives.
         assert "asst-1" in deleted
@@ -701,6 +707,73 @@ class TestAgentPlaceholderCleanup:
         deleted = [c.args[0] for c in mock_session.delete_message.call_args_list]
         assert "asst-1" in deleted
         mock_session.update_message.assert_not_awaited()
+
+
+class TestBackoffDelay:
+    """The retry backoff must actually wait — a rate-limited request retried
+    instantly is just rate-limited again — while staying responsive to Stop."""
+
+    @pytest.mark.asyncio
+    async def test_waits_out_the_delay_when_not_cancelled(self, agent):
+        assert await agent._backoff_delay(0.01) is False
+
+    @pytest.mark.asyncio
+    async def test_returns_immediately_when_already_cancelled(self, agent):
+        agent.cancel_event.set()
+        assert await agent._backoff_delay(30.0) is True
+
+    @pytest.mark.asyncio
+    async def test_unwinds_when_cancelled_during_the_wait(self, agent):
+        async def cancel_soon():
+            await asyncio.sleep(0.01)
+            agent.cancel_event.set()
+
+        asyncio.create_task(cancel_soon())
+        # A long nominal delay that returns early proves the wait is interruptible.
+        assert await agent._backoff_delay(30.0) is True
+
+    @pytest.mark.asyncio
+    async def test_zero_delay_returns_cancel_state(self, agent):
+        assert await agent._backoff_delay(0.0) is False
+        agent.cancel_event.set()
+        assert await agent._backoff_delay(0.0) is True
+
+    @pytest.mark.asyncio
+    async def test_retry_aborts_when_cancelled_during_backoff(self, agent, mock_session):
+        import httpx
+        import openai
+
+        agent.config.llm.max_retries = 3
+        mock_session.add_message = AsyncMock(return_value="msg")
+        mock_session.delete_message = AsyncMock()
+
+        req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        err = openai.APIStatusError(
+            "rate limited", response=httpx.Response(429, request=req), body=None
+        )
+        calls = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            calls["n"] += 1
+            raise err
+            yield  # pragma: no cover
+
+        agent.llm.stream = fake_stream
+
+        async def cancel_soon():
+            await asyncio.sleep(0.01)
+            agent.cancel_event.set()
+
+        asyncio.create_task(cancel_soon())
+
+        events = [e async for e in agent.run("Hello")]
+        types = [e.type for e in events]
+
+        # Cancelled mid-backoff: the turn unwinds instead of retrying again.
+        assert calls["n"] == 1
+        assert "cancelled" in types
+        assert "done" in types
+        assert "error" not in types
 
 
 class TestSteeringContract:
