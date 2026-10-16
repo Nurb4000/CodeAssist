@@ -45,10 +45,26 @@ class OAuthProviderConfig:
 class OAuthManager:
     """Manages OAuth flows for external service authentication."""
 
+    # Authorization states are short-lived. A callback that arrives after this
+    # window is rejected, closing the replay window left by states whose flow
+    # is started but never completed (which were previously never purged).
+    _STATE_TTL = timedelta(minutes=10)
+
     def __init__(self):
         self._providers: dict[str, OAuthProviderConfig] = {}
         self._tokens: dict[str, OAuthToken] = {}  # provider -> token
-        self._pending_states: dict[str, str] = {}  # state -> provider
+        # state -> (provider, created_at)
+        self._pending_states: dict[str, tuple[str, datetime]] = {}
+
+    def _purge_expired_states(self, now: datetime | None = None) -> None:
+        """Drop authorization states older than ``_STATE_TTL``."""
+        now = now or datetime.now(UTC)
+        expired = [
+            s for s, (_, created) in self._pending_states.items()
+            if now - created > self._STATE_TTL
+        ]
+        for s in expired:
+            self._pending_states.pop(s, None)
 
     def register_provider(self, config: OAuthProviderConfig):
         """Register an OAuth provider configuration."""
@@ -77,8 +93,9 @@ class OAuthManager:
         if not config:
             raise ValueError(f"Provider '{provider_name}' not registered")
 
+        self._purge_expired_states()
         state = state or secrets.token_urlsafe(32)
-        self._pending_states[state] = provider_name
+        self._pending_states[state] = (provider_name, datetime.now(UTC))
 
         scope_str = " ".join(scopes or config.default_scopes)
         auth_url = (
@@ -108,8 +125,15 @@ class OAuthManager:
             log.warning("OAuth callback for unknown provider: %s", provider_name)
             return None
 
-        # Verify state
-        expected_provider = self._pending_states.pop(state, None)
+        # Verify state (single-use) and reject unknown/expired states.
+        entry = self._pending_states.pop(state, None)
+        if entry is None:
+            log.warning("OAuth state unknown or already used: %s", state)
+            return None
+        expected_provider, created_at = entry
+        if datetime.now(UTC) - created_at > self._STATE_TTL:
+            log.warning("OAuth state expired: %s", state)
+            return None
         if expected_provider != provider_name:
             log.warning(
                 "OAuth state mismatch: expected %s, got %s",
@@ -203,17 +227,35 @@ class OAuthManager:
             log.exception("OAuth token refresh failed for %s", provider_name)
             return None
 
-    def get_token(self, provider_name: str) -> OAuthToken | None:
-        """Get the current token for a provider, auto-refreshing if expired."""
+    async def get_token(self, provider_name: str) -> OAuthToken | None:
+        """Get the current token for a provider, auto-refreshing if expired.
+
+        Returns the stored token when it is still valid. When it has expired
+        and a refresh token is available, refreshes it and returns the new
+        token. If no refresh is possible, logs the problem and returns the
+        (expired) token so callers can decide how to proceed.
+        """
         token = self._tokens.get(provider_name)
         if token and token.is_expired:
-            # Return the token anyway; the caller can trigger refresh
-            log.info("Token expired for %s, refresh needed", provider_name)
+            if token.refresh_token:
+                log.info("Token expired for %s; refreshing", provider_name)
+                refreshed = await self.refresh_token(provider_name)
+                if refreshed:
+                    return refreshed
+                log.warning(
+                    "Auto-refresh failed for %s; returning the expired token",
+                    provider_name,
+                )
+            else:
+                log.info(
+                    "Token expired for %s and no refresh token available",
+                    provider_name,
+                )
         return token
 
-    def get_access_token(self, provider_name: str) -> str | None:
-        """Get the access token string for a provider."""
-        token = self.get_token(provider_name)
+    async def get_access_token(self, provider_name: str) -> str | None:
+        """Get a valid access token string for a provider, refreshing if needed."""
+        token = await self.get_token(provider_name)
         return token.access_token if token else None
 
     def revoke_token(self, provider_name: str) -> bool:
