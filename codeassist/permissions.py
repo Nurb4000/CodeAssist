@@ -140,14 +140,13 @@ class SavedPermissions:
     async def load(self) -> None:
         """Load saved permissions from database."""
         try:
-            async with get_db() as db:
-                async with db.execute(
-                    "SELECT tool_name, pattern, action FROM permission_saves"
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                    for tool_name, pattern, action in rows:
-                        key = f"{tool_name}:{pattern}"
-                        self._cache[key] = action
+            async with get_db() as db, db.execute(
+                "SELECT tool_name, pattern, action FROM permission_saves"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                for tool_name, pattern, action in rows:
+                    key = f"{tool_name}:{pattern}"
+                    self._cache[key] = action
         except Exception as e:  # noqa: BLE001
             log.debug("Failed to load saved permissions: %s", e)
 

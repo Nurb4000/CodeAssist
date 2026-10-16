@@ -289,8 +289,8 @@ class QuestionTool(Tool):
         self._pending_questions: dict[str, asyncio.Event] = {}
         self._answers: dict[str, str] = {}
         self._question_data: dict[str, dict] = {}
-        # Weak set of fire-and-forget tasks so they survive GC until done.
-        import weakref
+        # Strong refs to fire-and-forget tasks so they survive GC until done;
+        # each task discards itself on completion.
         self._pending_tasks: set[asyncio.Task] = set()
 
     async def execute(

@@ -334,8 +334,7 @@ async def llm_compact_messages(
     # not lost to summarization.
     if turns_found < tail_turns:
         min_tail_start = max(1, len(messages) - tail_turns)
-        if min_tail_start > tail_start:
-            tail_start = min_tail_start
+        tail_start = max(tail_start, min_tail_start)
 
     # Check if tail exceeds token budget; if so, shrink it
     tail_messages = messages[tail_start:]

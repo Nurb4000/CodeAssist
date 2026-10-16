@@ -175,7 +175,7 @@ class OAuthManager:
             log.info("OAuth token received for %s", provider_name)
             return token
 
-        except Exception as e:
+        except Exception:
             log.exception("OAuth token exchange failed for %s", provider_name)
             return None
 
@@ -223,7 +223,7 @@ class OAuthManager:
             log.info("OAuth token refreshed for %s", provider_name)
             return new_token
 
-        except Exception as e:
+        except Exception:
             log.exception("OAuth token refresh failed for %s", provider_name)
             return None
 

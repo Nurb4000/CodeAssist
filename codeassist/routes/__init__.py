@@ -14,9 +14,9 @@ def register_routes(app: FastAPI):
     from .lsp import router as lsp_router
     from .mcp import reload_router as mcp_reload_router
     from .mcp import router as mcp_router
+    from .oauth import router as oauth_router
     from .plugins import router as plugins_router
     from .sessions import router as sessions_router
-    from .oauth import router as oauth_router
     from .settings import router as settings_router
     from .skills import router as skills_router
     from .subagents import router as subagents_router
