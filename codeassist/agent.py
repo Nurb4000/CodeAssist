@@ -640,6 +640,7 @@ class Agent:
         self.cancel_event = asyncio.Event()
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
+        self._confirm_answers: dict[str, str] = {}
         self._confirm_tools: dict[str, str] = {}
         self._confirm_requests: dict[str, dict] = {}
         # Session trust flags (seeded from the session-scoped store so a
@@ -694,6 +695,7 @@ class Agent:
         # Unblock any pending confirmations so the agent can exit
         for confirm_id, event in list(self._confirm_events.items()):
             self._confirm_results[confirm_id] = False
+            self._confirm_answers.pop(confirm_id, None)
             event.set()
 
     async def _answer_unrun_tool_calls(self, tool_calls: list["ToolCall"]):
@@ -996,8 +998,13 @@ class Agent:
         """
         return self._confirm_requests.pop(confirm_id, None)
 
-    async def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False, trust_all: bool = False):
-        """Resolve a pending confirmation from WebSocket."""
+    async def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False, trust_all: bool = False, answer: str | None = None):
+        """Resolve a pending confirmation from WebSocket.
+
+        ``answer`` carries the user's response for question-type prompts;
+        it is stored separately from the boolean approval so the agent loop
+        can read the actual text instead of the approval flag.
+        """
         log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, trust_tool=%s, remember=%s, trust_all=%s",
                  confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
         tool_name = self._confirm_tools.pop(confirm_id, None)
@@ -1009,6 +1016,8 @@ class Agent:
                 log.info("Tool '%s' trusted for session %s", tool_name, self.session.id)
         if confirm_id in self._confirm_events:
             self._confirm_results[confirm_id] = approved
+            if answer is not None:
+                self._confirm_answers[confirm_id] = answer
             self._confirm_events[confirm_id].set()
 
     async def save_permission(self, tool_name: str, file_path: str, action: str):
@@ -1560,8 +1569,11 @@ class Agent:
                             event = asyncio.Event()
                             self._confirm_events[question_id] = event
                             await event.wait()
-                            answer = self._confirm_results.pop(question_id, "")
+                            answer = self._confirm_answers.pop(question_id, "")
+                            self._confirm_results.pop(question_id, None)
                             self._confirm_events.pop(question_id, None)
+                            if isinstance(answer, list):
+                                answer = json.dumps(answer)
                             if not answer:
                                 await self.session.add_message(
                                     "tool",

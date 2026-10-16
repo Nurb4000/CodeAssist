@@ -800,11 +800,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 question_id = data.get("id")
                 answer = data.get("answer", "")
                 if question_id:
-                    await agent.resolve_confirm(question_id, True)
-                    # Also resolve the question tool itself
-                    question_tool = tools.get("question")
-                    if question_tool and hasattr(question_tool, "set_answer"):
-                        question_tool.set_answer(question_id, json.dumps(answer) if isinstance(answer, list) else answer)
+                    await agent.resolve_confirm(question_id, True, answer=answer if answer else None)
 
             elif data.get("type") == "question_rejected":
                 question_id = data.get("id")

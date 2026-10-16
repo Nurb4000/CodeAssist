@@ -295,6 +295,185 @@ class TestAgentConfirmation:
         assert result == False
 
 
+class TestAgentQuestionFlow:
+    """The question tool must deliver the user's answer text to the model,
+    not the boolean approval flag."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_confirm_stores_answer(self, agent):
+        """resolve_confirm(answer=...) stores the answer separately from the
+        boolean approval flag."""
+        event = asyncio.Event()
+        agent._confirm_events["q1"] = event
+
+        await agent.resolve_confirm("q1", approved=True, answer="yes, proceed")
+
+        assert event.is_set()
+        assert agent._confirm_results["q1"] is True
+        assert agent._confirm_answers["q1"] == "yes, proceed"
+
+    @pytest.mark.asyncio
+    async def test_resolve_confirm_without_answer_leaves_answers_empty(self, agent):
+        """A plain confirmation (no answer= kwarg) must not touch _confirm_answers."""
+        event = asyncio.Event()
+        agent._confirm_events["c1"] = event
+
+        await agent.resolve_confirm("c1", approved=True)
+
+        assert event.is_set()
+        assert "c1" not in agent._confirm_answers
+
+    @pytest.mark.asyncio
+    async def test_question_answer_reaches_tool_message(self, agent, mock_session):
+        """End-to-end: a question tool call must persist the user's answer as
+        the tool message content — not the string 'True'."""
+        from codeassist.llm import Finish, Usage
+
+        async def turn_question():
+            yield ToolCall(id="q1", name="question", arguments={"question": "Ship it?"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        async def turn_nudge_reply():
+            yield TextDelta("Done.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        async def turn_final():
+            yield TextDelta("All finished.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        turns = [turn_question(), turn_nudge_reply(), turn_final()]
+        calls = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            g = turns[calls["n"]]
+            calls["n"] += 1
+            async for ev in g:
+                yield ev
+
+        agent.llm.stream = fake_stream
+
+        async def answer_after_request():
+            # Wait for the question_request event, then resolve with the answer
+            while not agent._confirm_events:
+                await asyncio.sleep(0.005)
+            qid = next(iter(agent._confirm_events))
+            await agent.resolve_confirm(qid, approved=True, answer="yes, ship it")
+
+        events = []
+        answer_task = asyncio.create_task(answer_after_request())
+        async for event in agent.run("ship it?"):
+            events.append(event)
+        await answer_task
+
+        # The tool message persisted for the question call must carry the answer
+        tool_msgs = [
+            c for c in mock_session.add_message.call_args_list
+            if c[0][0] == "tool" and c[1].get("tool_call_id") == "q1"
+        ]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0][1]["content"] == "yes, ship it"
+        assert tool_msgs[0][1]["content"] != "True"
+
+        # The tool_result event must also carry the answer
+        tool_results = [e for e in events if e.type == "tool_result" and e.data.get("id") == "q1"]
+        assert len(tool_results) == 1
+        assert tool_results[0].data["output"] == "yes, ship it"
+
+    @pytest.mark.asyncio
+    async def test_structured_question_answer_is_json_serialized(self, agent, mock_session):
+        """A list answer (structured questions) must be JSON-serialized, not
+        stringified as a Python list."""
+        from codeassist.llm import Finish, Usage
+
+        async def turn_question():
+            yield ToolCall(id="q1", name="question", arguments={
+                "questions": [{"question": "Pick a color", "header": "color"}],
+            })
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        async def turn_nudge_reply():
+            yield TextDelta("Done.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        async def turn_final():
+            yield TextDelta("All finished.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        turns = [turn_question(), turn_nudge_reply(), turn_final()]
+        calls = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            g = turns[calls["n"]]
+            calls["n"] += 1
+            async for ev in g:
+                yield ev
+
+        agent.llm.stream = fake_stream
+
+        async def answer_after_request():
+            while not agent._confirm_events:
+                await asyncio.sleep(0.005)
+            qid = next(iter(agent._confirm_events))
+            await agent.resolve_confirm(qid, approved=True, answer=["blue"])
+
+        events = []
+        answer_task = asyncio.create_task(answer_after_request())
+        async for event in agent.run("pick one"):
+            events.append(event)
+        await answer_task
+
+        tool_msgs = [
+            c for c in mock_session.add_message.call_args_list
+            if c[0][0] == "tool" and c[1].get("tool_call_id") == "q1"
+        ]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0][1]["content"] == '["blue"]'
+
+    @pytest.mark.asyncio
+    async def test_rejected_question_persists_dismissal(self, agent, mock_session):
+        """A rejected question must persist the dismissal message, not an
+        empty answer."""
+        from codeassist.llm import Finish, Usage
+
+        async def turn_question():
+            yield ToolCall(id="q1", name="question", arguments={"question": "Ship it?"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        async def turn_finish():
+            yield TextDelta("Done.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        turns = [turn_question(), turn_finish()]
+        calls = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            g = turns[calls["n"]]
+            calls["n"] += 1
+            async for ev in g:
+                yield ev
+
+        agent.llm.stream = fake_stream
+
+        async def reject_after_request():
+            while not agent._confirm_events:
+                await asyncio.sleep(0.005)
+            qid = next(iter(agent._confirm_events))
+            await agent.resolve_confirm(qid, approved=False)
+
+        events = []
+        reject_task = asyncio.create_task(reject_after_request())
+        async for event in agent.run("ship it?"):
+            events.append(event)
+        await reject_task
+
+        tool_msgs = [
+            c for c in mock_session.add_message.call_args_list
+            if c[0][0] == "tool" and c[1].get("tool_call_id") == "q1"
+        ]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0][1]["content"] == "Question was dismissed by user."
+
+
 class TestAgentRun:
     """Test agent run loop."""
 
