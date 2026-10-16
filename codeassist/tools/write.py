@@ -31,7 +31,9 @@ class WriteTool(Tool):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
-                backup_path = path.with_suffix(path.suffix + ".bak")
+                # Back up as "<name>.bak", collapsing a trailing dot so `foo.`
+                # becomes `foo.bak` rather than the doubled `foo..bak`.
+                backup_path = path.with_name(path.name.rstrip(".") + ".bak")
                 backup_path.write_text(path.read_text(errors="replace"))
             path.write_text(content)
             lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
