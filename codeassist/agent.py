@@ -699,6 +699,13 @@ class Agent:
         # restates that answer (reset per run in run()).
         self._nudge_answer: str | None = None
         self._defer_nudge_text: bool = False
+        # The assistant placeholder row for the step currently streaming, if it
+        # has not yet been finalized. Set when the row is created and cleared
+        # once it is persisted or deleted. A turn that unwinds on an exception
+        # (provider error mid-stream) leaves this pointing at a blank row, which
+        # would otherwise be replayed to the provider forever and rendered as an
+        # empty bubble. Retries in particular would stack one blank row per try.
+        self._active_placeholder_id: str | None = None
         # Tool output store for managed file outputs
         self._tool_output_store = get_tool_output_store(
             self.config.workspace,
@@ -733,13 +740,30 @@ class Agent:
             )
         self._messages_dirty = True
 
+    async def _discard_active_placeholder(self) -> None:
+        """Delete the current step's unfinalized assistant placeholder, if any.
+
+        Called before a retry re-runs the loop and when a turn unwinds, so a
+        provider failure mid-stream does not leave a blank assistant row that
+        the next request would replay (and the UI would show as an empty bubble).
+        """
+        msg_id = self._active_placeholder_id
+        self._active_placeholder_id = None
+        if not msg_id:
+            return
+        try:
+            await self.session.delete_message(msg_id)
+            self._messages_dirty = True
+        except Exception:  # noqa: BLE001 — cleanup is best-effort
+            log.debug("Failed to discard placeholder message %s", msg_id)
+
     async def _persist_interrupted_step(
         self,
         stream_msg_id: str,
         accumulated_text: str,
         accumulated_reasoning: str,
         tool_calls: list["ToolCall"],
-    ):
+    ) -> None:
         """Persist a turn that was cut short, so Stop does not discard the work.
 
         The placeholder assistant row is written up front, so an interruption
@@ -849,7 +873,10 @@ class Agent:
                 "status_code": status_code,
                 "message": f"Retrying in {delay:.1f}s (HTTP {status_code})",
             })
-            # Re-run the loop with the same user message
+            # Re-run the loop with the same user message. Drop the blank
+            # assistant row the failed attempt left behind first, or every retry
+            # would stack another empty bubble into the transcript.
+            await self._discard_active_placeholder()
             cancelled = False
             try:
                 async for event in self._loop(user_message):
@@ -1086,6 +1113,7 @@ class Agent:
         # becoming the newest thing the model sees when the user has moved on.
         self._pending_nudges = []
         self._nudge_version += 1
+        self._active_placeholder_id = None
 
         await self.session.add_message("user", user_message, attachments=attachments)
         # The snapshot does not contain the row just written. Without this the
@@ -1165,6 +1193,11 @@ class Agent:
             log.exception(msg)
             yield AgentEvent("error", {"message": msg})
             yield AgentEvent("done")
+        finally:
+            # A turn that unwound on an exception (or produced a genuinely empty
+            # response that never reached a persistence branch) leaves the last
+            # placeholder unfinalized. Drop it so no blank assistant row lingers.
+            await self._discard_active_placeholder()
 
         # Periodic cleanup of old tool output files
         try:
@@ -1371,6 +1404,7 @@ class Agent:
 
             # Save placeholder immediately so partial responses survive crashes
             stream_msg_id = await self.session.add_message("assistant", content="")
+            self._active_placeholder_id = stream_msg_id
 
             # The provider can still reject a request our token estimate
             # thought fit: counting is approximate, and a configured window
@@ -1389,6 +1423,7 @@ class Agent:
                             await self._persist_interrupted_step(
                                 stream_msg_id, accumulated_text, accumulated_reasoning, tool_calls
                             )
+                            self._active_placeholder_id = None
                             return
                         if time.monotonic() - stream_start > stream_timeout:
                             log.warning("LLM stream timed out after %.0fs", stream_timeout)
@@ -1484,6 +1519,7 @@ class Agent:
             ):
                 log.warning("Generation refused by provider safety filter: %s", finish_reason)
                 await self.session.update_message(stream_msg_id, content=None)
+                self._active_placeholder_id = None
                 yield AgentEvent(
                     "refusal",
                     _refusal_payload(
@@ -1521,6 +1557,7 @@ class Agent:
                     # later turn and rendered as an empty bubble on reload.
                     await self.session.delete_message(stream_msg_id)
                     self._messages_dirty = True
+                    self._active_placeholder_id = None
                     accumulated_text = ""
                     looping = loop_detector.note_restatement()
                     if looping:
@@ -1543,6 +1580,7 @@ class Agent:
                     log.warning("LLM loop detected: %s", looping)
                     await self.session.delete_message(stream_msg_id)
                     self._messages_dirty = True
+                    self._active_placeholder_id = None
                     yield _loop_event(looping)
                     break
 
@@ -1557,6 +1595,7 @@ class Agent:
                     reasoning_content=accumulated_reasoning or None,
                 )
                 self._messages_dirty = True
+                self._active_placeholder_id = None
 
                 # Phase 1: Handle confirmations and questions sequentially (interactive)
                 confirmed_tool_calls = []
@@ -1776,6 +1815,7 @@ class Agent:
                     reasoning_content=accumulated_reasoning or None,
                 )
                 self._messages_dirty = True
+                self._active_placeholder_id = None
 
                 # Repetition detection. Matching on vocabulary and size rather
                 # than equality is the point: the repeats that reach here are

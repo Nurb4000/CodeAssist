@@ -634,6 +634,74 @@ class TestAgentRun:
         assert last.kwargs["content"] is None
 
 
+class TestAgentPlaceholderCleanup:
+    """A failed streaming attempt must not leave its blank assistant row behind:
+    the retry would otherwise stack one empty bubble per try."""
+
+    @pytest.mark.asyncio
+    async def test_retry_deletes_failed_placeholder(self, agent, mock_session):
+        import httpx
+        import openai
+
+        from codeassist.llm import Finish, TextDelta, Usage
+
+        agent.config.llm.max_retries = 2
+        ids = iter(["user-1", "asst-1", "asst-2"])
+
+        async def add_message(role, content, **kwargs):
+            return next(ids)
+
+        mock_session.add_message = AsyncMock(side_effect=add_message)
+        mock_session.delete_message = AsyncMock()
+
+        req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        err = openai.APIStatusError(
+            "rate limited", response=httpx.Response(429, request=req), body=None
+        )
+        calls = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise err
+            yield TextDelta("recovered")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = fake_stream
+
+        events = [e async for e in agent.run("Hello")]
+
+        assert calls["n"] == 2
+        deleted = [c.args[0] for c in mock_session.delete_message.call_args_list]
+        # The failed attempt's placeholder is gone; the successful one survives.
+        assert "asst-1" in deleted
+        assert "asst-2" not in deleted
+        assert mock_session.update_message.await_count >= 1
+        assert any(e.type == "done" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_empty_response_placeholder_is_discarded(self, agent, mock_session):
+        """A finish with no text/reasoning/tool calls must not leave a blank row."""
+        from codeassist.llm import Finish, Usage
+
+        async def add_message(role, content, **kwargs):
+            return "user-1" if role == "user" else "asst-1"
+
+        mock_session.add_message = AsyncMock(side_effect=add_message)
+        mock_session.delete_message = AsyncMock()
+
+        async def fake_stream(messages, openai_tools):
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=0))
+
+        agent.llm.stream = fake_stream
+
+        _ = [e async for e in agent.run("Hello")]
+
+        deleted = [c.args[0] for c in mock_session.delete_message.call_args_list]
+        assert "asst-1" in deleted
+        mock_session.update_message.assert_not_awaited()
+
+
 class TestAgentContinuationNudge:
     """The loop must not mark a turn complete when the model stops after using
     tools but before the task is actually done. It should nudge the model to
