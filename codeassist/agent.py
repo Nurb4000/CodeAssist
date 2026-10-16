@@ -71,6 +71,77 @@ _DESTRUCTIVE_SHELL_PATTERNS = frozenset({
     "truncate ", "mkfs.", "fdisk ", "parted ",
 })
 
+# How deep command substitution (`$()` / backticks) may nest before we give up
+# on expanding it. Past this the command is classified conservatively rather
+# than risking unbounded recursion on adversarial input.
+_MAX_SUBSTITUTION_DEPTH = 10
+
+
+def _expand_substitutions(command: str) -> tuple[list[str], bool]:
+    """Return every command-substitution inner segment, at any nesting depth.
+
+    Shell substitution runs its inner command, so `echo $(rm -rf /)` executes
+    `rm -rf /`. Without expansion only `echo` is examined and the command is
+    wrongly classified read-only (auto-approved). Each inner command is split
+    on the same operators and yielded as its own segment so it is classified
+    too. Returns ``(segments, too_deep)``; when ``too_deep`` is set the caller
+    must classify conservatively.
+    """
+    import re as _re
+
+    segments: list[str] = []
+    seen: set[str] = set()
+    too_deep = False
+
+    def split_ops(text: str) -> list[str]:
+        return [s.strip() for s in _re.split(r"\||;|&&|&|\n", text) if s.strip()]
+
+    def walk(text: str, depth: int) -> None:
+        nonlocal too_deep
+        if depth > _MAX_SUBSTITUTION_DEPTH:
+            too_deep = True
+            return
+        i, n = 0, len(text)
+        while i < n:
+            if text.startswith("$(", i):
+                start, j, d = i + 2, i + 2, 1
+                while j < n and d:
+                    if text.startswith("$(", j):
+                        d += 1
+                        j += 2
+                    elif text[j] == ")":
+                        d -= 1
+                        j += 1
+                    else:
+                        j += 1
+                if d:
+                    i = j  # unterminated substitution; nothing further to expand
+                    continue
+                inner = text[start:j - 1]
+                for seg in split_ops(inner):
+                    if seg not in seen:
+                        seen.add(seg)
+                        segments.append(seg)
+                walk(inner, depth + 1)
+                i = j
+            elif text[i] == "`":
+                end = text.find("`", i + 1)
+                if end == -1:
+                    i += 1
+                    continue
+                inner = text[i + 1:end]
+                for seg in split_ops(inner):
+                    if seg not in seen:
+                        seen.add(seg)
+                        segments.append(seg)
+                walk(inner, depth + 1)
+                i = end + 1
+            else:
+                i += 1
+
+    walk(command, 0)
+    return segments, too_deep
+
 
 def _classify_shell_risk(command: str) -> str:
     """Classify a shell command's risk level.
@@ -91,6 +162,17 @@ def _classify_shell_risk(command: str) -> str:
     if not segments:
         return "unknown"
 
+    # Command substitution runs its inner command, so expand `$()`/backticks and
+    # inspect the inner command as well. `echo $(rm -rf /)` would otherwise pass
+    # as read-only, because only `echo` is examined. Too-deep nesting is treated
+    # conservatively rather than left unexamined.
+    sub_segments, too_deep = _expand_substitutions(command)
+    if too_deep:
+        return "unknown"
+    for seg in sub_segments:
+        if seg not in segments:
+            segments.append(seg)
+
     # Check every segment for destructive patterns (they take precedence)
     for seg in segments:
         for pattern in _DESTRUCTIVE_SHELL_PATTERNS:
@@ -98,9 +180,10 @@ def _classify_shell_risk(command: str) -> str:
                 return "destructive"
 
     # `find -exec` / `find -execdir` can run arbitrary commands
-    first_base = segments[0].split()[0] if segments[0].split() else ""
-    if first_base == "find" and ("-exec" in command or "-execdir" in command):
-        return "unknown"
+    for seg in segments:
+        seg_parts = seg.split()
+        if seg_parts and seg_parts[0] == "find" and ("-exec" in seg or "-execdir" in seg):
+            return "unknown"
 
     # All segments must be read-only for the whole command to be read-only
     for seg in segments:

@@ -149,6 +149,36 @@ class TestClassifyShellRisk:
         assert _classify_shell_risk("") == "unknown"
         assert _classify_shell_risk("   ") == "unknown"
 
+    def test_substitution_readonly_is_readonly(self):
+        """A read-only command with a read-only substitution is read-only."""
+        assert _classify_shell_risk("echo $(ls)") == "readonly"
+        assert _classify_shell_risk("echo $(git status)") == "readonly"
+        assert _classify_shell_risk("cat $(echo /etc/passwd)") == "readonly"
+
+    def test_substitution_hiding_destructive_command(self):
+        """The regression this guards: only the outer command used to be
+        inspected, so `echo $(rm -rf /)` was auto-approved as read-only."""
+        assert _classify_shell_risk("echo $(rm -rf /)") == "destructive"
+        assert _classify_shell_risk("echo `rm -rf /`") == "destructive"
+        assert _classify_shell_risk("$(rm -rf /)") == "destructive"
+        # Nested substitution and operators inside the substitution.
+        assert _classify_shell_risk("echo $(echo $(rm -rf /))") == "destructive"
+        assert _classify_shell_risk("echo $(ls && rm -rf /)") == "destructive"
+
+    def test_substitution_hiding_unknown_command(self):
+        """A read-only wrapper around an unknown command is not read-only."""
+        assert _classify_shell_risk("echo $(python script.py)") == "unknown"
+
+    def test_substitution_hiding_find_exec(self):
+        """find -exec inside a substitution still executes arbitrary commands."""
+        assert _classify_shell_risk("echo $(find . -exec rm {} \\;)") == "unknown"
+
+    def test_overly_deep_substitution_is_conservative(self):
+        """Past the expansion depth cap we give up and classify unknown rather
+        than leave the command unexamined."""
+        deep = "$(" * 20 + "ls" + ")" * 20
+        assert _classify_shell_risk(f"echo {deep}") == "unknown"
+
 
 class TestAgentInit:
     """Test agent initialization."""
