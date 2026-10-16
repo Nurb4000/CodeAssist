@@ -144,33 +144,38 @@ def _get_trust_lock() -> asyncio.Lock:
 
 # How many times the loop will nudge a model that stops after using tools
 # before giving up and flagging the task incomplete instead of falsely
-# marking it complete.
-MAX_CONTINUATION_NUDGES = 5
+# marking it complete. Kept small on purpose: a nudge exists to restart a model
+# that stopped too early, not to keep it busy. A larger budget reliably turned
+# into the failure it was meant to prevent -- a finished model, told "there may
+# be more to do", re-opened work and re-checked it over and over. Two nudges
+# recover a genuinely premature stop while bounding the re-checking loop.
+MAX_CONTINUATION_NUDGES = 2
 
-# First nudge: gentle, and it offers an escape hatch so a legitimate
-# research-only question (e.g. "what is in this file?") can still be answered.
-# The "do not repeat yourself" clause matters as much as the instruction to
-# continue: asked to "give your final answer now", models tend to comply by
-# restating the answer already delivered, which reads as the summary appearing
-# twice.
+# First nudge. Stopping is a first-class outcome here, not a footnote: a model
+# that has finished must be able to say so without feeling it has to re-open
+# work to comply. The ban on re-checking is explicit because "continue if there
+# is more to do" reliably degrades into re-reading and re-verifying work that is
+# already done. The "do not repeat yourself" clause stays: asked to finish,
+# models tend to comply by restating the answer they just gave, which reads as
+# the summary appearing twice.
 CONTINUATION_NUDGE = (
-    "[Task check: you have used tools but may not be finished yet. If there is "
-    "more work to do, continue with the necessary actions now "
-    "(read more, edit, run tests, document) — do not stop after gathering "
-    "information or conclude with a summary while work remains. If the task is "
-    "truly and fully complete, reply with your final answer now. In either "
-    "case, do not repeat, restate or re-list what you have already reported in "
-    "your previous message — add only what is new.]"
+    "[Task check: if there is genuinely more work to do on the request, do it "
+    "now. If the task is complete, reply with your final answer now and stop — "
+    "do not re-read, re-check, or re-verify work you have already finished, and "
+    "do not call more tools just to confirm what you already know. Do not "
+    "repeat, restate or re-list what you have already reported; add only what "
+    "is new.]"
 )
 
-# Follow-up nudges for a model that keeps stopping after using tools: firmer,
-# and no escape hatch, so it cannot answer its way out prematurely.
+# Follow-up nudge for a model that went back to work and stopped again. Firmer
+# about either finishing or stopping, but still no license to re-verify: the
+# failure this follows is a model re-opening finished work, so the instruction
+# is to complete the remaining work or stop, never to re-check.
 CONTINUATION_NUDGE_FIRM = (
-    "[You have used more tools and stopped again without finishing. Continue "
-    "completing the task now — do not conclude with a summary while work "
-    "remains. Proceed with the required actions, or give your final answer only "
-    "if the task is genuinely complete. Do not repeat or restate your previous "
-    "message; state only what you have done since.]"
+    "[You went back to work and stopped again. Either finish the remaining work "
+    "now, or — if the task is complete — reply with your final answer and stop. "
+    "Do not re-check or re-verify work that is already done, and do not repeat "
+    "or restate your previous message; state only what is new.]"
 )
 
 # Injected (as a user turn) when the agent reaches its per-agent step budget.
@@ -1841,10 +1846,11 @@ class Agent:
             # so nudge it to keep going when work remains while still offering an
             # escape hatch for legitimate research-only questions. Decide as
             # follows:
-            #  - First stop -> gentle nudge with an escape hatch.
+            #  - First stop -> gentle nudge: continue only if work remains, and
+            #    stop cleanly if it does not.
             #  - Model gives a final answer without further tools -> respect it.
-            #  - Model works more then stops again -> firmer nudge, no escape
-            #    hatch, so it cannot answer its way out.
+            #  - Model works more then stops again -> one firmer nudge that
+            #    still accepts completion.
             #  - Nudge budget spent -> flag the task incomplete rather than
             #    falsely marking it complete.
             # On the final allowed step tools are disabled, so any text-only

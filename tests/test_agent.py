@@ -7,6 +7,7 @@ import pytest
 from codeassist.agent import (
     CONFIRM_TOOLS,
     CONTINUATION_NUDGE,
+    CONTINUATION_NUDGE_FIRM,
     MAX_CONTINUATION_NUDGES,
     SESSION_TRUST,
     Agent,
@@ -702,6 +703,35 @@ class TestAgentPlaceholderCleanup:
         mock_session.update_message.assert_not_awaited()
 
 
+class TestSteeringContract:
+    """Continuation steering must let a finished task stop cleanly and must not
+    invite the model to re-check work it has already done. A large nudge budget
+    plus wording that forbids concluding is what produced the re-check loop."""
+
+    def test_nudge_budget_is_small(self):
+        # Bounds the re-check loop; a recovery of one or two nudges is enough.
+        assert MAX_CONTINUATION_NUDGES == 2
+
+    def test_first_nudge_allows_stopping_and_forbids_rechecking(self):
+        text = CONTINUATION_NUDGE.lower()
+        assert "stop" in text
+        assert "re-check" in text
+        assert "re-read" in text or "re-verify" in text
+
+    def test_firm_nudge_allows_stopping_and_forbids_rechecking(self):
+        text = CONTINUATION_NUDGE_FIRM.lower()
+        assert "stop" in text
+        assert "re-check" in text or "re-verify" in text
+
+    def test_base_prompt_tells_model_to_stop_and_not_recheck(self, tmp_path):
+        from codeassist.prompts import build_system_prompt
+
+        prompt = build_system_prompt(tmp_path, "test-model").lower()
+        assert "re-check" in prompt or "recheck" in prompt
+        assert "re-verify" in prompt or "re-verif" in prompt
+        assert "when the task is complete" in prompt
+
+
 class TestAgentContinuationNudge:
     """The loop must not mark a turn complete when the model stops after using
     tools but before the task is actually done. It should nudge the model to
@@ -844,9 +874,10 @@ class TestAgentContinuationNudge:
             async for event in agent.run("implement X"):
                 events.append(event)
 
-            # research/summary x6 = 12 stream calls; the last summary exhausts the
-            # 5-nudge budget and emits "incomplete" instead of finishing.
-            assert calls["n"] == 12
+            # research/summary x(MAX+1) = one more summary than the budget; the
+            # last summary exhausts the nudge budget and emits "incomplete"
+            # instead of finishing.
+            assert calls["n"] == (MAX_CONTINUATION_NUDGES + 1) * 2
             assert agent._continuation_nudges == MAX_CONTINUATION_NUDGES
             assert agent._run_used_tools is True
             types = [e.type for e in events]
