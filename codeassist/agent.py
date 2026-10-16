@@ -1546,8 +1546,6 @@ class Agent:
                     yield _loop_event(looping)
                     break
 
-                self._run_used_tools = True
-                self._since_nudge_tools = True
                 tc_dicts = [
                     {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                     for tc in tool_calls
@@ -1671,6 +1669,12 @@ class Agent:
                         [tc for tc in tool_calls if tc.id in unanswered]
                     ))
                     raise
+
+                # Only flag tool usage after confirmation: a step where every
+                # tool was denied must not trigger the continuation nudge.
+                if confirmed_tool_calls:
+                    self._run_used_tools = True
+                    self._since_nudge_tools = True
 
                 if self.cancel_event.is_set():
                     # Stop landed between calls. Everything still unanswered —

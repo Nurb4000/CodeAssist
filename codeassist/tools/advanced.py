@@ -183,11 +183,18 @@ class WebSearchTool(Tool):
 
             if not results:
                 # Fallback: try extracting from SERP snippet
-                for match in re.finditer(
-                    r'class="result__snippet"[^>]*>([^<]+)',
-                    resp.text,
-                ):
-                    pass
+                snippets = [
+                    match.group(1).strip()
+                    for match in re.finditer(
+                        r'class="result__snippet"[^>]*>([^<]+)',
+                        resp.text,
+                    )
+                ]
+                if snippets:
+                    output_lines = [f"**Search Results for: {query}**\n"]
+                    for i, snippet in enumerate(snippets[:num_results], 1):
+                        output_lines.append(f"{i}. {snippet}")
+                    return ToolResult(output="\n\n".join(output_lines))
                 return ToolResult(
                     output=f"Web search for '{query}'\n\nNo structured results found. "
                            f"The duckduckgo_search package provides better results.\n"

@@ -447,9 +447,9 @@ async function viewEntry(id) {
         const content = document.getElementById('view-entry-content');
         content.innerHTML = `
             <p><strong>Type:</strong> <span class="type-badge ${entry.entry_type}">${entry.entry_type}</span></p>
-            <p><strong>Scope:</strong> ${entry.scope}</p>
+            <p><strong>Scope:</strong> ${escapeHtml(entry.scope)}</p>
             <p><strong>Confidence:</strong> ${(entry.confidence || 0).toFixed(2)}</p>
-            <p><strong>Tags:</strong> ${entry.tags || 'None'}</p>
+            <p><strong>Tags:</strong> ${escapeHtml(entry.tags || 'None')}</p>
             <p><strong>Content:</strong></p>
             <pre>${escapeHtml(entry.content || '')}</pre>
             <p><strong>Created:</strong> ${formatDate(entry.created_at)}</p>

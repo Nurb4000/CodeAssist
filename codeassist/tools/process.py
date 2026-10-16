@@ -83,8 +83,9 @@ class ProcessTool(Tool):
         if env:
             proc_env = {**__import__('os').environ, **env}
 
+        import shlex
         proc = await asyncio.create_subprocess_exec(
-            *command.split(),
+            *shlex.split(command),
             cwd=str(proc_cwd),
             env=proc_env,
             stdout=asyncio.subprocess.PIPE,
