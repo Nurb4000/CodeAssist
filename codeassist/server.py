@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -401,12 +401,30 @@ from .routes import register_routes
 register_routes(app)
 
 
+def _basic_auth_ok(request, password: str) -> bool:
+    """Return True if the request carries a valid HTTP Basic Auth password.
+
+    Empty password means authentication is disabled (caller decides).
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+        _, _, pw = decoded.partition(":")
+        return hmac.compare_digest(pw, password)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @app.middleware("http")
 async def auth_middleware(request, call_next):
-    # Paths exempt from HTTP Basic Auth (WebSocket auth is handled separately
-    # in the WS endpoint via sec-websocket-protocol header)
+    # Paths exempt from HTTP Basic Auth.
+    # NOTE: websocket routes never reach this middleware (BaseHTTPMiddleware
+    # only wraps HTTP), so there is no need to exempt "/ws/". Exempting that
+    # prefix would silently unauthenticate any future REST route under it.
     _EXEMPT_PATHS = {"/health", "/favicon.ico"}
-    _EXEMPT_PREFIXES = ("/static/", "/ws/")
+    _EXEMPT_PREFIXES = ("/static/",)
 
     path = request.url.path
     if path in _EXEMPT_PATHS or any(path.startswith(p) for p in _EXEMPT_PREFIXES):
@@ -417,15 +435,8 @@ async def auth_middleware(request, call_next):
     if not password:
         return await call_next(request)
 
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
-        try:
-            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-            _, _, pw = decoded.partition(":")
-            if hmac.compare_digest(pw, password):
-                return await call_next(request)
-        except Exception:  # noqa: BLE001, S110
-            pass
+    if _basic_auth_ok(request, password):
+        return await call_next(request)
 
     return JSONResponse(
         status_code=401,
@@ -435,14 +446,18 @@ async def auth_middleware(request, call_next):
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint. Returns server status, model, and workspace path."""
+async def health_check(request: Request):
+    """Health check endpoint.
+
+    When a server password is configured, only expose the model and workspace
+    to authenticated callers; the status line alone is safe to serve openly.
+    """
     cfg = get_config()
-    return {
-        "status": "ok",
-        "model": cfg.llm.model,
-        "workspace": str(cfg.workspace),
-    }
+    result = {"status": "ok"}
+    if not cfg.server.password or _basic_auth_ok(request, cfg.server.password):
+        result["model"] = cfg.llm.model
+        result["workspace"] = str(cfg.workspace)
+    return result
 
 
 @app.get("/", response_class=HTMLResponse)

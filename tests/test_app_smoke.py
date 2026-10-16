@@ -51,6 +51,46 @@ def test_health(live_client):
     assert r.json()["status"] == "ok"
 
 
+def test_auth_middleware_and_health(live_client):
+    """When a server password is set, /health hides model+workspace from
+    unauthenticated callers, /api/* requires Basic Auth, and the /ws/ prefix
+    is not blanket-exempt from HTTP auth."""
+    import base64
+
+    from codeassist import server
+
+    cfg = server.get_config()
+
+    # No password configured: health exposes metadata and /api/* is open.
+    body = live_client.get("/health").json()
+    assert body["status"] == "ok"
+    assert "model" in body and "workspace" in body
+    assert live_client.get("/api/config").status_code == 200
+
+    cfg.server.password = "s3cret"
+    try:
+        # /health stays reachable but hides metadata when unauthenticated.
+        assert live_client.get("/health").json() == {"status": "ok"}
+
+        # /api/* now requires auth.
+        assert live_client.get("/api/config").status_code == 401
+
+        # Correct Basic auth passes.
+        token = base64.b64encode(b":s3cret").decode()
+        hdr = {"Authorization": f"Basic {token}"}
+        assert live_client.get("/api/config", headers=hdr).status_code == 200
+
+        # /health exposes metadata once authenticated.
+        body = live_client.get("/health", headers=hdr).json()
+        assert "model" in body and "workspace" in body
+
+        # The /ws/ prefix must NOT be blanket-exempt: an HTTP request under it
+        # is still subject to auth (401), not passed through to routing.
+        assert live_client.get("/ws/nonexistent").status_code == 401
+    finally:
+        cfg.server.password = ""
+
+
 def test_api_status_shape(live_client):
     r = live_client.get("/api/status")
     assert r.status_code == 200
