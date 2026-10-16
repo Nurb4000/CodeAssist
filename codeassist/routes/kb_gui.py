@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/kb", tags=["kb_gui"])
 @router.get("/stats")
 async def kb_stats():
     """Get knowledge base statistics (entry counts, session counts, quality scores)."""
-    from codeassist.knowledge import KnowledgeBase
+    from codeassist.knowledge import KnowledgeBase, fts_health
     from codeassist.session import get_db
 
     entry_types = ["pattern", "convention", "decision", "bug_fix", "optimization",
@@ -73,6 +73,11 @@ async def kb_stats():
     stats["entries_flagged"] = status_counts.get("flagged", 0)
     stats["entries_archived"] = status_counts.get("archived", 0)
     stats["orphan_entries"] = await KnowledgeBase.orphan_entry_count()
+
+    # FTS5 search health (G-info): a broken FTS5 extension silently degrades
+    # every search to a full table scan, so surface that it happened rather than
+    # leaving it only in the log.
+    stats["fts"] = fts_health()
 
     # Frequently-used active entries (F2): candidates for promotion, computed
     # read-only so hitting /stats never archives anything.

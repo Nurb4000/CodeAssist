@@ -62,6 +62,42 @@ def _strip_embeddings(rows: list[dict]) -> list[dict]:
     return cleaned
 
 
+# FTS5 health, surfaced so a permanently broken FTS5 extension (which silently
+# degrades every search to a full table scan) is visible to callers instead of
+# only a per-query log line. "untested" until the first search actually runs.
+_FTS_HEALTH: dict = {
+    "status": "untested",  # "untested" | "ok" | "degraded"
+    "last_error": None,
+    "consecutive_failures": 0,
+}
+
+
+def fts_health() -> dict:
+    """Snapshot of FTS5 search health, for surfacing in status/health output."""
+    return dict(_FTS_HEALTH)
+
+
+def _note_fts_ok() -> None:
+    if _FTS_HEALTH["status"] == "degraded":
+        log.info("FTS5 search recovered")
+    _FTS_HEALTH["status"] = "ok"
+    _FTS_HEALTH["last_error"] = None
+    _FTS_HEALTH["consecutive_failures"] = 0
+
+
+def _note_fts_error(exc: BaseException) -> None:
+    was_degraded = _FTS_HEALTH["status"] == "degraded"
+    _FTS_HEALTH["status"] = "degraded"
+    _FTS_HEALTH["last_error"] = f"{type(exc).__name__}: {exc}"
+    _FTS_HEALTH["consecutive_failures"] += 1
+    # Warn on the transition into degradation, then drop to debug so a
+    # permanently broken FTS doesn't spam the log on every search.
+    if was_degraded:
+        log.debug("FTS5 search still failing, falling back to LIKE search: %s", exc)
+    else:
+        log.warning("FTS5 search failed, falling back to LIKE search: %s", exc)
+
+
 class KnowledgeBase:
     """Manages knowledge base operations for CodeAssist."""
 
@@ -641,9 +677,10 @@ class KnowledgeBase:
                         (query, status, limit),
                     )
                 rows = await cursor.fetchall()
+                _note_fts_ok()
                 return _strip_embeddings([dict(r) for r in rows])
         except Exception as e:  # noqa: BLE001
-            log.warning("FTS5 search failed, falling back to LIKE search: %s", e)
+            _note_fts_error(e)
             # Fallback to LIKE search
             return await KnowledgeBase.search_knowledge(
                 entry_type=entry_type,

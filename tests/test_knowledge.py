@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import codeassist.knowledge as knowledge_mod
 from codeassist.knowledge import KnowledgeBase
 from codeassist.session import Session, get_db, init_db
 
@@ -1201,3 +1202,59 @@ class TestTriageListing:
         ids = {e["id"] for e in orphans}
         assert orphan_id in ids
         assert len(orphans) == 1
+
+
+class TestFtsHealth:
+    """A broken FTS5 extension silently degrades every search to a table scan;
+    that must be surfaced as a health indicator, not only logged."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_fts_health(self):
+        _reset = {"status": "untested", "last_error": None, "consecutive_failures": 0}
+        knowledge_mod._FTS_HEALTH.update(_reset)
+        yield
+        knowledge_mod._FTS_HEALTH.update(_reset)
+
+    @pytest.mark.asyncio
+    async def test_successful_search_marks_fts_ok(self):
+        await init_db()
+        await KnowledgeBase.fulltext_search_knowledge("anything")
+        health = knowledge_mod.fts_health()
+        assert health["status"] == "ok"
+        assert health["last_error"] is None
+        assert health["consecutive_failures"] == 0
+
+    @pytest.mark.asyncio
+    async def test_failed_search_marks_fts_degraded_and_falls_back(self, monkeypatch):
+        await init_db()
+
+        async def boom(db):
+            raise RuntimeError("no such module: fts5")
+
+        monkeypatch.setattr(knowledge_mod, "_ensure_fts_populated", boom)
+        results = await KnowledgeBase.fulltext_search_knowledge("query")
+        # The caller still gets an answer via the LIKE fallback...
+        assert isinstance(results, list)
+        # ...and the degradation is recorded, not just logged.
+        health = knowledge_mod.fts_health()
+        assert health["status"] == "degraded"
+        assert "fts5" in health["last_error"]
+        assert health["consecutive_failures"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fts_recovers_after_a_successful_search(self, monkeypatch):
+        await init_db()
+
+        async def boom(db):
+            raise RuntimeError("transient failure")
+
+        monkeypatch.setattr(knowledge_mod, "_ensure_fts_populated", boom)
+        await KnowledgeBase.fulltext_search_knowledge("q")
+        assert knowledge_mod.fts_health()["status"] == "degraded"
+
+        # Once the underlying FTS works again the indicator flips back to ok.
+        monkeypatch.undo()
+        await KnowledgeBase.fulltext_search_knowledge("q")
+        health = knowledge_mod.fts_health()
+        assert health["status"] == "ok"
+        assert health["consecutive_failures"] == 0
