@@ -10,6 +10,7 @@ from codeassist.agent import (
     MAX_CONTINUATION_NUDGES,
     SESSION_TRUST,
     Agent,
+    _classify_shell_risk,
     _loop_event,
     _LoopDetector,
     _restates,
@@ -85,6 +86,67 @@ def agent(mock_config, mock_session, mock_tools):
         agent = Agent(mock_config, mock_session, mock_tools, system_prompt="Test prompt")
         agent.llm = mock_llm
         return agent
+
+
+class TestClassifyShellRisk:
+    """_classify_shell_risk must inspect every pipeline/chain segment, not
+    just the first, to prevent readonly auto-approval bypasses."""
+
+    def test_simple_readonly(self):
+        assert _classify_shell_risk("ls -la") == "readonly"
+        assert _classify_shell_risk("cat /etc/passwd") == "readonly"
+        assert _classify_shell_risk("git status") == "readonly"
+        assert _classify_shell_risk("git log --oneline -5") == "readonly"
+        assert _classify_shell_risk("grep -r foo .") == "readonly"
+
+    def test_simple_destructive(self):
+        assert _classify_shell_risk("rm -rf /tmp/x") == "destructive"
+        assert _classify_shell_risk("chmod 777 file") == "destructive"
+        assert _classify_shell_risk("mv a b") == "destructive"
+        assert _classify_shell_risk("dd if=/dev/zero of=/dev/sda") == "destructive"
+
+    def test_unknown(self):
+        assert _classify_shell_risk("python script.py") == "unknown"
+        assert _classify_shell_risk("npm install") == "unknown"
+
+    def test_and_chain_with_destructive_tail(self):
+        """`ls && rm -rf /` must be destructive, not readonly."""
+        assert _classify_shell_risk("ls && rm -rf /") == "destructive"
+        assert _classify_shell_risk("cat file && chmod 777 file") == "destructive"
+        assert _classify_shell_risk("echo hi; rm -rf /") == "destructive"
+
+    def test_and_chain_with_all_readonly(self):
+        """All-readonly chains stay readonly."""
+        assert _classify_shell_risk("ls | wc -l") == "readonly"
+        assert _classify_shell_risk("cat file | grep foo | head -20") == "readonly"
+        assert _classify_shell_risk("git status && git log --oneline") == "readonly"
+
+    def test_and_chain_with_unknown_tail(self):
+        """An unknown segment makes the whole command unknown."""
+        assert _classify_shell_risk("ls && python script.py") == "unknown"
+        assert _classify_shell_risk("echo hi | xargs rm") == "unknown"
+
+    def test_find_exec_is_unknown(self):
+        """find -exec can run arbitrary commands."""
+        assert _classify_shell_risk("find . -exec rm {} \\;") == "unknown"
+        assert _classify_shell_risk("find . -execdir ls {} \\;") == "unknown"
+
+    def test_pipe_with_destructive_tail(self):
+        assert _classify_shell_risk("cat file | tee /etc/passwd") == "unknown"
+        # tee is not in the destructive patterns but the tail isn't readonly
+
+    def test_multiword_readonly(self):
+        assert _classify_shell_risk("pip list") == "readonly"
+        assert _classify_shell_risk("git diff --cached") == "readonly"
+        assert _classify_shell_risk("git blame file.py") == "readonly"
+
+    def test_semicolon_chain(self):
+        assert _classify_shell_risk("ls; rm -rf /") == "destructive"
+        assert _classify_shell_risk("ls; cat file") == "readonly"
+
+    def test_empty_and_whitespace(self):
+        assert _classify_shell_risk("") == "unknown"
+        assert _classify_shell_risk("   ") == "unknown"
 
 
 class TestAgentInit:

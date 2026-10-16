@@ -78,29 +78,47 @@ def _classify_shell_risk(command: str) -> str:
     Returns 'readonly', 'destructive', or 'unknown'.
     Read-only commands auto-approve; destructive and unknown require confirmation.
     """
-    # Extract the base command (first word, stripping leading whitespace/pipes)
-    cmd = command.strip().split("|")[0].split(";")[0].split("&")[0].strip()
-    base = cmd.split()[0] if cmd else ""
+    import re as _re
 
-    # Check for destructive patterns first (they take precedence)
-    for pattern in _DESTRUCTIVE_SHELL_PATTERNS:
-        if cmd.startswith(pattern):
-            return "destructive"
+    # Split on all common shell operators so every segment is inspected,
+    # not just the first. Without this, `ls && rm -rf /` classified as
+    # readonly because only `ls` was examined.
+    segments = [
+        s.strip()
+        for s in _re.split(r"\||;|&&|&|\n", command)
+        if s.strip()
+    ]
+    if not segments:
+        return "unknown"
 
-    # Check exact match against read-only commands
-    if base in _READONLY_SHELL_COMMANDS or cmd in _READONLY_SHELL_COMMANDS:
-        return "readonly"
+    # Check every segment for destructive patterns (they take precedence)
+    for seg in segments:
+        for pattern in _DESTRUCTIVE_SHELL_PATTERNS:
+            if seg.startswith(pattern):
+                return "destructive"
 
-    # Git subcommands that are read-only
-    if base == "git":
-        subcmd = cmd.split()[1] if len(cmd.split()) > 1 else ""
-        readonly_git = {"diff", "status", "log", "show", "branch", "tag",
-                        "describe", "rev-parse", "ls-files", "ls-tree",
-                        "blame", "shortlog", "whatchanged"}
-        if subcmd in readonly_git:
-            return "readonly"
+    # `find -exec` / `find -execdir` can run arbitrary commands
+    first_base = segments[0].split()[0] if segments[0].split() else ""
+    if first_base == "find" and ("-exec" in command or "-execdir" in command):
+        return "unknown"
 
-    return "unknown"
+    # All segments must be read-only for the whole command to be read-only
+    for seg in segments:
+        seg_parts = seg.split()
+        seg_base = seg_parts[0] if seg_parts else ""
+        if seg_base in _READONLY_SHELL_COMMANDS or seg in _READONLY_SHELL_COMMANDS:
+            continue
+        # Git subcommands that are read-only
+        if seg_base == "git":
+            subcmd = seg_parts[1] if len(seg_parts) > 1 else ""
+            readonly_git = {"diff", "status", "log", "show", "branch", "tag",
+                            "describe", "rev-parse", "ls-files", "ls-tree",
+                            "blame", "shortlog", "whatchanged"}
+            if subcmd in readonly_git:
+                continue
+        return "unknown"
+
+    return "readonly"
 
 
 # Session-scoped trust flags, keyed by session id. "Trust for this session"
