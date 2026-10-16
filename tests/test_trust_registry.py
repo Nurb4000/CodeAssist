@@ -3,6 +3,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from codeassist.trust_registry import TrustRegistry, TrustRequest, TrustStatus
 
 
@@ -258,3 +260,60 @@ class TestTrustRegistry:
         assert d["hash"] == "abc123"
         assert d["file_type"] == "tool"
         assert "timestamp" in d
+
+
+class TestServerTrustCallback:
+    """The server's trust-approval callback must be synchronous (TrustRegistry
+    calls it without awaiting) and actually broadcast, and must be registered
+    once per registry rather than re-set on every WebSocket connect."""
+
+    @pytest.mark.asyncio
+    async def test_callback_broadcasts_approval_request(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from codeassist import server
+
+        sent = []
+
+        async def fake_broadcast(message):
+            sent.append(message)
+
+        monkeypatch.setattr(server, "broadcast_message", fake_broadcast)
+
+        registry = TrustRegistry(registry_path=tmp_path / "registry.json")
+        server._register_trust_callback(registry)
+
+        # A synchronous callback: TrustRegistry.check_trust calls it directly.
+        import inspect
+        assert not inspect.iscoroutinefunction(registry._approval_callback)
+
+        target = tmp_path / "tool.py"
+        target.write_text("print('hi')")
+        assert registry.check_trust(target, file_type="custom_tool") == TrustStatus.PENDING_APPROVAL
+
+        # The scheduled broadcast actually runs (this is the regression: the old
+        # async callback's coroutine was dropped and never awaited).
+        await asyncio.sleep(0.05)
+        assert len(sent) == 1
+        assert sent[0]["type"] == "trust_approval_required"
+        assert sent[0]["file_path"] == str(target.resolve())
+
+    @pytest.mark.asyncio
+    async def test_approved_flag_suppresses_broadcast(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from codeassist import server
+
+        sent = []
+
+        async def fake_broadcast(message):
+            sent.append(message)
+
+        monkeypatch.setattr(server, "broadcast_message", fake_broadcast)
+
+        registry = TrustRegistry(registry_path=tmp_path / "registry.json")
+        server._register_trust_callback(registry)
+
+        registry._approval_callback(None, True)
+        await asyncio.sleep(0.05)
+        assert sent == []

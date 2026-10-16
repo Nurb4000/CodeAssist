@@ -119,6 +119,35 @@ def unregister_websocket(ws: WebSocket):
     _active_websockets.discard(ws)
 
 
+def _register_trust_callback(registry: TrustRegistry) -> None:
+    """Wire trust-approval broadcasts onto ``registry`` exactly once.
+
+    ``TrustRegistry`` invokes the callback synchronously, so it must be a plain
+    function; it schedules the async broadcast on the running loop. Registering
+    this inside the WebSocket handler used to (a) overwrite the callback on
+    every connect and (b) register an ``async def`` callback that was called
+    without ``await`` — the coroutine was dropped, so the approval broadcast
+    never ran at all.
+    """
+    loop = asyncio.get_running_loop()
+
+    def on_trust_request(request, approved):
+        if approved:
+            return
+        message = {"type": "trust_approval_required", **request.to_dict()}
+
+        async def _broadcast():
+            await broadcast_message(message)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_broadcast(), loop)
+        except RuntimeError:
+            # Loop already closed (shutdown in progress) — nothing to notify.
+            pass
+
+    registry.set_approval_callback(on_trust_request)
+
+
 # Subsystems are initialized lazily in the lifespan using the resolved config
 mcp_client: MCPClient | None = None
 skill_registry: SkillRegistry | None = None
@@ -241,6 +270,7 @@ async def _init_subsystems(cfg: Config):
 
     # Initialize trust registry for secure tool/plugin loading
     trust_registry = TrustRegistry()
+    _register_trust_callback(trust_registry)
     
     mcp_client = MCPClient() if cfg.mcp.enabled else None
     skill_registry = SkillRegistry(cfg.workspace, cfg.skills) if cfg.skills.enabled else None
@@ -563,17 +593,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     await websocket.accept()
     register_websocket(websocket)
-    
-    # Set up trust registry callback to broadcast approval requests
-    if trust_registry:
-        async def on_trust_request(request, approved):
-            if not approved:
-                await broadcast_message({
-                    "type": "trust_approval_required",
-                    **request.to_dict(),
-                })
-        
-        trust_registry.set_approval_callback(on_trust_request)
 
     # Authenticate WebSocket connections via header only (never query params for security)
     password = cfg.server.password
