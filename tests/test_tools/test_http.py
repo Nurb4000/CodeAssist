@@ -37,3 +37,43 @@ class TestHTTPTool:
         # This should fail because url is missing
         with pytest.raises(TypeError):
             await http_tool.execute(method="GET")
+
+    def test_shared_client_follows_redirects(self):
+        """The HTTP tool relies on the shared client, which follows redirects."""
+        from codeassist.tools.webfetch import _get_fetch_client
+
+        assert _get_fetch_client().follow_redirects is True
+
+    @pytest.mark.asyncio
+    async def test_redirects_are_followed(self, http_tool, monkeypatch):
+        """A redirect response is followed and the final body returned."""
+        import httpx
+
+        from codeassist.tools import http as http_module
+        from codeassist.tools import webfetch
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/start":
+                return httpx.Response(
+                    302, headers={"location": "https://example.com/end"}
+                )
+            return httpx.Response(
+                200, headers={"content-type": "text/plain"}, text="arrived"
+            )
+
+        monkeypatch.setattr(http_module, "validate_url", lambda url: True)
+        old_client = webfetch._fetch_client
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=True
+        )
+        webfetch._fetch_client = client
+        try:
+            result = await http_tool.execute(
+                method="GET", url="https://example.com/start"
+            )
+        finally:
+            webfetch._fetch_client = old_client
+            await client.aclose()
+
+        assert result.error is False
+        assert "arrived" in result.output

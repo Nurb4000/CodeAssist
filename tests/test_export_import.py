@@ -206,6 +206,15 @@ def test_export_base_tools_captures_package_source():
     assert "class ReadTool" in read_src
 
 
+def test_export_base_tools_excludes_self_generating_modules():
+    from codeassist.tools import export_base_tools
+
+    files = {b["file"] for b in export_base_tools()["data"]["base_tools"]}
+    # Modules that can write arbitrary code must not ship in a portable bundle.
+    assert "create_tool.py" not in files
+    assert "create_skill.py" not in files
+
+
 # --------------------------------------------------------------------------- #
 # REST routes                                                                 #
 # --------------------------------------------------------------------------- #

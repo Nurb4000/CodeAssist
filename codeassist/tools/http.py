@@ -92,9 +92,13 @@ class HTTPTool(Tool):
             elif json_data:
                 kwargs["json"] = json_data
 
-            # Make request
-            async with httpx.AsyncClient() as client:
-                response = await client.request(method, url, **kwargs)
+            # Make request via the shared client so redirects are followed with
+            # SSRF re-validation on every hop, and connection pooling is reused
+            # instead of building a throwaway client per call.
+            from .webfetch import _get_fetch_client
+
+            client = _get_fetch_client()
+            response = await client.request(method, url, **kwargs)
 
             # Format response
             output = self._format_response(response)

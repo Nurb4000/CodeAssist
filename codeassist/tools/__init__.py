@@ -377,8 +377,14 @@ def export_base_tools() -> dict:
         "exported_at": datetime.now(UTC).isoformat(),
         "data": {"base_tools": []},
     }
+    # Self-generating tools are excluded: they can write arbitrary code, so
+    # shipping their sources in a portable snapshot invites an importer to
+    # re-enter the trust flow with a module that can run anything.
+    excluded = {"create_tool.py", "create_skill.py"}
     for py in sorted(Path(__file__).parent.glob("*.py")):
         if py.name.startswith("_") or py.name == "__init__.py":
+            continue
+        if py.name in excluded:
             continue
         payload["data"]["base_tools"].append({
             "file": py.name,

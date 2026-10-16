@@ -137,7 +137,7 @@ async def model_status():
     """Check LLM model availability and return status information.
 
     Sends a lightweight test request to the configured LLM backend and returns
-    the response time, model name, and any rate limit headers present.
+    the response time, model name, and context window.
     """
     from ..config import get_config
     from ..llm import LLMClient
@@ -152,27 +152,20 @@ async def model_status():
         "context_window": cfg.llm.context_window,
         "available": False,
         "response_time_ms": None,
-        "rate_limit_remaining": None,
         "error": None,
     }
 
     import time
     start = time.monotonic()
     try:
-        events = []
-        async for event in llm.stream([{"role": "user", "content": "."}]):
-            events.append(event)
+        # The test request is only used to prove the backend answers; no event
+        # carries rate-limit state, so the stream is drained and discarded.
+        async for _ in llm.stream([{"role": "user", "content": "."}]):
+            pass
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         result["available"] = True
         result["response_time_ms"] = elapsed_ms
-
-        # Extract rate limit info from any finish event
-        for ev in events:
-            if hasattr(ev, "rate_limit_remaining") and ev.rate_limit_remaining is not None:
-                result["rate_limit_remaining"] = ev.rate_limit_remaining
-                break
-
     except Exception as e:
         result["error"] = f"{type(e).__name__}: {e}"
 
