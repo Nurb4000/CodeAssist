@@ -118,7 +118,7 @@ class WebSearchTool(Tool):
                     text = text[:max_per_result] + "\n\n...(truncated)..."
 
                 deep_results.append(f"## {url}\n\n{text}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — any fetch failure is per-URL, keep going
                 deep_results.append(f"## {url}\n\n_Fetch error: {e}_")
 
         return ToolResult(

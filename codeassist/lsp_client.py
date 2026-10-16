@@ -612,7 +612,7 @@ class LSPTool(Tool):
         self.lsp_client = lsp_client
 
     # Dispatch table maps action names to handler methods.
-    _HANDLERS = {
+    _HANDLERS = {  # noqa: RUF012
         "workspace_symbols": "_handle_workspace_symbols",
         "diagnostics": "_handle_diagnostics",
         "format": "_handle_format",

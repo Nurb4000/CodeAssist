@@ -166,7 +166,7 @@ async def model_status():
         elapsed_ms = int((time.monotonic() - start) * 1000)
         result["available"] = True
         result["response_time_ms"] = elapsed_ms
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — report any probe failure as unavailable
         result["error"] = f"{type(e).__name__}: {e}"
 
     return result
