@@ -8,6 +8,11 @@ from . import Tool, ToolResult
 
 log = logging.getLogger(__name__)
 
+# Actions that read files from the workspace (Dockerfile / compose file) and so
+# need it to exist. The container-by-name actions (run/stop/remove/list/logs/ps)
+# operate purely on Docker and must keep working even if the workspace is gone.
+_WORKSPACE_ACTIONS = frozenset({"build", "compose_up", "compose_down"})
+
 
 class DockerTool(Tool):
     name = "docker"
@@ -59,6 +64,14 @@ class DockerTool(Tool):
                     return ToolResult(output="Error: Docker is not running or not installed", error=True)
             except (TimeoutError, FileNotFoundError):
                 return ToolResult(output="Error: Docker is not installed or not in PATH", error=True)
+
+            # A deleted workspace used to surface as a misleading "No Dockerfile
+            # found"; report the real cause for the actions that need it.
+            if action in _WORKSPACE_ACTIONS and not workspace.is_dir():
+                return ToolResult(
+                    output=f"Error: workspace directory does not exist: {workspace}",
+                    error=True,
+                )
 
             if action == "build":
                 if not (workspace / "Dockerfile").exists():
