@@ -8,6 +8,24 @@ from . import Tool, ToolResult, live_config
 
 log = logging.getLogger(__name__)
 
+# Base64-encode in chunks (a multiple of 3 bytes so each chunk encodes without
+# padding) rather than reading the whole file and encoding it at once: the
+# one-shot form held the raw bytes and the base64 bytes in memory together, so
+# a large image transiently cost several times its own size.
+_B64_CHUNK_SIZE = 3 * 1024 * 1024
+
+
+def _encode_image_base64(path: Path, chunk_size: int = _B64_CHUNK_SIZE) -> str:
+    """Stream a file to a base64 string, one chunk at a time."""
+    parts: list[str] = []
+    with path.open("rb") as f:
+        while True:
+            block = f.read(chunk_size)
+            if not block:
+                break
+            parts.append(base64.b64encode(block).decode("ascii"))
+    return "".join(parts)
+
 
 class ImageAnalyzeTool(Tool):
     name = "image_analyze"
@@ -57,7 +75,7 @@ class ImageAnalyzeTool(Tool):
                     error=True,
                 )
 
-            image_data = base64.b64encode(path.read_bytes()).decode("utf-8")
+            image_data = _encode_image_base64(path)
             prompt = question or "Describe this image in detail."
 
             mime_type = {
