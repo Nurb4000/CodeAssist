@@ -141,6 +141,16 @@ KNOWLEDGE_INDICATORS = {
 }
 
 
+# Tools that only read/traverse/list are not "transformative": a workflow made
+# up entirely of them is not a reusable skill, just navigation, and auto-creating
+# a skill for it produces junk like "auto-read-workflow" (read x3). A candidate
+# must include at least one transformative tool to be worth a skill.
+_READ_ONLY_TOOLS = frozenset({
+    "read", "grep", "glob", "directory", "todo",
+    "webfetch", "websearch", "image_analyze", "screenshot",
+})
+
+
 class SessionHook:
     """Handles post-session processing for knowledge base population."""
     
@@ -1010,6 +1020,12 @@ Provide a JSON response with:
             if not config.agent.auto_create_skills:
                 return
 
+            # Quality gate: skip degenerate/low-value sequences so we don't
+            # auto-generate junk skills such as "auto-read-workflow" (read x3).
+            if not self._is_skill_worthy(sequence):
+                log.debug("Skipping auto-skill creation for low-value sequence %s", sequence)
+                return
+
             # Count this session's auto-creations against the per-session cap.
             # source_session_id is a first-class column, so the cap does not
             # depend on parsing the free-form metadata blob.
@@ -1069,7 +1085,22 @@ This workflow is now available as a skill. The agent will use this pattern when 
             
         except Exception as e:  # noqa: BLE001
             log.warning("Failed to suggest skill creation: %s", e)
-    
+
+    @staticmethod
+    def _is_skill_worthy(sequence) -> bool:
+        """Return True if a detected tool sequence is worth auto-creating a skill for.
+
+        Rejects degenerate patterns such as the same tool repeated (read x3) or a
+        sequence made up only of read-only/navigation tools, which produce useless
+        ``auto-<tool>-workflow`` junk skills (e.g. ``auto-read-workflow``).
+        """
+        tools = list(sequence or [])
+        if len(tools) < 2:
+            return False
+        if len(set(tools)) < 2:
+            return False
+        return any(t not in _READ_ONLY_TOOLS for t in tools)
+
     @staticmethod
     def _has_substance(content: str) -> bool:
         """Return True if ``content`` is substantive enough to store durably.

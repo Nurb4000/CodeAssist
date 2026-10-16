@@ -293,7 +293,7 @@ CodeAssist can automatically create skills and tools when it detects repetitive 
 
 ```toml
 [agent]
-auto_create_skills = true      # Auto-create skills for repetitive workflows
+auto_create_skills = false      # Disabled by default (auto-created skills are often low-value)
 auto_create_tools = false      # Disabled by default (security)
 max_auto_creations = 3         # Per session limit
 min_confidence = 0.7           # Threshold for auto-creation

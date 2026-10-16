@@ -813,8 +813,30 @@ class TestAutoCreateSkill:
         monkeypatch.setattr(config_mod, "load_config",
                             lambda: self._config(tmp_path, max_auto_creations=3))
 
-        await session_hook._suggest_skill_creation(("grep", "read"), 4, "sess-new")
+        await session_hook._suggest_skill_creation(("grep", "edit"), 4, "sess-new")
 
         assert (tmp_path / "runtime" / "skills" / "auto-grep-workflow.md").exists()
+
+
+    @pytest.mark.asyncio
+    async def test_degenerate_sequences_are_not_created(self, session_hook, tmp_path, monkeypatch):
+        from codeassist import config as config_mod
+
+        await init_db()
+        monkeypatch.setattr(config_mod, "load_config",
+                            lambda: self._config(tmp_path, max_auto_creations=3))
+        # Same tool repeated (the junk that produced auto-read-workflow / auto-todo-workflow)
+        for i, seq in enumerate((("read", "read", "read"), ("todo", "todo"), ("read", "grep"))):
+            await session_hook._suggest_skill_creation(seq, 5, f"sess-degen-{i}")
+
+        assert not (tmp_path / "runtime" / "skills").exists()
+
+    @pytest.mark.asyncio
+    async def test_skill_worthy_helper(self):
+        assert SessionHook._is_skill_worthy(("read", "edit", "write")) is True
+        assert SessionHook._is_skill_worthy(("read", "read", "read")) is False
+        assert SessionHook._is_skill_worthy(("todo", "todo")) is False
+        assert SessionHook._is_skill_worthy(("read", "grep")) is False
+        assert SessionHook._is_skill_worthy(("read",)) is False
 
 

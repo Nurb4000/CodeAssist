@@ -58,7 +58,7 @@ default_agent = "default"
 
 # Auto-creation settings
 # CodeAssist can automatically create skills and tools when it detects repetitive patterns
-auto_create_skills = true      # Auto-create skills for repetitive workflows
+auto_create_skills = false      # Disabled by default (auto-created skills are often low-value; opt in)
 auto_create_tools = false      # Disabled by default (security concern)
 max_auto_creations = 3         # Max auto-creations per session
 min_confidence = 0.7           # Minimum confidence threshold for auto-creation

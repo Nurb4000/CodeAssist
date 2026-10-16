@@ -51,7 +51,7 @@ class AgentConfig:
     default_agent: str = "default"
     subagent_depth: int = 1  # Max nested subagent depth (0 = no subagents)
     # Auto-creation settings
-    auto_create_skills: bool = True
+    auto_create_skills: bool = False  # Disabled by default (low-quality auto-skills); opt in explicitly
     auto_create_tools: bool = False  # Disabled by default (security)
     max_auto_creations: int = 3  # Per session limit
     min_confidence: float = 0.7  # Threshold for auto-creation
