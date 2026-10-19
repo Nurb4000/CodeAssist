@@ -9,6 +9,22 @@ from codeassist.permissions import (
 )
 
 
+def _async_recorder(saved: SavedPermissions):
+    """Replace ``SavedPermissions.save`` with a spy that still updates the cache.
+
+    Keeps the in-memory cache consistent (so ``check_saved`` reflects the write)
+    while recording the exact ``(tool, pattern, action)`` tuple the manager
+    passed, without touching the database.
+    """
+
+    async def _save(tool_name: str, pattern: str, action: str) -> None:
+        saved.saved_calls.append((tool_name, pattern, action))
+        saved._cache[f"{tool_name}:{pattern}"] = action
+
+    saved.saved_calls = []
+    return _save
+
+
 class TestPermissionRule:
     def test_wildcard_matches_all(self):
         rule = PermissionRule(tool_name="read", action="allow", pattern="*")
@@ -93,10 +109,30 @@ class TestSavedPermissions:
         saved._cache["read:*"] = "allow"
         assert saved.check_saved("read", "/any/path.txt") == "allow"
 
-    def test_check_saved_filename(self):
+    def test_check_saved_exact_path(self):
         saved = SavedPermissions()
-        saved._cache["write:.env"] = "ask"
+        saved._cache["write:/path/to/.env"] = "ask"
         assert saved.check_saved("write", "/path/to/.env") == "ask"
+        # A different directory is a different file.
+        assert saved.check_saved("write", "/other/.env") is None
+
+    def test_check_saved_glob_pattern(self):
+        saved = SavedPermissions()
+        saved._cache["write:/secrets/*"] = "deny"
+        assert saved.check_saved("write", "/secrets/prod.env") == "deny"
+        assert saved.check_saved("write", "/public/prod.env") is None
+
+    def test_bare_filename_does_not_match_everywhere(self):
+        """Regression: remembering one file must not allow same-named files.
+
+        Grants used to be stored as ``Path(file_path).name`` and matched by
+        basename, so approving ``/secrets/prod.env`` silently allowed
+        ``/anywhere/prod.env``.
+        """
+        saved = SavedPermissions()
+        saved._cache["write:prod.env"] = "allow"
+        assert saved.check_saved("write", "/secrets/prod.env") is None
+        assert saved.check_saved("write", "/tmp/prod.env") is None
 
 
 class TestPermissionManager:
@@ -142,6 +178,103 @@ class TestPermissionManager:
         assert await pm.check_permission("write", ".env") == "deny"
         assert await pm.check_permission("write", "src/main.py") == "allow"
         assert await pm.check_permission("write", "other/file.txt") == "ask"
+
+    @pytest.mark.asyncio
+    async def test_saved_deny_is_authoritative(self):
+        """A saved "deny" (never ask again) must not fall through to ask/allow."""
+        pm = PermissionManager()
+        pm.saved._cache["write:*"] = "deny"
+        assert await pm.check_permission("write", "/any/file.txt") == "deny"
+
+    @pytest.mark.asyncio
+    async def test_saved_deny_beats_agent_allow(self):
+        pm = PermissionManager()
+        rs = PermissionRuleset()
+        rs.add_default("write", "allow")
+        pm.saved._cache["write:*"] = "deny"
+        assert await pm.check_permission("write", "a.py", rs) == "deny"
+
+    @pytest.mark.asyncio
+    async def test_saved_ask_beats_agent_allow(self):
+        """A user's explicit "ask" still prompts even if the agent allows it."""
+        pm = PermissionManager()
+        rs = PermissionRuleset()
+        rs.add_default("write", "allow")
+        pm.saved._cache["write:*"] = "ask"
+        assert await pm.check_permission("write", "a.py", rs) == "ask"
+
+    @pytest.mark.asyncio
+    async def test_save_permission_choice_stores_full_path(self):
+        """Remembering a file must key on the exact path, never the basename."""
+        pm = PermissionManager()
+        pm.saved.save = _async_recorder(pm.saved)
+        await pm.save_permission_choice("write", "/secrets/prod.env", "allow")
+        assert pm.saved.saved_calls == [("write", "/secrets/prod.env", "allow")]
+        # The grant applies to that path only.
+        assert pm.saved.check_saved("write", "/secrets/prod.env") == "allow"
+        assert pm.saved.check_saved("write", "/elsewhere/prod.env") is None
+
+    @pytest.mark.asyncio
+    async def test_save_permission_choice_pathless_is_wildcard(self):
+        pm = PermissionManager()
+        pm.saved.save = _async_recorder(pm.saved)
+        await pm.save_permission_choice("git", "", "allow")
+        assert pm.saved.saved_calls == [("git", "*", "allow")]
+        assert pm.saved.check_saved("git") == "allow"
+
+
+class TestSavedPermissionsPersistence:
+    """Saved preferences must survive a restart and be clearable.
+
+    Regression: ``PermissionManager.initialize()`` (the only caller of
+    ``SavedPermissions.load()``) was never invoked at startup, so grants written
+    with "remember" were invisible after a restart. ``clear()`` also awaited
+    ``get_db()`` directly (it is an async context manager), raising TypeError so
+    the DELETE never ran.
+    """
+
+    @pytest.mark.asyncio
+    async def test_save_then_load_round_trips(self):
+        from codeassist.session import init_db
+
+        await init_db()
+        writer = SavedPermissions()
+        await writer.save("write", "/secrets/prod.env", "deny")
+        await writer.save("read", "*", "allow")
+
+        # A fresh instance (== process restart) sees the same decisions.
+        reader = SavedPermissions()
+        await reader.load()
+        assert reader.check_saved("write", "/secrets/prod.env") == "deny"
+        assert reader.check_saved("read", "/any/where.py") == "allow"
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_persisted_rows(self):
+        from codeassist.session import init_db
+
+        await init_db()
+        saved = SavedPermissions()
+        await saved.save("write", "/secrets/prod.env", "deny")
+
+        await saved.clear()
+        assert saved._cache == {}
+
+        reloaded = SavedPermissions()
+        await reloaded.load()
+        assert reloaded.check_saved("write", "/secrets/prod.env") is None
+
+    @pytest.mark.asyncio
+    async def test_initialize_loads_persisted_permissions(self):
+        """The startup path (initialize) must populate the saved cache."""
+        from codeassist.session import init_db
+
+        await init_db()
+        await SavedPermissions().save("edit", "/workspace/main.py", "allow")
+
+        pm = PermissionManager()
+        await pm.initialize()
+        assert pm.saved.check_saved("edit", "/workspace/main.py") == "allow"
+        assert await pm.check_permission("edit", "/workspace/main.py") == "allow"
 
 
 class TestAgentDenyIsAuthoritative:

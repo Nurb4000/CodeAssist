@@ -165,7 +165,15 @@ class SavedPermissions:
             log.debug("Failed to save permission: %s", e)
 
     def check_saved(self, tool_name: str, file_path: str = "") -> str | None:
-        """Check if there's a saved permission for this tool/path combo."""
+        """Check if there's a saved permission for this tool/path combo.
+
+        Matching is exact-path first, then the tool-wide ``*`` wildcard. A saved
+        decision is deliberately *not* matched by bare filename: remembering
+        ``/secrets/prod.env`` used to grant every ``prod.env`` anywhere on disk,
+        which turned one approval into a blanket allow for a common filename.
+        Grants now apply to the exact path the user approved (or the whole tool
+        when saved with an empty path / ``*``).
+        """
         # Check exact pattern match
         key = f"{tool_name}:{file_path}"
         if key in self._cache:
@@ -176,12 +184,13 @@ class SavedPermissions:
         if key in self._cache:
             return self._cache[key]
 
-        # Check filename pattern
+        # Saved grants are stored with an absolute path when the tool touches a
+        # file; match those against the concrete path as well.
         if file_path:
-            name = Path(file_path).name
-            key = f"{tool_name}:{name}"
-            if key in self._cache:
-                return self._cache[key]
+            for stored_key, action in self._cache.items():
+                stored_tool, _, stored_pattern = stored_key.partition(":")
+                if stored_tool == tool_name and stored_pattern and fnmatch.fnmatch(file_path, stored_pattern):
+                    return action
 
         return None
 
@@ -189,8 +198,9 @@ class SavedPermissions:
         """Clear all saved permissions."""
         self._cache.clear()
         try:
-            db = await get_db()
-            async with db:
+            # get_db() is an async context manager; the previous `db = await
+            # get_db()` raised TypeError on every call and the DELETE never ran.
+            async with get_db() as db:
                 await db.execute("DELETE FROM permission_saves")
         except Exception as e:  # noqa: BLE001
             log.debug("Failed to clear saved permissions: %s", e)
@@ -251,25 +261,32 @@ class PermissionManager:
 
         # 2. Check saved permissions (user's explicit choice)
         saved_action = self.saved.check_saved(tool_name, file_path)
-        if saved_action and saved_action == "allow":
+        if saved_action == "allow":
             return "allow"
+        # A saved *deny* is the user's explicit "never ask again" and is
+        # authoritative over the permissive defaults below. Previously it was
+        # dropped on the floor (`if saved_action != "deny"`), so a denied tool
+        # kept prompting — or, worse, could still be allowed by an agent rule.
+        if saved_action == "deny":
+            return "deny"
 
         # 3. Check agent-specific ruleset (if provided)
         if agent_ruleset:
             agent_action = agent_ruleset.check(tool_name, file_path)
             if agent_action == "deny":
                 return "deny"
+            # A saved "ask" is the user explicitly wanting a prompt, so it still
+            # beats an agent-level allow.
             if agent_action == "allow" and saved_action is None:
                 return "allow"
 
-        # 4. Check global ruleset
-        global_action = self.ruleset.check(tool_name, file_path)
-
-        # 5. If saved action exists and differs, prefer saved (unless deny)
-        if saved_action and saved_action != "deny":
+        # 4. A saved "ask" (or any non-allow/deny action) is the user's explicit
+        #    preference and outranks the global ruleset.
+        if saved_action is not None:
             return saved_action
 
-        return global_action
+        # 5. Otherwise fall through to the global ruleset
+        return self.ruleset.check(tool_name, file_path)
 
     async def save_permission_choice(
         self,
@@ -277,9 +294,13 @@ class PermissionManager:
         file_path: str,
         action: str,
     ) -> None:
-        """Save a user's permission choice for future reference."""
-        # Use filename pattern for broader matching
-        pattern = Path(file_path).name if file_path else "*"
+        """Save a user's permission choice for future reference.
+
+        File-touching tools store the exact path the user approved so a grant
+        for ``/secrets/prod.env`` does not also allow ``/other/prod.env``.
+        Tools without a path are stored tool-wide (``*``).
+        """
+        pattern = file_path if file_path else "*"
         await self.saved.save(tool_name, pattern, action)
 
     def get_allowed_tools(self) -> list[str]:

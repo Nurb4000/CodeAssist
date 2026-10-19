@@ -16,6 +16,7 @@ from .agents import agent_manager
 from .config import Config
 from .instruction_discovery import get_instruction_discoverer
 from .mcp_client import MCPClient
+from .permissions import permission_manager
 from .plugins import PluginRegistry
 from .session import init_db
 from .skills import SkillRegistry
@@ -287,6 +288,32 @@ async def _init_subsystems(cfg: Config):
 async def init_agents():
     await agent_manager.initialize()
 
+
+async def init_permissions():
+    """Load persisted permission preferences and config rules.
+
+    Must run after ``init_db()`` (the ``permission_saves`` table is created
+    there). Without this call the singleton's ``SavedPermissions`` cache stayed
+    empty for the whole process, so every "remember my choice" answer was lost on
+    the next restart and TOML ``[permissions]`` rules were never applied.
+    """
+    cfg = get_config()
+    rules = _permission_rules_from_config(cfg)
+    await permission_manager.initialize(rules)
+
+
+def _permission_rules_from_config(cfg: Config) -> dict | None:
+    """Extract a ``PermissionRuleset``-shaped mapping from ``[permissions]``.
+
+    ``PermissionConfig`` currently only carries ``trust_all`` (handled separately
+    in the agent), so this returns ``None`` unless the config later grows a
+    ``rules`` mapping. Kept as a seam so adding file-based rules needs no changes
+    at the call site.
+    """
+    permissions = getattr(cfg, "permissions", None)
+    rules = getattr(permissions, "rules", None)
+    return rules if isinstance(rules, dict) and rules else None
+
 async def _merged_mcp_servers(cfg: Config) -> dict:
     """MCP server registry passed to the client at boot.
 
@@ -388,6 +415,7 @@ async def lifespan(app: FastAPI):
     # BEFORE subsystems boot so feature toggles and runtime knobs take effect.
     from .settings import apply_settings_overrides
     await apply_settings_overrides(cfg)
+    await init_permissions()
     await _init_subsystems(cfg)
     await init_agents()
     await init_mcp()
