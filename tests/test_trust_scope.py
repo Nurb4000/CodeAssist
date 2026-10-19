@@ -125,6 +125,56 @@ async def test_config_trust_all_ask_still_confirms(tmp_path):
     assert await agent.needs_confirmation("git", {}) is True
 
 
+class TestConfirmationRequiredHonorsSessionTrust:
+    """The confirmation gate must consult session-trust flags even when the
+    permission rules return "ask".
+
+    Regression: the gate used to read
+    ``perm_action == "ask" or await needs_confirmation(...)``. Because ``or``
+    short-circuits, a rules-level "ask" forced a prompt before the session
+    trust flags (trust shell, trust workspace writes, per-tool session trust,
+    workspace containment) were ever examined -- so "trust for this session"
+    silently stopped working whenever a rule said "ask".
+    """
+
+    @pytest.mark.asyncio
+    async def test_shell_trust_suppresses_rules_ask(self, tmp_path):
+        agent = _agent("sess-gate-shell", tmp_path)
+        await agent.set_trust(trust_shell=True)
+        assert await agent._confirmation_required("shell", {"command": "rm -rf x"}, "ask") is False
+
+    @pytest.mark.asyncio
+    async def test_workspace_trust_suppresses_rules_ask(self, tmp_path):
+        agent = _agent("sess-gate-ws", tmp_path)
+        await agent.set_trust(trust_workspace=True)
+        target = tmp_path / "w.py"
+        assert await agent._confirmation_required(
+            "write", {"file_path": str(target), "content": "x = 1"}, "ask"
+        ) is False
+        # Outside the workspace the trust does not apply.
+        assert await agent._confirmation_required(
+            "write", {"file_path": "/etc/passwd", "content": "x"}, "ask"
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_per_tool_session_trust_suppresses_rules_ask(self, tmp_path):
+        agent = _agent("sess-gate-tool", tmp_path)
+        agent._confirm_tools["c1"] = "git"
+        await agent.resolve_confirm("c1", True, trust_tool=True)
+        assert await agent._confirmation_required("git", {}, "ask") is False
+
+    @pytest.mark.asyncio
+    async def test_rules_allow_never_prompts(self, tmp_path):
+        agent = _agent("sess-gate-allow", tmp_path)
+        assert await agent._confirmation_required("git", {}, "allow") is False
+
+    @pytest.mark.asyncio
+    async def test_no_trust_still_prompts_on_rules_ask(self, tmp_path):
+        """Without any trust flag, a rules-level "ask" must still prompt."""
+        agent = _agent("sess-gate-none", tmp_path)
+        assert await agent._confirmation_required("git", {}, "ask") is True
+
+
 @pytest.mark.asyncio
 async def test_trust_isolated_per_session_id(tmp_path):
     a = _agent("sess-C", tmp_path)

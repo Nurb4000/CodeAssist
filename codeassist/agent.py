@@ -1151,6 +1151,44 @@ class Agent:
             return "allow"
         return await permission_manager.check_permission(tool_name, file_path, self.agent_ruleset)
 
+    async def _confirmation_required(self, tool_name: str, arguments: dict, perm_action: str) -> bool:
+        """Decide whether a tool call needs a user confirmation prompt.
+
+        ``perm_action`` is the result of ``get_permission_action`` ("allow",
+        "deny", or "ask"). A "deny" is handled by the caller before this is
+        reached, so only "allow"/"ask" arrive here.
+
+        Session-scoped trust is checked first — those flags exist precisely to
+        suppress a prompt the rules would otherwise request. They are consulted
+        even when the action is "ask". When the flags do not apply and the rules
+        say "allow", no prompt is needed; otherwise delegate to
+        ``needs_confirmation`` for the finer-grained (rules, readonly-shell,
+        workspace containment) decision.
+        """
+        if self._session_trust_suppresses(tool_name, arguments):
+            return False
+        if perm_action == "allow":
+            return False
+        return await self.needs_confirmation(tool_name, arguments)
+
+    def _session_trust_suppresses(self, tool_name: str, arguments: dict) -> bool:
+        """Whether an explicit session-scoped trust flag covers this call.
+
+        These are the "trust for the rest of this session" choices made in the
+        confirm dialog. Split out from ``needs_confirmation`` so the confirmation
+        gate can apply them no matter what the permission rules returned.
+        """
+        file_path = arguments.get("file_path", arguments.get("path", ""))
+
+        if self._workspace_trusted_for(tool_name, file_path):
+            return True
+
+        trusted_tools = SESSION_TOOL_TRUST.get(self.session.id, set())
+        if tool_name in trusted_tools:
+            return True
+
+        return bool(tool_name == "shell" and self._trust_shell)
+
     async def wait_for_confirm(self, confirm_id: str) -> bool:
         """Wait for user to approve/deny a tool execution."""
         event = asyncio.Event()
@@ -1917,7 +1955,27 @@ class Agent:
                             })
                             continue
 
-                        if perm_action == "ask" or await self.needs_confirmation(tc.name, tc.arguments):
+                        # "ask" means the rules want a prompt, but the
+                        # session-scoped trust flags (trust shell, trust
+                        # workspace writes, "trust this tool for the session",
+                        # readonly-shell auto-approval) must still be able to
+                        # suppress it. The previous `perm_action == "ask" or
+                        # needs_confirmation(...)` short-circuited and never
+                        # consulted those flags on the only branch where they
+                        # matter.
+                        needs_prompt = await self._confirmation_required(tc.name, tc.arguments, perm_action)
+                        if self.cancel_event.is_set():
+                            # Stop can land while the gate awaited the
+                            # permission manager. Answer everything still
+                            # outstanding and unwind, exactly as the
+                            # confirmation path does, so no persisted tool call
+                            # is left without a result.
+                            await self._answer_unrun_tool_calls(
+                                [t for t in tool_calls if t.id in unanswered]
+                            )
+                            return
+
+                        if needs_prompt:
                             confirm_id = f"{tc.id}_{tc.name}"
                             # Check if there's a saved permission hint
                             saved_hint = permission_manager.saved.check_saved(tc.name, file_path)

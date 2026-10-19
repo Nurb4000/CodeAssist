@@ -2392,7 +2392,7 @@ class TestAgentStop:
         async def turn():
             for index in range(3):
                 yield ToolCall(id=f"c{index}", name="shell",
-                               arguments={"command": f"echo {index}"})
+                               arguments={"command": f"rm -rf /tmp/stop-{index}"})
             yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
         agent.llm.stream = lambda messages, openai_tools: turn()
@@ -2444,7 +2444,7 @@ class TestAgentStop:
         async def turn():
             for index in range(3):
                 yield ToolCall(id=f"c{index}", name="shell",
-                               arguments={"command": f"echo {index}"})
+                               arguments={"command": f"rm -rf /tmp/stop-{index}"})
             yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
 
         agent.llm.stream = lambda messages, openai_tools: turn()
