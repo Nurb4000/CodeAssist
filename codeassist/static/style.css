@@ -959,6 +959,24 @@ body {
     padding: 4px 8px;
 }
 
+/* Compaction is informational telemetry, not an error. Keep it in the same
+   column as the turn that triggered it and visually quiet. */
+.compaction-notice {
+    max-width: 800px;
+    margin: 6px auto;
+    opacity: 0.9;
+}
+.compaction-notice .message-role {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.compaction-notice .message-content p {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+    margin: 0;
+}
+
 /* Thinking indicator */
 .thinking {
     color: var(--text-muted);

@@ -718,8 +718,22 @@ function showWelcome() {
     resetFlowSections();
 }
 
+// A new prompt starts a fresh visual turn. Leave the previous turn's Work and
+// past-thinking nodes where they are, but drop the cached handles so the next
+// step builds new sections under this prompt. Reusing the handles moved the
+// live container (and every earlier step) to the newest prompt, which is why
+// work appeared under the wrong turns and a reload stacked all steps under the
+// first prompt. Used by both the live send path and loadMessages() replay.
+function beginTurnSections() {
+    activeStepEl = null;
+    workBlockEl = workActiveEl = workHistoryEl = null;
+    pastThinkingEl = pastThinkingListEl = null;
+    pastThinkingCount = 0;
+}
+
 function appendUserMessage(text, images = []) {
     removeWelcome();
+    beginTurnSections();
     const div = document.createElement('div');
     div.className = 'message';
     div.innerHTML = `<div class="message-role user">You</div><div class="message-content user-content"></div>`;
@@ -1621,7 +1635,7 @@ function connectWS() {
         } else if (data.type === 'context') {
             updateContextUsage(data.tokens, data.usage_pct, data.severity);
         } else if (data.type === 'compacted') {
-            showError(data.message);
+            showCompactionNotice(data.message);
         } else if (data.type === 'plan_update') {
             updatePlanDisplay(data.tasks);
         } else if (data.type === 'question_request') {
@@ -1705,6 +1719,10 @@ function connectWS() {
                 tokenState.total += turn;
                 tokenState.lastTime = now;
                 updateTokenInfo(tokenState.total, tokenState.rate);
+                // Provider-reported prompt tokens are exact. Prefer them over
+                // the local estimate for the context gauge, especially right
+                // after compaction when the estimate can be stale.
+                updateContextUsageFromPrompt(usage.prompt_tokens);
             }
         }
     };
@@ -1797,6 +1815,32 @@ function showError(msg) {
     div.className = 'message system-error';
     div.innerHTML = `<div class="message-role" style="color:var(--red)">System</div><div class="message-content"><p style="color:var(--red)">${escapeHtml(msg)}</p></div>`;
     messagesEl.appendChild(div);
+    scrollToBottom();
+}
+
+// Compaction is a status note, not an error, and it belongs with the turn that
+// triggered it. Appending it with showError() parked it at the bottom of the
+// flow, below work and responses that had not been rendered yet.
+function showCompactionNotice(msg) {
+    removeWelcome();
+    const div = document.createElement('div');
+    div.className = 'message compaction-notice';
+    div.innerHTML = `<div class="message-role">Context</div><div class="message-content"><p>${escapeHtml(msg || 'Context window compressed.')}</p></div>`;
+    const anchor = (pastThinkingEl && pastThinkingEl.isConnected) ? pastThinkingEl
+        : (workActiveEl && workActiveEl.isConnected) ? workActiveEl
+            : (workBlockEl && workBlockEl.isConnected) ? workBlockEl
+                : (lastUserEl && lastUserEl.isConnected) ? lastUserEl : null;
+    if (!anchor) {
+        messagesEl.appendChild(div);
+    } else {
+        // Several compactions can fire in one turn; keep them in order instead
+        // of inserting each one immediately after the same anchor.
+        let ref = anchor;
+        while (ref.nextElementSibling && ref.nextElementSibling.classList.contains('compaction-notice')) {
+            ref = ref.nextElementSibling;
+        }
+        ref.after(div);
+    }
     scrollToBottom();
 }
 
@@ -1914,6 +1958,17 @@ function updateContextUsage(tokens, usagePct, severity) {
     el.innerHTML = `<span style="color:${color}">${usagePct}% context used</span> (${tokens.toLocaleString()} tokens)`;
     el.style.fontSize = '11px';
     el.style.marginTop = '4px';
+}
+
+function updateContextUsageFromPrompt(promptTokens) {
+    const windowSize = Number(configData.effective_context_window || configData.context_window || 0);
+    const tokens = Number(promptTokens);
+    if (!windowSize || !Number.isFinite(tokens) || tokens <= 0) return;
+    const threshold = Number(configData.compaction_threshold_pct || 75);
+    const critical = Math.min(99, threshold + 15);
+    const pct = (tokens / windowSize) * 100;
+    const severity = pct > critical ? 'critical' : pct >= threshold ? 'warning' : 'ok';
+    updateContextUsage(tokens, Math.round(pct * 10) / 10, severity);
 }
 
 function updateTokenInfo(totalTokens, rate) {

@@ -245,9 +245,10 @@ function startTurn(env, text = 'hello') {
   env.window.sendMessage();
 }
 
-/** The work block, once one exists. */
+/** The current (newest) work block, once one exists. */
 function workBlock(document) {
-  return document.querySelector('.work-block');
+  const blocks = document.querySelectorAll('.work-block');
+  return blocks.length ? blocks[blocks.length - 1] : null;
 }
 
 function steps(document) {

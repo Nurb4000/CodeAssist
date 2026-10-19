@@ -256,3 +256,93 @@ test('a new session restarts work step numbering at 1', async () => {
     'the Work header counts only this session\'s steps'
   );
 });
+
+// ── Multi-turn placement ─────────────────────────────────────────────────────
+// Regression: ensureWorkBlock() cached a single container and only ever anchored
+// it once, so every later turn's steps were appended under the first prompt.
+// The live container also stayed where the first tool call put it, making the
+// current turn's work appear up with the old work instead of near its prompt.
+
+test('each live turn gets its own work block under its prompt', async () => {
+  const env = await boot();
+  startTurn(env, 'first');
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'a.py' }, id: 't1' });
+  env.feed({ type: 'tool_result', id: 't1', output: 'one' });
+  env.feed({ type: 'text_delta', content: 'First done.' });
+  env.feed({ type: 'done' });
+
+  startTurn(env, 'second');
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't2' });
+  env.feed({ type: 'tool_result', id: 't2', output: 'two' });
+  env.feed({ type: 'text_delta', content: 'Second done.' });
+  env.feed({ type: 'done' });
+
+  const blocks = Array.from(env.document.querySelectorAll('.work-block'));
+  assert.strictEqual(blocks.length, 2, 'a second turn must not append to the first block');
+  assert.deepStrictEqual(stepOutputs(blocks[0]), ['one'], 'the first turn keeps its own step');
+  assert.deepStrictEqual(stepOutputs(blocks[1]), ['two'], 'the second turn keeps its own step');
+
+  const users = Array.from(env.document.querySelectorAll('.message'))
+    .filter((el) => el.querySelector('.message-role.user'));
+  const FOLLOWING = env.window.Node.DOCUMENT_POSITION_FOLLOWING;
+  assert.ok(users[0].compareDocumentPosition(blocks[0]) & FOLLOWING, 'block one sits under prompt one');
+  assert.ok(users[1].compareDocumentPosition(blocks[1]) & FOLLOWING, 'block two sits under prompt two');
+  assert.ok(blocks[0].compareDocumentPosition(users[1]) & FOLLOWING, 'block one stays above prompt two');
+});
+
+test('a reloaded multi-turn session groups each turn under its own prompt', async () => {
+  const TWO_TURNS = [
+    { id: 'u1', role: 'user', content: 'first' },
+    {
+      id: 'a1', role: 'assistant', content: '',
+      tool_calls: [{ id: 't1', type: 'function', function: { name: 'read', arguments: '{}' } }],
+    },
+    { id: 'r1', role: 'tool', content: 'one', tool_call_id: 't1' },
+    { id: 'a2', role: 'assistant', content: 'first done' },
+    { id: 'u2', role: 'user', content: 'second' },
+    {
+      id: 'a3', role: 'assistant', content: '',
+      tool_calls: [{ id: 't2', type: 'function', function: { name: 'read', arguments: '{}' } }],
+    },
+    { id: 'r2', role: 'tool', content: 'two', tool_call_id: 't2' },
+    { id: 'a4', role: 'assistant', content: 'second done' },
+  ];
+  const env = await boot({
+    fixtures: { '/api/sessions/session-1/messages': TWO_TURNS },
+  });
+
+  const blocks = Array.from(env.document.querySelectorAll('.work-block'));
+  assert.strictEqual(blocks.length, 2, 'reload must not stack every step in one block');
+  assert.deepStrictEqual(stepOutputs(blocks[0]), ['one']);
+  assert.deepStrictEqual(stepOutputs(blocks[1]), ['two']);
+
+  const users = Array.from(env.document.querySelectorAll('.message'))
+    .filter((el) => el.querySelector('.message-role.user'));
+  const FOLLOWING = env.window.Node.DOCUMENT_POSITION_FOLLOWING;
+  assert.ok(users[0].compareDocumentPosition(blocks[0]) & FOLLOWING, 'block one follows prompt one');
+  assert.ok(blocks[0].compareDocumentPosition(users[1]) & FOLLOWING, 'block one precedes prompt two');
+  assert.ok(users[1].compareDocumentPosition(blocks[1]) & FOLLOWING, 'block two follows prompt two');
+});
+
+test('a compaction notice stays with the current turn instead of the flow bottom', async () => {
+  const env = await boot();
+  startTurn(env, 'compact me');
+  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'a.py' }, id: 't1' });
+  env.feed({ type: 'tool_result', id: 't1', output: 'one' });
+  env.feed({ type: 'compacted', message: 'Context window compressed to make room' });
+  env.feed({ type: 'text_delta', content: 'Answer after compaction.' });
+  env.feed({ type: 'done' });
+
+  const notice = env.document.querySelector('.compaction-notice');
+  assert.ok(notice, 'the notice is rendered');
+  assert.ok(!notice.classList.contains('system-error'), 'compaction is not an error');
+
+  const user = env.document.querySelector('.message-role.user').closest('.message');
+  const response = Array.from(env.document.querySelectorAll('.message-role.assistant'))
+    .map((role) => role.closest('.message'))
+    .pop();
+  assert.ok(response, 'precondition: the response rendered');
+  const FOLLOWING = env.window.Node.DOCUMENT_POSITION_FOLLOWING;
+  assert.ok(user.compareDocumentPosition(notice) & FOLLOWING, 'notice sits below the prompt');
+  assert.ok(notice.compareDocumentPosition(response) & FOLLOWING, 'notice sits above the response');
+});
