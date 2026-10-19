@@ -357,3 +357,113 @@ def test_test_connection_ok(live_client, monkeypatch):
 
     failing = live_client.post("/api/config/test-connection", json={"base_url": "http://fail/v1"})
     assert failing.json()["ok"] is False
+
+
+class _RecordingClient:
+    """httpx.AsyncClient stand-in that records the last request's URL + headers."""
+
+    last_url = None
+    last_headers = None
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, headers=None):
+        type(self).last_url = url
+        type(self).last_headers = headers
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"data": []}
+
+        return _Resp()
+
+
+class TestTestConnectionSecurity:
+    """test-connection must not be an SSRF / stored-key exfiltration vector."""
+
+    def test_metadata_endpoint_refused(self, live_client, monkeypatch):
+        monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
+        res = live_client.post(
+            "/api/config/test-connection",
+            json={"base_url": "http://169.254.169.254/latest"},
+        )
+        assert res.json()["ok"] is False
+        assert "metadata" in res.json()["error"].lower()
+        # The request must never have been issued.
+        assert _RecordingClient.last_url is None
+
+    def test_link_local_hostname_resolving_to_metadata_refused(self, live_client, monkeypatch):
+        """A friendly name pointing at 169.254.169.254 must still be blocked."""
+        import codeassist.routes.settings as settings_mod
+
+        monkeypatch.setattr(settings_mod, "_resolve_is_metadata", lambda host: True)
+        monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
+        res = live_client.post(
+            "/api/config/test-connection",
+            json={"base_url": "http://evil.example/v1"},
+        )
+        assert res.json()["ok"] is False
+        assert _RecordingClient.last_url is None
+
+    def test_non_http_scheme_refused(self, live_client, monkeypatch):
+        monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
+        res = live_client.post(
+            "/api/config/test-connection",
+            json={"base_url": "file:///etc/passwd"},
+        )
+        assert res.json()["ok"] is False
+        assert "scheme" in res.json()["error"].lower()
+        assert _RecordingClient.last_url is None
+
+    def test_stored_key_not_sent_to_foreign_host(self, live_client, monkeypatch):
+        """A client-supplied base_url with no key must not receive the stored key."""
+        from codeassist import server
+
+        cfg = server.get_config()
+        monkeypatch.setattr(cfg.llm, "base_url", "https://api.openai.com/v1")
+        monkeypatch.setattr(cfg.llm, "api_key", "server-secret")
+        monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
+
+        res = live_client.post(
+            "/api/config/test-connection",
+            json={"base_url": "https://attacker.example/v1"},
+        )
+        assert res.json()["ok"] is True
+        # No Authorization header was attached to the attacker host.
+        assert not _RecordingClient.last_headers
+
+    def test_stored_key_sent_to_configured_host(self, live_client, monkeypatch):
+        from codeassist import server
+
+        cfg = server.get_config()
+        monkeypatch.setattr(cfg.llm, "base_url", "https://api.openai.com/v1")
+        monkeypatch.setattr(cfg.llm, "api_key", "server-secret")
+        monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
+
+        res = live_client.post("/api/config/test-connection", json={})
+        assert res.json()["ok"] is True
+        assert _RecordingClient.last_headers.get("Authorization") == "Bearer server-secret"
+
+    def test_client_supplied_key_is_used(self, live_client, monkeypatch):
+        from codeassist import server
+
+        cfg = server.get_config()
+        monkeypatch.setattr(cfg.llm, "base_url", "https://api.openai.com/v1")
+        monkeypatch.setattr(cfg.llm, "api_key", "server-secret")
+        monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
+
+        res = live_client.post(
+            "/api/config/test-connection",
+            json={"base_url": "https://attacker.example/v1", "api_key": "my-own-key"},
+        )
+        assert res.json()["ok"] is True
+        assert _RecordingClient.last_headers.get("Authorization") == "Bearer my-own-key"
