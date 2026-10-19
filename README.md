@@ -159,11 +159,12 @@ CodeAssist includes several security layers:
 
 CodeAssist automatically manages context window limits during long sessions:
 
-- **Token counting**: Estimates token usage including tool schema overhead for accurate thresholds
-- **Two-level compaction**: When context exceeds 75%, old messages are compacted:
+- **Token counting**: Estimates token usage including tool schema overhead and the configured response budget for accurate thresholds
+- **Two-level compaction**: When context exceeds `threshold_pct`, old messages are compacted:
   - **Level 0**: Tool outputs summarized to 1-line, assistant content truncated, user messages preserved
   - **Level 1** (escalation): Old tool messages dropped entirely, only function names kept
-- **Compaction caching**: Compacted messages are cached and only recomputed when new messages arrive
+- **Persistent working context**: A compacted transcript stays compacted on later steps and turns instead of being rebuilt from the full history (which used to re-trigger compaction and restore the old usage count)
+- **Accurate telemetry**: The UI updates the gauge from the provider's reported prompt tokens, and `compacted` is emitted only when the request actually shrank
 - **Smart truncation**: Tool output truncation preserves error/traceback lines for debugging
 
 Configuration in `config.toml`:
@@ -172,7 +173,7 @@ Configuration in `config.toml`:
 enabled = true
 threshold_pct = 75      # Trigger compaction at this usage percentage
 keep_recent = 20        # Number of recent messages to preserve unchanged
-tool_result_max_tokens = 4000  # Max tokens per tool output
+tool_result_max_tokens = 4000  # Per-tool-result cap in the summarizer input
 ```
 
 ### Tuning & reliability

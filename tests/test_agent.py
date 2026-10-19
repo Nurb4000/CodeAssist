@@ -2494,3 +2494,91 @@ class TestAgentStop:
             "result to answer them, so the next request is invalid"
         )
 
+
+
+class TestWorkingContextPersists:
+    """Compaction must survive the next loop iteration.
+
+    Regression: Phase 0 rebuilt the message list from the full session history
+    on every step, so the transcript that was just compacted came back in full
+    on the next request. That re-triggered compaction (and its banner) over and
+    over, and the context counter jumped back to the uncompacted size.
+    """
+
+    @pytest.mark.asyncio
+    async def test_second_step_reuses_the_compacted_context(
+        self, agent, mock_session,
+    ):
+        history: list[dict] = []
+        for i in range(6):
+            history.append({"role": "user", "content": f"q{i}"})
+            history.append({
+                "role": "assistant",
+                "content": "working",
+                "tool_calls": [{
+                    "id": f"old{i}", "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }],
+            })
+            history.append({
+                "role": "tool",
+                "tool_call_id": f"old{i}",
+                # Long enough that text compaction has something to reclaim.
+                "content": f"OLD-{i}-START " + ("z" * 600) + f" OLD-{i}-END",
+            })
+
+        async def add_message(role, content="", **kwargs):
+            msg_id = f"m{len(history)}"
+            history.append({
+                "role": role, "content": content, "id": msg_id, **kwargs,
+            })
+            return msg_id
+
+        mock_session.add_message = AsyncMock(side_effect=add_message)
+        mock_session.get_messages = AsyncMock(side_effect=lambda: list(history))
+
+        agent.config.compaction.enabled = True
+        agent.config.compaction.mode = "text"
+        agent.config.compaction.threshold_pct = 50
+        agent.config.compaction.keep_recent = 2
+        agent.config.llm.max_tokens = 0
+        agent.config.agent.max_iterations = 2
+        agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+        agent.tools.schemas = MagicMock(return_value=[])
+        agent._trust_all = True
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+        calls: list[list[dict]] = []
+
+        async def fake_stream(messages, openai_tools):
+            calls.append(list(messages))
+            if len(calls) == 1:
+                yield ToolCall(id="c1", name="read", arguments={"file_path": "a.py"})
+            else:
+                yield TextDelta("All done.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = fake_stream
+
+        with patch(
+            "codeassist.agent.effective_context_window",
+            new=AsyncMock(return_value=2000),
+        ):
+            events = [e async for e in agent.run("go")]
+
+        compacted = [e for e in events if e.type == "compacted"]
+        assert len(compacted) == 1, (
+            "the compacted context must be reused on the next step, not rebuilt "
+            f"and compacted again; got {len(compacted)} compacted events"
+        )
+        assert len(calls) >= 2, "the tool call must be followed by another step"
+
+        # The compacted transcript stays compact on the second request. The
+        # newest tool result is legitimately in the preserved tail, so check an
+        # early one whose marker only survives a full-history rebuild.
+        assert "OLD-0-END" not in str(calls[1]), (
+            "the second request must not resurrect the compacted-away history"
+        )
+        post = [e for e in events if e.type == "context" and e.data["tokens"] < 1000]
+        assert post, "a post-compaction context event must report the reduced size"
+        assert post[0].data["tokens"] < compacted[0].data["tokens_before"]

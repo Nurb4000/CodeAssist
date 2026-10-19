@@ -28,6 +28,7 @@ from .session import Session
 from .tokens import (
     check_context_limit,
     compact_messages,
+    count_tokens,
     llm_compact_messages,
     strip_media_from_messages,
     truncate_tool_result,
@@ -766,6 +767,13 @@ class Agent:
         # Incremental message cache — avoids DB fetch on every iteration
         self._messages: list[dict] | None = None
         self._messages_dirty: bool = True
+        # Working context: the OpenAI-format transcript that compaction
+        # rewrites. It is extended with new DB rows instead of being rebuilt
+        # from the full history, so a compacted/truncated history stays
+        # compacted on the next step (and the UI counter stops reporting the
+        # full transcript again right after compaction).
+        self._working_messages: list[dict] | None = None
+        self._working_history_len: int = 0
         # Synthetic turns belonging to the turn in flight that were never
         # written to the database: the continuation nudge, and the reply it is
         # anchored to. Held apart from `_messages` on purpose. That snapshot is
@@ -1214,10 +1222,24 @@ class Agent:
             async for event in self._run(user_message, attachments):
                 yield event
 
+    def _output_reserve(self) -> int:
+        """Tokens to leave free for the next model response.
+
+        The context check used to count against the entire window, so a
+        transcript could look safe at 80% and still fail once the response
+        started. ``llm.max_tokens`` is the configured response budget.
+        """
+        try:
+            reserve = int(getattr(self.config.llm, "max_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            reserve = 0
+        return max(0, reserve)
+
     async def _run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         self.cancel_event.clear()
-        # Reset compaction state for new user turn
-        self._compaction_summary = ""
+        # The compaction summary now outlives a single user turn: the working
+        # context persists, so re-summarizing from scratch would discard the
+        # state we already compressed. Only the per-turn telemetry resets.
         self._compaction_count = 0
         # Reset continuation guard state for new user turn
         self._run_used_tools = False
@@ -1344,10 +1366,10 @@ class Agent:
         compaction_cfg = self.config.compaction
         compaction_escalation = 0
 
-        # Compaction cache: avoid re-compacting when no new messages arrived
+        # Request cache: holds the working context WITHOUT the nudge overlay.
+        # Nudges are re-appended below, so replacing one at the same history
+        # length still reaches the model.
         _cached_messages = None
-        _cached_history_len = 0
-        _cached_nudge_version = -1
 
         # Graceful step budget: the per-agent 'steps' limit if configured, else
         # the global max_iterations cap. The per-agent budget BINDS — it is the
@@ -1381,15 +1403,33 @@ class Agent:
                 self._messages_dirty = False
             history = self._messages
 
-            # Only rebuild and re-compact when new messages have been added, or
-            # when a nudge was queued since the cache was taken — the overlay is
-            # replayed into the built list, so a stale cache would drop it.
+            # Extend the working context with only the rows that appeared since
+            # the last step. Rebuilding from the full DB history here was what
+            # undid compaction on the very next iteration: the provider saw the
+            # dropped transcript again, and the usage counter reported it too.
+            # A shrink means rows vanished (an empty placeholder deleted after
+            # a provider error), so start over from the DB to stay consistent.
+            base_changed = False
             if (
-                _cached_messages is None
-                or len(history) != _cached_history_len
-                or self._nudge_version != _cached_nudge_version
+                self._working_messages is None
+                or len(history) < self._working_history_len
             ):
-                messages = build_openai_messages(self.system_prompt, history)
+                self._working_messages = list(
+                    build_openai_messages(self.system_prompt, history)
+                )
+                self._working_history_len = len(history)
+                base_changed = True
+            elif len(history) > self._working_history_len:
+                new_rows = history[self._working_history_len:]
+                self._working_messages.extend(
+                    build_openai_messages("", new_rows)[1:]
+                )
+                self._working_history_len = len(history)
+                base_changed = True
+
+            compacted_this_pass = False
+            if base_changed or _cached_messages is None:
+                messages = list(self._working_messages)
 
                 # Resolve the window ONCE and use it for the initial check and
                 # every recheck below. Mixing the two sources is what let a
@@ -1398,11 +1438,18 @@ class Agent:
                 # the trigger used the *effective* one, and for a local backend
                 # the detected window is often the smaller of the pair.
                 context_window = await effective_context_window(self.config)
+                threshold_pct = compaction_cfg.threshold_pct
+                if not isinstance(threshold_pct, (int, float)) or isinstance(threshold_pct, bool):
+                    threshold_pct = 75
+                threshold_pct = max(1, min(99, int(threshold_pct)))
+                reserve_tokens = self._output_reserve()
 
                 # Check context limits and compact if needed
                 ctx = check_context_limit(
                     messages, self.config.llm.model, context_window,
                     tool_schemas=tool_schemas,
+                    threshold_pct=threshold_pct,
+                    reserve_tokens=reserve_tokens,
                 )
                 yield AgentEvent("context", {
                     "tokens": ctx["total_tokens"],
@@ -1411,96 +1458,156 @@ class Agent:
                 })
 
                 if ctx["needs_compaction"] and compaction_cfg.enabled:
-                    log.info("Context at %s%%, compacting messages (mode=%s)", ctx["usage_pct"], compaction_cfg.mode)
-
-                    if compaction_cfg.mode == "llm":
-                        # LLM-based compaction (default)
-                        comp_model = compaction_cfg.model or self.config.llm.model
-                        messages, self._compaction_summary = await llm_compact_messages(
-                            messages,
-                            tail_turns=compaction_cfg.tail_turns,
-                            preserve_recent_tokens=compaction_cfg.preserve_recent_tokens,
-                            previous_summary=self._compaction_summary,
-                            compaction_model=comp_model,
-                            main_llm_config=self.config.llm,
+                    # The system prompt and tool schemas are unavoidable. If they
+                    # alone cross the trigger, every compaction would be a no-op
+                    # and the loop would churn on the same oversized request.
+                    fixed_tokens = count_tokens(
+                        messages[:1], self.config.llm.model,
+                        tool_schemas=tool_schemas,
+                    )
+                    if fixed_tokens >= ctx["usable_window"] * (threshold_pct / 100):
+                        log.warning(
+                            "Context is %s%% full, but the system prompt and tool "
+                            "schemas alone use %d tokens; compaction cannot reduce "
+                            "that. Sending the request unchanged.",
+                            ctx["usage_pct"], fixed_tokens,
                         )
-                        self._compaction_count += 1
+                    else:
+                        log.info("Context at %s%%, compacting messages (mode=%s)", ctx["usage_pct"], compaction_cfg.mode)
+                        tokens_before = ctx["total_tokens"]
 
-                        # Re-check context after LLM compaction
-                        recheck = check_context_limit(
-                            messages, self.config.llm.model, context_window,
-                            tool_schemas=tool_schemas,
-                        )
-
-                        # If still over limit, try text compaction as fallback
-                        if recheck["needs_compaction"]:
-                            log.info("LLM compaction insufficient (%s%%), escalating to text mode", recheck["usage_pct"])
-                            messages = compact_messages(
+                        if compaction_cfg.mode == "llm":
+                            # LLM-based compaction (default)
+                            comp_model = compaction_cfg.model or self.config.llm.model
+                            # The summarizer is an LLM request too. Budget the
+                            # head against its window minus the 4096-token summary
+                            # output and a safety margin.
+                            summarizer_input = max(1024, context_window - 4096 - 512)
+                            messages, self._compaction_summary = await llm_compact_messages(
                                 messages,
-                                keep_recent=compaction_cfg.keep_recent,
-                                model=self.config.llm.model,
-                                escalation_level=compaction_escalation,
+                                tail_turns=compaction_cfg.tail_turns,
+                                preserve_recent_tokens=compaction_cfg.preserve_recent_tokens,
+                                previous_summary=self._compaction_summary,
+                                compaction_model=comp_model,
+                                main_llm_config=self.config.llm,
+                                tool_result_max_tokens=compaction_cfg.tool_result_max_tokens,
+                                max_input_tokens=summarizer_input,
                             )
-                            compaction_escalation = 1
+                            self._compaction_count += 1
 
-                            # Final overflow: strip media and retry
-                            final_check = check_context_limit(
+                            # Re-check context after LLM compaction
+                            recheck = check_context_limit(
                                 messages, self.config.llm.model, context_window,
                                 tool_schemas=tool_schemas,
+                                threshold_pct=threshold_pct,
+                                reserve_tokens=reserve_tokens,
                             )
-                            if final_check["needs_compaction"]:
-                                log.warning("Context still full after all compaction. Stripping media.")
-                                messages = strip_media_from_messages(messages)
 
-                    else:
-                        # Text-based compaction (existing behavior)
-                        messages = compact_messages(
-                            messages,
-                            keep_recent=compaction_cfg.keep_recent,
-                            model=self.config.llm.model,
-                            escalation_level=compaction_escalation,
-                        )
-                        recheck = check_context_limit(
-                            messages, self.config.llm.model, context_window,
-                            tool_schemas=tool_schemas,
-                        )
-                        if recheck["needs_compaction"] and compaction_escalation == 0:
-                            compaction_escalation = 1
+                            # If still over limit, try text compaction as fallback
+                            if recheck["needs_compaction"]:
+                                log.info("LLM compaction insufficient (%s%%), escalating to text mode", recheck["usage_pct"])
+                                messages = compact_messages(
+                                    messages,
+                                    keep_recent=compaction_cfg.keep_recent,
+                                    model=self.config.llm.model,
+                                    escalation_level=compaction_escalation,
+                                )
+                                compaction_escalation = 1
+
+                                # Final overflow: strip media and retry
+                                final_check = check_context_limit(
+                                    messages, self.config.llm.model, context_window,
+                                    tool_schemas=tool_schemas,
+                                    threshold_pct=threshold_pct,
+                                    reserve_tokens=reserve_tokens,
+                                )
+                                if final_check["needs_compaction"]:
+                                    log.warning("Context still full after all compaction. Stripping media.")
+                                    messages = strip_media_from_messages(messages)
+
+                        else:
+                            # Text-based compaction (existing behavior)
                             messages = compact_messages(
                                 messages,
                                 keep_recent=compaction_cfg.keep_recent,
                                 model=self.config.llm.model,
                                 escalation_level=compaction_escalation,
                             )
-                            log.info("Escalated compaction to level 1 (dropping old tool messages)")
-                        elif not recheck["needs_compaction"]:
-                            compaction_escalation = 0
+                            recheck = check_context_limit(
+                                messages, self.config.llm.model, context_window,
+                                tool_schemas=tool_schemas,
+                                threshold_pct=threshold_pct,
+                                reserve_tokens=reserve_tokens,
+                            )
+                            if recheck["needs_compaction"] and compaction_escalation == 0:
+                                compaction_escalation = 1
+                                messages = compact_messages(
+                                    messages,
+                                    keep_recent=compaction_cfg.keep_recent,
+                                    model=self.config.llm.model,
+                                    escalation_level=compaction_escalation,
+                                )
+                                log.info("Escalated compaction to level 1 (dropping old tool messages)")
+                            elif not recheck["needs_compaction"]:
+                                compaction_escalation = 0
 
-                    yield AgentEvent("compacted", {
-                        "message": "Context window compressed to make room",
-                        "mode": compaction_cfg.mode,
-                        "count": self._compaction_count,
-                    })
+                        ctx_after = check_context_limit(
+                            messages, self.config.llm.model, context_window,
+                            tool_schemas=tool_schemas,
+                            threshold_pct=threshold_pct,
+                            reserve_tokens=reserve_tokens,
+                        )
+                        tokens_after = ctx_after["total_tokens"]
 
-                    # Auto-continue: if the tail ends with tool results (agent was mid-work),
-                    # inject a continuation prompt so the LLM knows to keep going.
-                    if messages and messages[-1].get("role") == "tool":
-                        messages.append({
-                            "role": "user",
-                            "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
-                        })
+                        # Text mode can legitimately do nothing (the recent tail
+                        # is already small, or the LLM pass just shrunk it). Only
+                        # tell the user it was compressed when the request
+                        # actually got smaller, and only then re-anchor the
+                        # working context onto the shorter transcript.
+                        if tokens_after < tokens_before:
+                            self._working_messages = list(messages)
+                            compacted_this_pass = True
+                            yield AgentEvent("compacted", {
+                                "message": "Context window compressed to make room",
+                                "mode": compaction_cfg.mode,
+                                "count": self._compaction_count,
+                                "tokens_before": tokens_before,
+                                "tokens_after": tokens_after,
+                            })
+                            # The UI must not keep showing the pre-compaction
+                            # size: this is the number the next request carries.
+                            yield AgentEvent("context", {
+                                "tokens": ctx_after["total_tokens"],
+                                "usage_pct": ctx_after["usage_pct"],
+                                "severity": ctx_after["severity"],
+                            })
+                        else:
+                            log.info(
+                                "Compaction made no progress (%d -> %d tokens); "
+                                "keeping the existing history",
+                                tokens_before, tokens_after,
+                            )
+                            self._working_messages = list(messages)
 
-                # Replay this turn's nudge (and the reply it is anchored to)
-                # after the real rows, so the model reads them as the most
-                # recent turns rather than as part of the persisted history.
-                messages.extend(self._pending_nudges)
-
-                _cached_messages = messages
-                _cached_history_len = len(history)
-                _cached_nudge_version = self._nudge_version
+                _cached_messages = list(messages)
             else:
-                # Reuse cached compacted messages — no new data to process
-                messages = _cached_messages
+                # Reuse the cached compacted context — no new data to process
+                messages = list(_cached_messages)
+
+            # Auto-continue: if compaction left the tail on tool results (the
+            # agent was mid-work), inject a continuation prompt so the LLM knows
+            # to keep going. Request-only: it must not become a permanent part
+            # of the working context.
+            if compacted_this_pass and messages and messages[-1].get("role") == "tool":
+                messages.append({
+                    "role": "user",
+                    "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
+                })
+
+            # Replay this turn's nudge (and the reply it is anchored to) after
+            # the real rows, so the model reads them as the most recent turns
+            # rather than as part of the persisted history.
+            messages.extend(self._pending_nudges)
 
             # On the final allowed step, disable tools and ask the model for a
             # structured wrap-up instead of stopping abruptly. This mirrors
@@ -1606,17 +1713,27 @@ class Agent:
                         context_retries,
                         MAX_CONTEXT_RETRIES,
                     )
-                    messages = _force_compact(
-                        messages,
+                    # Compact the persistent base, not the request overlay:
+                    # otherwise the next Phase 0 would rebuild the full history
+                    # and the retry would be the only compacted request.
+                    base = (
+                        self._working_messages
+                        if self._working_messages is not None
+                        else messages
+                    )
+                    tokens_before = count_tokens(
+                        base, self.config.llm.model, tool_schemas=tool_schemas,
+                    )
+                    base = _force_compact(
+                        base,
                         tool_schemas=tool_schemas,
                         escalation=context_retries,
                     )
-                    self._compaction_count += 1
-                    yield AgentEvent("compacted", {
-                        "message": "Context window exceeded — compacted and retrying",
-                        "mode": "forced",
-                        "count": self._compaction_count,
-                    })
+                    self._working_messages = list(base)
+                    tokens_after = count_tokens(
+                        base, self.config.llm.model, tool_schemas=tool_schemas,
+                    )
+                    messages = list(base)
                     # The tail may have ended on tool results (the agent was
                     # mid-work); nudge it so the replay continues the task.
                     if messages and messages[-1].get("role") == "tool":
@@ -1624,6 +1741,27 @@ class Agent:
                             "role": "user",
                             "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
                         })
+                    messages.extend(self._pending_nudges)
+                    _cached_messages = list(base)
+                    self._compaction_count += 1
+                    yield AgentEvent("compacted", {
+                        "message": "Context window exceeded — compacted and retrying",
+                        "mode": "forced",
+                        "count": self._compaction_count,
+                        "tokens_before": tokens_before,
+                        "tokens_after": tokens_after,
+                    })
+                    ctx_after = check_context_limit(
+                        base, self.config.llm.model, context_window,
+                        tool_schemas=tool_schemas,
+                        threshold_pct=threshold_pct,
+                        reserve_tokens=reserve_tokens,
+                    )
+                    yield AgentEvent("context", {
+                        "tokens": ctx_after["total_tokens"],
+                        "usage_pct": ctx_after["usage_pct"],
+                        "severity": ctx_after["severity"],
+                    })
             # A safety filter that also produced text (or tool calls) is a partial
             # result, not a refusal — keep it and let the normal flow continue.
             # Only a turn that came back empty *and* carries a filter finish

@@ -53,6 +53,10 @@ def count_tokens(messages: list[dict], model: str = "gpt-4", tool_schemas: list[
     for msg in messages:
         total += 4  # every message format: <|start|>{role}\n{content}\n<|end|>
         for key, value in msg.items():
+            if key == "role":
+                # The role is already covered by the per-message envelope above;
+                # tokenizing it again inflated every message by a token or two.
+                continue
             if key == "tool_calls":
                 # Use JSON serialization for more accurate OpenAI wire format.
                 # Must be checked before the list branch below — tool_calls is
@@ -208,22 +212,47 @@ def check_context_limit(
     model: str = "gpt-4",
     context_window: int = 128000,
     tool_schemas: list[dict] | None = None,
+    threshold_pct: int = 75,
+    reserve_tokens: int = 0,
 ) -> dict:
     """Check if we're approaching the context limit.
 
+    ``threshold_pct`` is the configured trigger point (the value of
+    ``[compaction] threshold_pct``). ``reserve_tokens`` is the room the next
+    response needs (the model's output budget); counting against the full
+    window made a history look safe right up until the provider ran out of
+    space mid-reply.
+
     Returns dict with:
         - total_tokens: estimated total tokens
-        - headroom: tokens remaining
+        - headroom: tokens remaining in the usable window
         - needs_compaction: True if we should compact
         - severity: "ok" | "warning" | "critical"
+        - usable_window / threshold_pct: the values the decision used
     """
-    tokens = count_tokens(messages, model, tool_schemas=tool_schemas)
-    headroom = context_window - tokens
-    usage_pct = tokens / context_window
+    try:
+        threshold_pct = float(threshold_pct)
+    except (TypeError, ValueError):
+        threshold_pct = 75.0
+    if not 0 < threshold_pct <= 100:
+        threshold_pct = 75.0
+    try:
+        reserve_tokens = max(0, int(reserve_tokens))
+    except (TypeError, ValueError):
+        reserve_tokens = 0
 
-    if usage_pct > 0.9:
+    usable_window = max(1, int(context_window) - reserve_tokens)
+    tokens = count_tokens(messages, model, tool_schemas=tool_schemas)
+    headroom = usable_window - tokens
+    usage_pct = tokens / usable_window
+
+    threshold = threshold_pct / 100.0
+    # Keep the default 75/90 split: "critical" is 15 points above the trigger,
+    # capped below 100% so a 99% threshold still has a critical band.
+    critical_threshold = min(0.99, threshold + 0.15)
+    if usage_pct > critical_threshold:
         severity = "critical"
-    elif usage_pct > 0.75:
+    elif usage_pct >= threshold:
         severity = "warning"
     else:
         severity = "ok"
@@ -234,11 +263,45 @@ def check_context_limit(
         "needs_compaction": severity != "ok",
         "severity": severity,
         "usage_pct": round(usage_pct * 100, 1),
+        "usable_window": usable_window,
+        "threshold_pct": threshold_pct,
+        "reserve_tokens": reserve_tokens,
     }
 
 
-def _extract_conversation_text(messages: list[dict]) -> str:
-    """Convert a list of OpenAI-format messages to plain text for summarization."""
+def _fit_text_to_tokens(text: str, max_tokens: int, model: str = "gpt-4") -> str:
+    """Trim text to a token budget, keeping both ends of the conversation.
+
+    The beginning usually holds the task and the end holds the most recent
+    state, so dropping only the middle loses less than truncating the tail.
+    """
+    if max_tokens <= 0 or not text:
+        return ""
+    encoding = _get_encoding(model)
+    ids = encoding.encode(text)
+    if len(ids) <= max_tokens:
+        return text
+
+    keep_head = max(1, max_tokens // 4)
+    keep_tail = max(1, max_tokens - keep_head)
+    omitted = len(ids) - keep_head - keep_tail
+    return (
+        f"{encoding.decode(ids[:keep_head])}\n\n"
+        f"... [{omitted} tokens omitted to fit the compaction model window] ...\n\n"
+        f"{encoding.decode(ids[-keep_tail:])}"
+    )
+
+
+def _extract_conversation_text(
+    messages: list[dict],
+    tool_result_max_tokens: int | None = None,
+) -> str:
+    """Convert a list of OpenAI-format messages to plain text for summarization.
+
+    ``tool_result_max_tokens`` caps one tool result in the summarizer input.
+    When omitted, the historical 3000-character cap is kept for callers that
+    only need a rough text rendering.
+    """
     parts = []
     for msg in messages:
         role = msg.get("role", "unknown")
@@ -247,8 +310,11 @@ def _extract_conversation_text(messages: list[dict]) -> str:
         content = msg.get("content", "") or ""
         if role == "tool":
             tool_call_id = msg.get("tool_call_id", "")
-            # Truncate very long tool outputs for the summarizer
-            if len(content) > 3000:
+            if tool_result_max_tokens:
+                # Same truncation policy tools use for their output budget:
+                # keep the start and preserve error lines from the end.
+                content = truncate_tool_result(content, max_tokens=tool_result_max_tokens)
+            elif len(content) > 3000:
                 content = content[:3000] + "\n... [truncated]"
             parts.append(f"[Tool Result ({tool_call_id})]: {content}")
         elif role == "assistant":
@@ -298,6 +364,8 @@ async def llm_compact_messages(
     previous_summary: str = "",
     compaction_model: str = "",
     main_llm_config: LLMConfig | None = None,
+    tool_result_max_tokens: int | None = None,
+    max_input_tokens: int | None = None,
 ) -> tuple[list[dict], str]:
     """Use LLM to summarize old messages, preserving recent turns intact.
 
@@ -308,6 +376,10 @@ async def llm_compact_messages(
         previous_summary: Previous compaction summary to merge with new content.
         compaction_model: Model to use for compaction (empty = use main model).
         main_llm_config: Fallback LLM config if compaction_model is empty.
+        tool_result_max_tokens: Per-tool-result cap in the summarizer input.
+        max_input_tokens: Budget for the compaction request (model window minus
+            the reserved output). The head is trimmed to fit rather than
+            sending an oversized prompt to the compaction model.
 
     Returns:
         Tuple of (compacted messages list, new summary text).
@@ -350,9 +422,26 @@ async def llm_compact_messages(
         return messages, previous_summary
 
     # Convert head to text for summarization
-    head_text = _extract_conversation_text(head_messages)
+    head_text = _extract_conversation_text(
+        head_messages,
+        tool_result_max_tokens=tool_result_max_tokens,
+    )
     if not head_text.strip():
         return messages, previous_summary
+
+    if max_input_tokens:
+        # Leave room for the summary template, the previous summary and the
+        # chat-format envelope. Without this a long first compaction could
+        # itself overflow the compaction model and silently leave the history
+        # uncompacted.
+        budget_model = compaction_model or (
+            main_llm_config.model if main_llm_config else "gpt-4"
+        )
+        budget_encoding = _get_encoding(budget_model)
+        previous_tokens = len(budget_encoding.encode(previous_summary or ""))
+        scaffold_tokens = len(budget_encoding.encode(SUMMARY_TEMPLATE)) + 800
+        head_budget = max(256, int(max_input_tokens) - previous_tokens - scaffold_tokens)
+        head_text = _fit_text_to_tokens(head_text, head_budget, model=budget_model)
 
     # Build compaction prompt
     user_prompt = COMPACTION_USER_PROMPT.format(

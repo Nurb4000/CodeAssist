@@ -67,11 +67,13 @@ The password is NEVER accepted via query parameters (security best practice).
 // Tool execution result
 {"type": "tool_result", "id": "...", "name": "...", "output": "..."}
 
-// Context usage info before compaction
+// Context usage. Emitted before compaction, and again after it when the
+// request actually shrank (tokens is the size of the next request).
 {"type": "context", "tokens": 12345, "usage_pct": 85.2, "severity": "warning"}
 
-// Context was compacted
-{"type": "compacted", "message": "..."}
+// Context was compacted. tokens_before/tokens_after make the reduction
+// visible; clients must not assume this fires when nothing shrank.
+{"type": "compacted", "message": "...", "mode": "llm", "count": 1, "tokens_before": 12345, "tokens_after": 4567}
 
 // Agent needs user confirmation
 {"type": "confirm_request", "id": "...", "tool": "...", "arguments": {...}, "in_workspace": bool}

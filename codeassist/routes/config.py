@@ -52,6 +52,9 @@ async def api_config():
         "context_window": cfg.llm.context_window,
         "effective_context_window": window,
         "detected_context_window": backend.get("context_window"),
+        # The UI uses the configured trigger (not a hardcoded 75%) when it
+        # colours the context gauge from real provider prompt-token counts.
+        "compaction_threshold_pct": cfg.compaction.threshold_pct,
         # Only claim auto-detection for local backends; external providers keep
         # showing the configured model with no "auto" badge.
         "backend_source": ("backend" if (backend.get("source") and not external) else None),

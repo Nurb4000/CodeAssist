@@ -1,6 +1,7 @@
 """Tests for token counting, context compaction, and truncation."""
 from codeassist.tokens import (
     _extract_conversation_text,
+    _fit_text_to_tokens,
     check_context_limit,
     compact_messages,
     count_tokens,
@@ -205,6 +206,55 @@ class TestCheckContextLimit:
         with_s = check_context_limit(msgs, tool_schemas=schemas)
         assert with_s["total_tokens"] >= without["total_tokens"]
 
+    def test_threshold_pct_controls_trigger(self):
+        """The configured threshold must be the trigger, not a hardcoded 75%."""
+        msgs = [{"role": "user", "content": "word " * 100}]
+        tokens = check_context_limit(msgs)["total_tokens"]
+        window = int(tokens / 0.5)  # roughly 50% usage
+
+        default = check_context_limit(msgs, context_window=window)
+        custom = check_context_limit(msgs, context_window=window, threshold_pct=40)
+
+        assert default["needs_compaction"] is False
+        assert default["severity"] == "ok"
+        assert custom["needs_compaction"] is True
+        assert custom["severity"] == "warning"
+        assert custom["threshold_pct"] == 40
+
+    def test_output_reserve_shrinks_the_usable_window(self):
+        """Room for the next response is not free context."""
+        msgs = [{"role": "user", "content": "word " * 100}]
+        tokens = check_context_limit(msgs)["total_tokens"]
+        window = int(tokens / 0.7)  # roughly 70% full
+
+        without = check_context_limit(msgs, context_window=window)
+        with_reserve = check_context_limit(
+            msgs, context_window=window, reserve_tokens=int(window * 0.1),
+        )
+
+        assert without["needs_compaction"] is False
+        assert with_reserve["needs_compaction"] is True
+        assert with_reserve["usable_window"] < window
+        assert with_reserve["headroom"] < without["headroom"]
+
+    def test_invalid_threshold_falls_back_to_default(self):
+        msgs = [{"role": "user", "content": "hello"}]
+        result = check_context_limit(msgs, context_window=128000, threshold_pct=0)
+        assert result["threshold_pct"] == 75
+
+
+class TestFitTextToTokens:
+    def test_short_text_is_unchanged(self):
+        assert _fit_text_to_tokens("hello", 100) == "hello"
+
+    def test_trims_the_middle_and_keeps_both_ends(self):
+        text = "START " + ("middle " * 2000) + " END"
+        fitted = _fit_text_to_tokens(text, 100)
+        assert "START" in fitted
+        assert "END" in fitted
+        assert "tokens omitted" in fitted
+        assert len(fitted) < len(text)
+
 
 class TestExtractConversationText:
     def test_skips_system_messages(self):
@@ -249,6 +299,13 @@ class TestExtractConversationText:
         ]
         text = _extract_conversation_text(msgs)
         assert "[truncated]" in text
+
+    def test_tool_result_token_cap_is_used_when_provided(self):
+        msgs = [
+            {"role": "tool", "content": "x" * 5000, "tool_call_id": "call_1"},
+        ]
+        text = _extract_conversation_text(msgs, tool_result_max_tokens=100)
+        assert "truncated to 100" in text
 
 
 class TestStripMedia:

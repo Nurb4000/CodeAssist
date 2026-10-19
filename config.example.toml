@@ -155,7 +155,7 @@ preserve_recent_tokens = 4000
 # Example: model = "gpt-4o-mini"
 model = ""
 
-# Maximum tokens for truncated tool results
+# Per-tool-result cap when building the LLM compaction prompt
 tool_result_max_tokens = 4000
 
 [snapshot]
