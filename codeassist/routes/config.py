@@ -142,8 +142,8 @@ async def model_status():
     Sends a lightweight test request to the configured LLM backend and returns
     the response time, model name, and context window.
     """
-    from ..config import get_config
     from ..llm import LLMClient
+    from ..server import get_config
 
     cfg = get_config()
     llm = LLMClient(cfg.llm)

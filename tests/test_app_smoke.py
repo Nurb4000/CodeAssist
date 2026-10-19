@@ -91,6 +91,45 @@ def test_auth_middleware_and_health(live_client):
         cfg.server.password = ""
 
 
+def test_model_status_endpoint_works(live_client, monkeypatch):
+    """/api/model/status must not 500.
+
+    Regression: the route imported `get_config` from `codeassist.config`, which
+    defines only `load_config`, so the handler raised ImportError on every call.
+    The LLM stream is stubbed so the probe never leaves the process.
+    """
+    import codeassist.llm as llm_mod
+
+    async def _stub_stream(self, *args, **kwargs):
+        yield llm_mod.Finish("stop", usage=llm_mod.Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stub_stream)
+
+    r = live_client.get("/api/model/status")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["available"] is True
+    assert "model" in body and "context_window" in body
+    assert body["response_time_ms"] is not None
+
+
+def test_model_status_reports_backend_error(live_client, monkeypatch):
+    """A failing backend is reported as unavailable, not a 500."""
+    import codeassist.llm as llm_mod
+
+    async def _boom(self, *args, **kwargs):
+        raise ConnectionError("backend down")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _boom)
+
+    r = live_client.get("/api/model/status")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["available"] is False
+    assert "backend down" in body["error"]
+
+
 def test_api_status_shape(live_client):
     r = live_client.get("/api/status")
     assert r.status_code == 200
