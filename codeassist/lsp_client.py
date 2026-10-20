@@ -44,6 +44,26 @@ class LSPClient:
         self._readers: dict[str, asyncio.Task] = {}
         self._notifications: asyncio.Queue = asyncio.Queue()
 
+    @staticmethod
+    def _to_uri(value: str | Path) -> str:
+        """Normalize a path or URI into a ``file://`` URI string.
+
+        LSP params must carry a URI, but the LSP tool handlers and apply_patch
+        pass a ``Path`` (or a plain filesystem path). A ``Path`` embedded in the
+        request dict raises ``TypeError: Object of type PosixPath is not JSON
+        serializable`` inside ``_send_request`` -- and that raise happens
+        *before* its try block, so the caller's broad ``except`` logged it at
+        debug and every LSP action silently returned "not found"/empty. A plain
+        path string serializes without error but is still the wrong value for
+        the server. Normalize both shapes here.
+        """
+        if isinstance(value, Path):
+            return value.as_uri()
+        text = str(value or "")
+        if text.startswith("file://"):
+            return text
+        return Path(text).resolve().as_uri()
+
     async def start_server(self, name: str, command: str, args: list[str],
                           languages: list[str], workspace: Path):
         """Start an LSP server process."""
@@ -191,7 +211,7 @@ class LSPClient:
             return
         await self._send_notification(proc, "textDocument/didOpen", {
             "textDocument": {
-                "uri": uri,
+                "uri": self._to_uri(uri),
                 "languageId": language_id,
                 "version": 1,
                 "text": text,
@@ -204,12 +224,13 @@ class LSPClient:
         if not proc:
             return
         await self._send_notification(proc, "textDocument/didChange", {
-            "textDocument": {"uri": uri, "version": version},
+            "textDocument": {"uri": self._to_uri(uri), "version": version},
             "contentChanges": [{"text": text}],
         })
 
-    async def get_diagnostics(self, uri: str, language_id: str) -> list[LSPDiagnostic]:
+    async def get_diagnostics(self, uri: str | Path, language_id: str) -> list[LSPDiagnostic]:
         """Get diagnostics for a file. Sends didOpen then waits briefly for diagnostics."""
+        uri = self._to_uri(uri)
         for name in self._servers:
             try:
                 await self.did_open(name, uri, language_id, "")
@@ -238,9 +259,10 @@ class LSPClient:
                 log.debug("get_diagnostics failed on %s: %s", name, e)
         return []
 
-    async def format_document(self, uri: str, document_text: str) -> str | None:
+    async def format_document(self, uri: str | Path, document_text: str) -> str | None:
         """Format a document using the LSP server."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/formatting", {
                     "textDocument": {"uri": uri},
@@ -272,9 +294,10 @@ class LSPClient:
                 log.debug("format_document failed on %s: %s", name, e)
         return None
 
-    async def get_completions(self, uri: str, line: int, character: int) -> list[dict]:
+    async def get_completions(self, uri: str | Path, line: int, character: int) -> list[dict]:
         """Get completions for a position in a file."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/completion", {
                     "textDocument": {"uri": uri},
@@ -294,9 +317,10 @@ class LSPClient:
                 log.debug("get_completions failed on %s: %s", name, e)
         return []
 
-    async def get_definition(self, uri: str, line: int, character: int) -> list[dict]:
+    async def get_definition(self, uri: str | Path, line: int, character: int) -> list[dict]:
         """Get definition locations for a symbol at position."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/definition", {
                     "textDocument": {"uri": uri},
@@ -312,9 +336,10 @@ class LSPClient:
                 log.debug("get_definition failed on %s: %s", name, e)
         return []
 
-    async def get_references(self, uri: str, line: int, character: int, include_declaration: bool = True) -> list[dict]:
+    async def get_references(self, uri: str | Path, line: int, character: int, include_declaration: bool = True) -> list[dict]:
         """Get all references to a symbol at position."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/references", {
                     "textDocument": {"uri": uri},
@@ -327,9 +352,10 @@ class LSPClient:
                 log.debug("get_references failed on %s: %s", name, e)
         return []
 
-    async def get_hover(self, uri: str, line: int, character: int) -> dict:
+    async def get_hover(self, uri: str | Path, line: int, character: int) -> dict:
         """Get hover information for a symbol at position."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/hover", {
                     "textDocument": {"uri": uri},
@@ -353,9 +379,10 @@ class LSPClient:
                 log.debug("get_hover failed on %s: %s", name, e)
         return {}
 
-    async def get_document_symbols(self, uri: str) -> list[dict]:
+    async def get_document_symbols(self, uri: str | Path) -> list[dict]:
         """Get all symbols in a document."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/documentSymbol", {
                     "textDocument": {"uri": uri},
@@ -397,9 +424,10 @@ class LSPClient:
                 log.debug("get_workspace_symbols failed on %s: %s", name, e)
         return []
 
-    async def rename_symbol(self, uri: str, line: int, character: int, new_name: str) -> dict | None:
+    async def rename_symbol(self, uri: str | Path, line: int, character: int, new_name: str) -> dict | None:
         """Rename a symbol and all its references."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/rename", {
                     "textDocument": {"uri": uri},
@@ -412,9 +440,10 @@ class LSPClient:
                 log.debug("rename_symbol failed on %s: %s", name, e)
         return None
 
-    async def get_type_definition(self, uri: str, line: int, character: int) -> list[dict]:
+    async def get_type_definition(self, uri: str | Path, line: int, character: int) -> list[dict]:
         """Get type definition locations for a symbol at position."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/typeDefinition", {
                     "textDocument": {"uri": uri},
@@ -428,9 +457,10 @@ class LSPClient:
                 log.debug("get_type_definition failed on %s: %s", name, e)
         return []
 
-    async def get_implementation(self, uri: str, line: int, character: int) -> list[dict]:
+    async def get_implementation(self, uri: str | Path, line: int, character: int) -> list[dict]:
         """Get implementation locations for a symbol at position."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/implementation", {
                     "textDocument": {"uri": uri},
@@ -444,9 +474,10 @@ class LSPClient:
                 log.debug("get_implementation failed on %s: %s", name, e)
         return []
 
-    async def prepare_call_hierarchy(self, uri: str, line: int, character: int) -> list[dict]:
+    async def prepare_call_hierarchy(self, uri: str | Path, line: int, character: int) -> list[dict]:
         """Get call hierarchy items for a symbol at position."""
         for name, proc in self._servers.items():
+            uri = self._to_uri(uri)
             try:
                 result = await self._send_request(proc, "textDocument/prepareCallHierarchy", {
                     "textDocument": {"uri": uri},
