@@ -111,7 +111,15 @@ function openEditModal(title, fields, onSubmit) {
         label.textContent = f.label;
         body.appendChild(label);
         let inp;
-        if (f.type === 'textarea' || f.type === 'json') {
+        if (f.type === 'bool') {
+            // A checkbox, not a text input: collect() reads `inp.checked`, which
+            // is always undefined (→ false) on a text input, so editing an
+            // enabled MCP/LSP server silently disabled it on every save.
+            inp = document.createElement('input');
+            inp.className = 'modal-input';
+            inp.type = 'checkbox';
+            inp.checked = !!f.value;
+        } else if (f.type === 'textarea' || f.type === 'json') {
             inp = document.createElement('textarea');
             inp.className = 'modal-textarea';
         } else {
@@ -120,7 +128,7 @@ function openEditModal(title, fields, onSubmit) {
             if (f.type === 'number') inp.type = 'number';
         }
         inp.dataset.key = f.key;
-        inp.value = f.value ?? '';
+        if (f.type !== 'bool') inp.value = f.value ?? '';
         if (f.required) inp.required = true;
         body.appendChild(inp);
         inputs[f.key] = inp;

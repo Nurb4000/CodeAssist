@@ -193,6 +193,59 @@ test('row actions get their own column, not the last data cell', async () => {
   }
 });
 
+test('editing an enabled MCP server keeps it enabled', async () => {
+  // Regression cover: bool fields were rendered as text inputs, so collect()
+  // read `inp.checked` (undefined on a text input -> false) for every save. The
+  // enabled MCP/LSP server was silently disabled every time the edit dialog was
+  // saved, with no way to keep it on from the form.
+  const { window, document: doc } = await bootAdmin({
+    fixtures: {
+      '/api/mcp/servers': { servers: [{ id: 'srv', name: 'srv', config: {}, enabled: true }] },
+    },
+  });
+
+  // Capture the PUT the Save button issues.
+  const puts = [];
+  const realFetch = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'PUT') puts.push({ url: String(url), body: JSON.parse(opts.body) });
+    return realFetch(url, opts);
+  };
+
+  const editBtn = Array.from(doc.querySelectorAll('#mcp-body .admin-btn'))
+    .find((b) => b.textContent.trim() === 'Edit');
+  editBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  const enabledInput = doc.querySelector('.modal-input[data-key="enabled"]');
+  assert.ok(enabledInput, 'the Enabled field is rendered');
+  assert.strictEqual(enabledInput.type, 'checkbox', 'a bool field must be a checkbox');
+  assert.strictEqual(enabledInput.checked, true, 'an enabled server starts checked');
+
+  const save = Array.from(doc.querySelectorAll('.modal-btn'))
+    .find((b) => b.textContent.trim() === 'Save');
+  save.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.strictEqual(puts.length, 1, 'saving issues one PUT');
+  assert.strictEqual(puts[0].body.enabled, true, 'enabled must survive the save');
+});
+
+test('editing a disabled MCP server keeps it disabled', async () => {
+  const { window, document: doc } = await bootAdmin({
+    fixtures: {
+      '/api/mcp/servers': { servers: [{ id: 'srv', name: 'srv', config: {}, enabled: false }] },
+    },
+  });
+
+  const editBtn = Array.from(doc.querySelectorAll('#mcp-body .admin-btn'))
+    .find((b) => b.textContent.trim() === 'Edit');
+  editBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  const enabledInput = doc.querySelector('.modal-input[data-key="enabled"]');
+  assert.strictEqual(enabledInput.type, 'checkbox');
+  assert.strictEqual(enabledInput.checked, false, 'a disabled server starts unchecked');
+});
+
 test('built-in and custom agents are both listed', async () => {
   const { document: doc } = await bootAdmin({
     fixtures: {
