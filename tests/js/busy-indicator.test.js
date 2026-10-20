@@ -68,6 +68,40 @@ test('cancelling clears the indicator', async () => {
   assert.ok(!isBusy(env).body, 'indicator cleared once the run actually ends');
 });
 
+// ── Mid-stream disconnect ────────────────────────────────────────────────────
+// A socket drop while a turn was streaming permanently wedged the UI: no `done`
+// or `error` can arrive on a dead socket, so isStreaming stayed true (Stop busy,
+// input disabled) and the reconnect timer was itself gated on !isStreaming, so
+// "Disconnected - reconnecting..." sat forever until a manual reload.
+
+test('a disconnect while streaming clears the busy state', async () => {
+  const env = await boot();
+  startTurn(env);
+  assert.ok(isBusy(env).body, 'precondition: busy while streaming');
+
+  // Drive the real onclose handler the way the browser would.
+  env.socket.onclose({ code: 1006 });
+
+  assert.deepStrictEqual(isBusy(env), {
+    body: false, stop: false, stopVisible: false, sendVisible: true, inputDisabled: false,
+  });
+});
+
+test('a disconnect while streaming schedules a reconnect', async () => {
+  const env = await boot();
+  startTurn(env);
+  const before = env.sockets.length;
+
+  env.socket.onclose({ code: 1006 });
+  // Once a session is live the reconnect delay is 3000ms; wait past it.
+  await new Promise((r) => setTimeout(r, 3200));
+
+  assert.ok(
+    env.sockets.length > before,
+    'a new socket is opened after the drop, not left disconnected forever',
+  );
+});
+
 test('the stop button stays available across tool calls in a turn', async () => {
   const env = await boot();
   startTurn(env);

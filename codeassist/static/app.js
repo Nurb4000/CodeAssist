@@ -1731,16 +1731,32 @@ function connectWS() {
         wsConnected = false;
         if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         updateConnectionStatus('disconnected');
-        if (!isStreaming) setBusy(false);
+        // A drop while a turn is streaming used to wedge the UI: no `done`/
+        // `error` can ever arrive now, so isStreaming stayed true, Stop stayed
+        // busy, the input stayed disabled, and the reconnect below was gated on
+        // !isStreaming so it never ran. The socket is gone, so treat the drop as
+        // the end of the run: tear the turn down and re-enable the UI.
+        if (isStreaming) {
+            hideProgress();
+            endRun();
+            if (ensureMainMessage().querySelector('.message-content')) {
+                ensureMainMessage().querySelector('.message-content').innerHTML +=
+                    `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Connection lost - the turn was interrupted.</p>`;
+            }
+            scrollToBottom();
+            setBusy(false);
+        }
         // Don't reconnect on4001 (auth failure) or intentional close
         if (event.code === 4001) {
             updateConnectionStatus('error');
             return;
         }
-        // Faster reconnect on initial load
+        // Faster reconnect on initial load. Reconnect regardless of isStreaming:
+        // the run above has already been torn down, and without a reconnect the
+        // user would be stuck disconnected until a manual reload.
         const delay = document.querySelector('.welcome') ? 1000 : 3000;
         reconnectTimer = setTimeout(() => {
-            if (currentSessionId && !isStreaming) connectWS();
+            if (currentSessionId) connectWS();
         }, delay);
     };
 
