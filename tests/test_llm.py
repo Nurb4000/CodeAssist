@@ -359,6 +359,111 @@ class TestStream:
         assert isinstance(events[0], TextDelta)
         assert events[0].content == "Success"
 
+    @pytest.mark.asyncio
+    async def test_mid_stream_failure_after_text_is_not_retried(self, llm_client):
+        """Once text has been yielded, a reconnect would duplicate it.
+
+        The retry loop re-streams the request from the start, so a mid-stream
+        failure after output was already handed to the consumer must surface the
+        error instead of replaying (review item §1.7)."""
+        call_count = [0]
+
+        def _text_chunk(text):
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = text
+            chunk.choices[0].delta.tool_calls = None
+            chunk.usage = None
+            return chunk
+
+        async def mock_create(*args, **kwargs):
+            call_count[0] += 1
+
+            async def stream_response():
+                yield _text_chunk("Hello")
+                raise openai.APIConnectionError(
+                    request=MagicMock(), message="dropped mid-stream"
+                )
+
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        events = []
+        with pytest.raises(openai.APIConnectionError):
+            async for event in llm_client.stream([{"role": "user", "content": "Hi"}]):
+                events.append(event)
+
+        # Only the first attempt ran (no duplication), and exactly one TextDelta
+        # reached the consumer.
+        assert call_count[0] == 1
+        assert [e.content for e in events if isinstance(e, TextDelta)] == ["Hello"]
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_failure_before_output_is_retried_cleanly(self, llm_client):
+        """A failure with no output yet is safely retried with a fresh buffer.
+
+        Tool-call fragments from the aborted attempt must NOT be concatenated
+        with the replayed ones (review item §1.7)."""
+        call_count = [0]
+
+        def _tool_chunk(args_fragment):
+            tc = MagicMock()
+            tc.index = 0
+            tc.id = "call_1"
+            tc.function = MagicMock()
+            tc.function.name = "read"
+            tc.function.arguments = args_fragment
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = None
+            chunk.choices[0].delta.tool_calls = [tc]
+            chunk.usage = None
+            return chunk
+
+        def _finish_chunk():
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = None
+            chunk.choices[0].delta.tool_calls = None
+            chunk.choices[0].finish_reason = "tool_calls"
+            chunk.usage = MagicMock()
+            chunk.usage.prompt_tokens = 20
+            chunk.usage.completion_tokens = 10
+            return chunk
+
+        async def mock_create(*args, **kwargs):
+            call_count[0] += 1
+            attempt = call_count[0]
+
+            async def stream_response():
+                yield _tool_chunk('{"path": "')
+                if attempt == 1:
+                    # Abort after a partial tool-call fragment, before anything
+                    # was emitted (tool calls emit only after a clean finish).
+                    raise openai.APIConnectionError(
+                        request=MagicMock(), message="dropped mid-stream"
+                    )
+                yield _tool_chunk('test.py"}')
+                yield _finish_chunk()
+
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        events = []
+        async for event in llm_client.stream([{"role": "user", "content": "go"}], tools=[]):
+            events.append(event)
+
+        assert call_count[0] == 2
+        tool_calls = [e for e in events if isinstance(e, ToolCall)]
+        assert len(tool_calls) == 1
+        # Clean arguments — not doubled by the aborted attempt's fragment.
+        assert tool_calls[0].arguments == {"path": "test.py"}
+
 
 class TestLLMEvents:
     """Test LLM event dataclasses."""

@@ -328,10 +328,24 @@ class LLMClient:
         if response is None:
             raise RuntimeError("LLM connection failed after all retry attempts")
 
-        current_tool_calls: dict[int, dict] = {}
         stream_backoff = INITIAL_BACKOFF
+        # Tool-call fragments accumulate here and are only emitted after a stream
+        # finishes cleanly. The buffer is reset per attempt (see below): a
+        # reconnect replays the request from the start, and appending the
+        # replayed fragments onto the previous attempt's buffer concatenated two
+        # copies of every argument (e.g. `{"path":"a.py` + `{"path":"a.py"...`),
+        # which then failed json.loads and reached the tool as `{"raw": ...}`.
+        current_tool_calls: dict[int, dict] = {}
 
         for stream_attempt in range(MAX_RETRIES):
+            # A retry re-streams the request from the beginning, so any event we
+            # already handed to the consumer would be duplicated (visible as the
+            # answer repeating itself in the transcript). Once output has been
+            # yielded, a mid-stream failure is therefore NOT retryable — the
+            # caller must see the interruption instead. Only cleanly restart when
+            # nothing has been emitted yet.
+            emitted = False
+            current_tool_calls = {}
             try:
                 async for chunk in response:
                     choice = chunk.choices[0] if chunk.choices else None
@@ -346,6 +360,7 @@ class LLMClient:
                         if delta_text:
                             event = await self._apply_event_transforms(TextDelta(delta_text))
                             if event is not None:
+                                emitted = True
                                 yield event
 
                         # Check reasoning_content independently — models may emit
@@ -354,6 +369,7 @@ class LLMClient:
                         if isinstance(reasoning, str) and reasoning:
                             event = await self._apply_event_transforms(ReasoningDelta(reasoning))
                             if event is not None:
+                                emitted = True
                                 yield event
 
                         if choice.delta.tool_calls:
@@ -384,10 +400,15 @@ class LLMClient:
                             )
                         )
                         if event is not None:
+                            emitted = True
                             yield event
                 break
             except (openai.APIConnectionError, openai.APITimeoutError, asyncio.TimeoutError) as e:  # noqa: UP041 — keep openai's specific timeout error, not just the builtin
                 log.warning("LLM stream interrupted (attempt %d/%d): %s", stream_attempt + 1, MAX_RETRIES, e)
+                if emitted:
+                    # Output reached the consumer; a replay would duplicate it.
+                    log.warning("Not retrying: output was already streamed this attempt")
+                    raise
                 if stream_attempt < MAX_RETRIES - 1:
                     jitter = stream_backoff * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
                     sleep_time = max(0.1, stream_backoff + jitter)
