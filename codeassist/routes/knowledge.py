@@ -91,6 +91,23 @@ async def create_knowledge(body: dict):
     return {"id": entry_id}
 
 
+# NOTE: declared before the "/{entry_id}" catch-all below. FastAPI matches routes
+# in declaration order, so a bare "/semantic" declared afterwards would be
+# swallowed as entry_id="semantic" (returning 404) instead of running the search.
+@router.get("/semantic")
+async def semantic_search(q: str, entry_type: str | None = None, limit: int = 10):
+    """Search knowledge entries using vector embeddings (requires configured embedding model).
+
+    Falls back to text search when no embedding model is configured; the returned
+    ``type`` field reports which path ran so clients aren't misled (F4/G3).
+    """
+    from codeassist.embeddings import get_embedding_manager
+    manager = get_embedding_manager()
+    results = await manager.search_by_embedding(q, limit=limit, entry_type=entry_type)
+    used_vector = any("similarity" in r for r in results) or not results
+    return {"results": results, "type": "semantic" if used_vector else "text"}
+
+
 @router.get("/{entry_id}")
 async def get_knowledge(entry_id: str):
     """Get a single knowledge entry by ID."""
@@ -119,20 +136,6 @@ async def delete_knowledge(entry_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Knowledge entry not found")
     return {"ok": True}
-
-
-@router.get("/semantic")
-async def semantic_search(q: str, entry_type: str | None = None, limit: int = 10):
-    """Search knowledge entries using vector embeddings (requires configured embedding model).
-
-    Falls back to text search when no embedding model is configured; the returned
-    ``type`` field reports which path ran so clients aren't misled (F4/G3).
-    """
-    from codeassist.embeddings import get_embedding_manager
-    manager = get_embedding_manager()
-    results = await manager.search_by_embedding(q, limit=limit, entry_type=entry_type)
-    used_vector = any("similarity" in r for r in results) or not results
-    return {"results": results, "type": "semantic" if used_vector else "text"}
 
 
 @router.get("/{entry_id}/similar")

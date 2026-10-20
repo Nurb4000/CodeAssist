@@ -35,6 +35,8 @@ REST_ENDPOINTS_GET = [
     "/api/git/repos",
     "/api/custom-tools",
     "/api/knowledge",
+    "/api/knowledge/semantic?q=smoke",
+    "/api/subagents/tasks",
 ]
 
 
@@ -128,6 +130,57 @@ def test_model_status_reports_backend_error(live_client, monkeypatch):
     body = r.json()
     assert body["available"] is False
     assert "backend down" in body["error"]
+
+
+def test_literal_routes_not_shadowed_by_catch_all(live_client):
+    """Literal routes must not be swallowed by an earlier "/{param}" route.
+
+    FastAPI matches routes in declaration order. Two routes were declared after
+    a catch-all and were therefore unreachable:
+      * GET /api/knowledge/semantic  -> matched "/{entry_id}" as entry_id="semantic"
+      * GET /api/subagents/tasks/active -> matched "/tasks/{task_id}" as id="active"
+    Both must reach their real handler instead of 404-ing (or, for subagents,
+    returning a task literally named "active").
+    """
+    # Knowledge semantic search: returns {"results", "type"}; the shadowed
+    # "/{entry_id}" handler would 404 with "Knowledge entry not found".
+    r = live_client.get("/api/knowledge/semantic?q=smoke")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "results" in body and "type" in body
+
+    # Subagents active list: returns {"tasks": [...]}; the shadowed
+    # "/tasks/{task_id}" handler would 404 ("Task 'active' not found").
+    r = live_client.get("/api/subagents/tasks/active")
+    assert r.status_code == 200, r.text
+    assert "tasks" in r.json()
+
+
+def seed_active_subagent_task(parent_session_id: str):
+    """Create a pending subagent task so /tasks/active has something to return."""
+    import asyncio
+
+    from codeassist.subagent import subagent_manager
+
+    return asyncio.run(subagent_manager.create_task(
+        description="shadow-test",
+        prompt="noop",
+        subagent_type="general",
+        parent_session_id=parent_session_id,
+    ))
+
+
+def test_active_tasks_route_returns_the_task(live_client):
+    """With a real pending task, /tasks/active must return it (not 404)."""
+    task = seed_active_subagent_task("sess-active")
+    try:
+        r = live_client.get("/api/subagents/tasks/active")
+        assert r.status_code == 200, r.text
+        ids = {t["id"] for t in r.json()["tasks"]}
+        assert task.id in ids
+    finally:
+        from codeassist.subagent import subagent_manager
+        subagent_manager._tasks.pop(task.id, None)
 
 
 def test_api_status_shape(live_client):

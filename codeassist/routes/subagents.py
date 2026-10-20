@@ -19,6 +19,19 @@ async def list_tasks(session_id: str | None = None):
     return {"tasks": tasks}
 
 
+# NOTE: "/tasks/active" is declared before the "/tasks/{task_id}" catch-all.
+# FastAPI matches in declaration order, so declaring it afterwards left it
+# unreachable: the request matched {task_id}="active" and 404'd (or returned a
+# task literally named "active").
+@router.get("/tasks/active")
+async def list_active_tasks(session_id: str | None = None):
+    """List only tasks that are pending or running."""
+    tasks = subagent_manager.get_active_tasks()
+    if session_id:
+        tasks = [t for t in tasks if t.parent_session_id == session_id]
+    return {"tasks": [t.to_dict() for t in tasks]}
+
+
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     """Get a specific subagent task by ID."""
@@ -35,12 +48,3 @@ async def cancel_task(task_id: str):
     if not cancelled:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found or already finished")
     return {"ok": True, "task_id": task_id}
-
-
-@router.get("/tasks/active")
-async def list_active_tasks(session_id: str | None = None):
-    """List only tasks that are pending or running."""
-    tasks = subagent_manager.get_active_tasks()
-    if session_id:
-        tasks = [t for t in tasks if t.parent_session_id == session_id]
-    return {"tasks": [t.to_dict() for t in tasks]}
