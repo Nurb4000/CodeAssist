@@ -171,6 +171,58 @@ class TestCompactMessages:
         result = compact_messages(msgs, keep_recent=20)
         assert result == msgs
 
+    def test_level1_does_not_leave_orphan_tool_result_at_boundary(self):
+        # Regression: escalation level 1 strips an old assistant's tool_calls but
+        # its tool result can survive in the kept `recent` slice when the
+        # recent/old boundary splits the (assistant, tool) pair. That leaves an
+        # orphan tool result -- a provider 400. Compaction must drop it.
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "u0"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_0", "function": {"name": "read"}}]},
+            {"role": "tool", "content": "result 0", "tool_call_id": "call_0"},
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "function": {"name": "read"}}]},
+            {"role": "tool", "content": "result 1", "tool_call_id": "call_1"},
+        ]
+        result = compact_messages(msgs, keep_recent=1, escalation_level=1)
+        # The last tool result (call_1) is in `recent`; its assistant (call_1) was
+        # stripped to a "[Called: ...]" summary in `old`, so the tool result must
+        # be dropped rather than left orphaned.
+        tool_msgs = [m for m in result if m["role"] == "tool"]
+        assert all(
+            any(tc["id"] == m["tool_call_id"]
+                for prev in result
+                if prev.get("role") == "assistant" and prev.get("tool_calls")
+                for tc in prev["tool_calls"])
+            for m in tool_msgs
+        ), "no tool result may be orphaned by compaction"
+
+    def test_compaction_always_yields_a_valid_transcript(self):
+        # Across many sizes/levels, every assistant tool_call must be answered by
+        # a matching tool result and no tool result may be left dangling.
+        def build(n):
+            out = [{"role": "system", "content": "sys"}]
+            for i in range(n):
+                out.append({"role": "user", "content": f"u{i}"})
+                out.append({"role": "assistant", "content": None,
+                            "tool_calls": [{"id": f"c{i}", "function": {"name": "read"}}]})
+                out.append({"role": "tool", "content": "r", "tool_call_id": f"c{i}"})
+            return out
+
+        for level in (0, 1):
+            for keep_recent in (1, 2, 3, 5):
+                result = compact_messages(build(9), keep_recent=keep_recent, escalation_level=level)
+                referenced = set()
+                for m in result:
+                    if m.get("role") == "assistant" and m.get("tool_calls"):
+                        for tc in m["tool_calls"]:
+                            referenced.add(tc["id"])
+                    elif m.get("role") == "tool":
+                        assert m.get("tool_call_id") in referenced, (
+                            f"orphan tool result {m.get('tool_call_id')} at level {level}"
+                        )
+
 
 class TestCheckContextLimit:
     def test_returns_ok_when_under_threshold(self):

@@ -166,6 +166,11 @@ def compact_messages(
     recent = messages[-keep_recent:]
 
     compacted = [system]
+    # tool_call ids whose assistant was stripped to a "[Called: ...]" summary. A
+    # matching tool result can still survive in the kept `recent` slice (when the
+    # recent/old boundary splits the pair); those become orphans and must be
+    # dropped so the compacted transcript stays valid for the provider.
+    stripped_ids: set[str] = set()
 
     if escalation_level == 0:
         # Level 0: Replace tool messages with summaries, truncate assistant content
@@ -196,6 +201,7 @@ def compact_messages(
                 # Keep only function names as a brief summary
                 tool_names = [tc.get("function", {}).get("name", tc.get("name", "?"))
                               for tc in msg.get("tool_calls", [])]
+                stripped_ids.update(tc.get("id") for tc in msg.get("tool_calls", []) if tc.get("id"))
                 compacted.append({
                     "role": "assistant",
                     "content": f"[Called: {', '.join(tool_names)}]",
@@ -204,6 +210,12 @@ def compact_messages(
                 compacted.append(msg)
 
     compacted.extend(recent)
+    # Level 0 keeps both sides of every (assistant, tool) pair, so it cannot
+    # create orphans; only level 1 strips tool_calls and can orphan a surviving
+    # recent tool result. Drop exactly those.
+    if escalation_level >= 1 and stripped_ids:
+        compacted = [m for m in compacted
+                     if not (m.get("role") == "tool" and m.get("tool_call_id") in stripped_ids)]
     return compacted
 
 
