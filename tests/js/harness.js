@@ -41,8 +41,12 @@ class FakeWebSocket {
   static instances = [];
   static OPEN = 1;
 
-  constructor(url) {
+  constructor(url, protocols) {
     this.url = url;
+    // Second WebSocket arg is the requested subprotocol(s). The server
+    // authenticates via Sec-WebSocket-Protocol, so tests assert on this to
+    // verify a stored password is actually sent.
+    this.protocols = protocols;
     this.readyState = 1; // OPEN
     this.sent = [];
     FakeWebSocket.instances.push(this);
@@ -78,10 +82,12 @@ class FakeWebSocket {
  *   ready: Promise<void>, errors: string[]
  * }}
  */
-async function boot({ fixtures = {} } = {}) {
+async function boot({ fixtures = {}, preload = null } = {}) {
   const errors = [];
   const requests = [];
   const routes = { ...API_FIXTURES, ...fixtures };
+  // Each boot simulates a fresh page load, so start from an empty socket log.
+  FakeWebSocket.instances = [];
   const dom = new JSDOM(readStatic('index.html'), {
     url: 'http://localhost:8000/',
     pretendToBeVisual: true,
@@ -116,6 +122,11 @@ async function boot({ fixtures = {} } = {}) {
     };
   };
   window.WebSocket = FakeWebSocket;
+
+  // Optional hook to run against the window before app.js is evaluated, so a
+  // test can seed localStorage (e.g. a stored WebSocket password) that the
+  // bootstrap code reads on load.
+  if (typeof preload === 'function') preload(window);
 
   vm.runInContext(readStatic('app.js'), context, { filename: 'app.js' });
 

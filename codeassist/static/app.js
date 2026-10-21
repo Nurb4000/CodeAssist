@@ -57,6 +57,10 @@ let reconnectTimer = null;
 // connection warm so the UI doesn't flash "Disconnected - reconnecting".
 let pingTimer = null;
 const PING_INTERVAL_MS = 20000;
+// Server password for WebSocket auth (sent as the Sec-WebSocket-Protocol
+// subprotocol). The server never exposes it to the browser, so this holds the
+// value the user typed once and we retry connecting with. Empty until set.
+let wsPassword = '';
 // Per-run run-state for the work-block streaming model (see
 // docs/ui-tool-grouping-plan.md). toolCallCount gives tool calls a stable fallback
 // id when the backend omits one.
@@ -1234,10 +1238,16 @@ function maybeScrollToBottom() {
     }
 }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+function escapeHtml(s) {
+    // Escapes quotes as well as & < >. The previous DOM-based helper (textContent
+    // -> innerHTML) left " and ' untouched, so it was unsafe in attribute context:
+    // escapeHtml is interpolated into double-quoted attributes (e.g. value="..." in
+    // the question dialog) and into single-quoted inline onclick strings, where a
+    // quote in agent/LLM-controlled data broke out and injected markup. Matches the
+    // quote-escaping helper already used by admin.js.
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
 }
 
 function showQuestionDialog(questionId, data) {
@@ -1590,6 +1600,75 @@ async function openImportDialog() {
     });
 }
 
+// Load the stored WebSocket password (if any) once, so a reconnect on a later
+// session reuses it without re-prompting. localStorage can throw in some
+// sandboxed contexts, so guard every access.
+function loadWsPassword() {
+    try {
+        const stored = localStorage.getItem('ws-password');
+        if (stored) wsPassword = stored;
+    } catch (_) { /* ignore: password simply stays unset */ }
+}
+
+// Show a small inline prompt to collect the server password after a 4001 close.
+// The server never tells the client what the password is, so this only lets the
+// user supply it once; it is stored in localStorage and sent as the WebSocket
+// subprotocol on the next connect. Replaces the old "Connection error" dead-end.
+function showWsPasswordPrompt() {
+    const existing = document.getElementById('ws-password-prompt');
+    if (existing) { existing.focus(); return; }
+
+    const container = document.createElement('div');
+    container.id = 'ws-password-prompt';
+    container.className = 'ws-password-prompt';
+    container.innerHTML =
+        '<div class="ws-prompt-label">Server requires a password to connect.</div>' +
+        '<input type="password" class="ws-prompt-input" placeholder="Server password" autocomplete="off">' +
+        '<div class="ws-prompt-error"></div>' +
+        '<div class="ws-prompt-actions">' +
+            '<button class="ws-prompt-btn primary" type="button">Connect</button>' +
+            '<button class="ws-prompt-btn" type="button">Cancel</button>' +
+        '</div>';
+
+    const input = container.querySelector('.ws-prompt-input');
+    const errorEl = container.querySelector('.ws-prompt-error');
+    if (wsPassword) input.value = wsPassword;
+    container.querySelector('.ws-prompt-label').textContent =
+        wsPassword ? 'The stored server password was rejected. Enter it again.'
+                   : 'Server requires a password to connect.';
+
+    const submit = () => {
+        const value = input.value;
+        if (!value) {
+            errorEl.textContent = 'Enter the server password to continue.';
+            return;
+        }
+        try { localStorage.setItem('ws-password', value); } catch (_) { /* ignore */ }
+        wsPassword = value;
+        removeWsPasswordPrompt();
+        connectWS();
+    };
+
+    container.querySelector('.ws-prompt-btn.primary').addEventListener('click', submit);
+    container.querySelectorAll('.ws-prompt-btn').forEach((b) => {
+        b.addEventListener('click', (e) => {
+            if (b.classList.contains('primary')) return;
+            removeWsPasswordPrompt();
+        });
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    });
+
+    document.querySelector('.sidebar-footer').appendChild(container);
+    setTimeout(() => input.focus(), 0);
+}
+
+function removeWsPasswordPrompt() {
+    const el = document.getElementById('ws-password-prompt');
+    if (el) el.remove();
+}
+
 function connectWS() {
     if (ws) {
         ws.onclose = null;
@@ -1601,7 +1680,13 @@ function connectWS() {
     wsConnected = false;
     updateConnectionStatus('connecting');
 
-    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/${currentSessionId}`);
+    // When a server password is configured, the server authenticates the socket
+    // via the Sec-WebSocket-Protocol header (see server.py). We never learn the
+    // password from the server, so this is whatever the user entered once and we
+    // stored. Pass it as the single subprotocol; an empty/absent value means no
+    // auth is required and we connect plainly.
+    const url = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/${currentSessionId}`;
+    ws = wsPassword ? new WebSocket(url, wsPassword) : new WebSocket(url);
 
     ws.onopen = () => {
         wsConnected = true;
@@ -1746,9 +1831,13 @@ function connectWS() {
             scrollToBottom();
             setBusy(false);
         }
-        // Don't reconnect on4001 (auth failure) or intentional close
+        // 4001 is the server's auth-failure code: it means a password is
+        // configured but this browser session has not supplied a matching one.
+        // Rather than leaving the user stuck on "Connection error", offer to
+        // collect the password once and reconnect with it.
         if (event.code === 4001) {
             updateConnectionStatus('error');
+            showWsPasswordPrompt();
             return;
         }
         // Faster reconnect on initial load. Reconnect regardless of isStreaming:
@@ -2285,6 +2374,7 @@ function initSidebarToggle() {
 initSidebarToggle();
 
 (async () => {
+    loadWsPassword();
     await loadConfig();
     let sessions = await api('GET', '/api/sessions');
     if (sessions.length === 0) {
