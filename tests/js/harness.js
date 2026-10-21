@@ -173,7 +173,7 @@ const ADMIN_FIXTURES = {
  * unhandled rejection -- an admin page that never ran still looks like valid
  * static HTML, which is exactly how this regressed.
  */
-async function bootAdmin({ fixtures = {} } = {}) {
+async function bootAdmin({ fixtures = {}, preload = null } = {}) {
   const errors = [];
   const routes = { ...ADMIN_FIXTURES, ...fixtures };
   const dom = new JSDOM(readStatic('admin.html'), {
@@ -187,6 +187,11 @@ async function bootAdmin({ fixtures = {} } = {}) {
   window.CSS = window.CSS || {};
   if (!window.CSS.escape) window.CSS.escape = (s) => String(s);
   window.HTMLElement.prototype.scrollIntoView = function () {};
+
+  // Optional hook to run against the window before admin.js is evaluated, so a
+  // test can seed localStorage (e.g. a persisted sidebar state) that the
+  // bootstrap code reads on load.
+  if (typeof preload === 'function') preload(window);
 
   window.fetch = async (url) => {
     const pathOnly = String(url).split('?')[0];

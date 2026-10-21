@@ -2351,7 +2351,7 @@ function initSidebarToggle() {
         collapse.addEventListener('click', () => {
             const hidden = !app.classList.contains('sidebar-hidden');
             applySidebarHidden(hidden);
-            localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(hidden));
+            localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(!hidden));
         });
     }
     const reveal = document.getElementById('sidebar-reveal');
@@ -2366,7 +2366,7 @@ function initSidebarToggle() {
             e.preventDefault();
             const hidden = !app.classList.contains('sidebar-hidden');
             applySidebarHidden(hidden);
-            localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(hidden));
+            localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(!hidden));
         }
     });
 }
