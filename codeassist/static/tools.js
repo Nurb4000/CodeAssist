@@ -28,6 +28,23 @@ document.querySelectorAll('.nav-item').forEach(item => {
     });
 });
 
+// Row actions are wired by delegation off data-* attributes, NOT inline
+// onclick="viewTool('${name}')" strings. Entity-escaping a name into a JS string
+// literal inside an HTML attribute does not work: the browser HTML-decodes the
+// attribute before the JS is parsed, so an apostrophe in a tool name (which
+// comes from arbitrary custom-tool metadata) closed the string and injected code.
+document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const name = btn.dataset.name;
+    switch (btn.dataset.action) {
+        case 'view': viewTool(name); break;
+        case 'delete': deleteTool(name); break;
+        case 'toggle-trust': toggleTrust(name, btn.dataset.trusted === '1'); break;
+        case 'set-trust': setTrust(name, btn.checked); break;
+    }
+});
+
 function navigateTo(page) {
     currentPage = page;
     
@@ -80,12 +97,12 @@ function renderToolsList(tools) {
     }
     
     container.innerHTML = tools.map(tool => `
-        <div class="tool-card" data-type="${tool.type}">
-            <div class="tool-icon ${tool.type}">${tool.type === 'builtin' ? '🔧' : '🛠️'}</div>
+        <div class="tool-card" data-type="${escapeHtml(tool.type)}">
+            <div class="tool-icon ${escapeHtml(tool.type)}">${tool.type === 'builtin' ? '🔧' : '🛠️'}</div>
             <div class="tool-info">
                 <div class="tool-name">
                     ${escapeHtml(tool.name)}
-                    <span class="tool-type-badge ${tool.type}">${tool.type}</span>
+                    <span class="tool-type-badge ${escapeHtml(tool.type)}">${escapeHtml(tool.type)}</span>
                     <span class="trust-badge ${tool.trusted ? 'trusted' : 'untrusted'}">
                         ${tool.trusted ? 'Trusted' : 'Untrusted'}
                     </span>
@@ -97,12 +114,12 @@ function renderToolsList(tools) {
                 </div>
             </div>
             <div class="tool-actions">
-                <button onclick="viewTool('${escapeHtml(tool.name)}')">View</button>
+                <button data-action="view" data-name="${escapeHtml(tool.name)}">View</button>
                 ${tool.type === 'custom' ? `
-                    <button onclick="toggleTrust('${escapeHtml(tool.name)}', ${tool.trusted})">
+                    <button data-action="toggle-trust" data-name="${escapeHtml(tool.name)}" data-trusted="${tool.trusted ? '1' : '0'}">
                         ${tool.trusted ? 'Untrust' : 'Trust'}
                     </button>
-                    <button onclick="deleteTool('${escapeHtml(tool.name)}')" class="btn-danger">Delete</button>
+                    <button data-action="delete" data-name="${escapeHtml(tool.name)}" class="btn-danger">Delete</button>
                 ` : ''}
             </div>
         </div>
@@ -140,13 +157,13 @@ async function loadCustomTools() {
                     </div>
                 </div>
                 <div class="tool-actions">
-                    <button onclick="viewTool('${escapeHtml(tool.name)}')">View Code</button>
+                    <button data-action="view" data-name="${escapeHtml(tool.name)}">View Code</button>
                     <label class="trust-toggle">
-                        <input type="checkbox" ${tool.trusted ? 'checked' : ''} 
-                               onchange="setTrust('${escapeHtml(tool.name)}', this.checked)">
+                        <input type="checkbox" ${tool.trusted ? 'checked' : ''}
+                               data-action="set-trust" data-name="${escapeHtml(tool.name)}">
                         <span class="trust-slider"></span>
                     </label>
-                    <button onclick="deleteTool('${escapeHtml(tool.name)}')" class="btn-danger">Delete</button>
+                    <button data-action="delete" data-name="${escapeHtml(tool.name)}" class="btn-danger">Delete</button>
                 </div>
             </div>
         `).join('');
@@ -243,21 +260,21 @@ document.getElementById('btn-scan')?.addEventListener('click', async () => {
             <div class="scan-item">
                 <div class="scan-header">
                     <strong>${escapeHtml(result.tool_name)}</strong>
-                    <span class="risk-badge ${result.risk_level}">${result.risk_level.toUpperCase()} RISK</span>
+                    <span class="risk-badge ${escapeHtml(result.risk_level)}">${escapeHtml(String(result.risk_level).toUpperCase())} RISK</span>
                 </div>
                 ${result.findings.length > 0 ? `
                     <div class="scan-findings">
                         ${result.findings.map(f => `
                             <div class="scan-finding">
-                                <span class="scan-finding-type">${f.pattern}:</span>
-                                <span class="scan-finding-matches">${f.matches.join(', ')}</span>
+                                <span class="scan-finding-type">${escapeHtml(f.pattern)}:</span>
+                                <span class="scan-finding-matches">${escapeHtml((f.matches || []).join(', '))}</span>
                             </div>
                         `).join('')}
                     </div>
                 ` : '<p>No dangerous patterns found</p>'}
                 <div style="margin-top: 10px;">
-                    <button onclick="viewTool('${escapeHtml(result.tool_name)}')">View Code</button>
-                    <button onclick="deleteTool('${escapeHtml(result.tool_name)}')" class="btn-danger">Delete</button>
+                    <button data-action="view" data-name="${escapeHtml(result.tool_name)}">View Code</button>
+                    <button data-action="delete" data-name="${escapeHtml(result.tool_name)}" class="btn-danger">Delete</button>
                 </div>
             </div>
         `).join('');
@@ -341,11 +358,14 @@ document.querySelectorAll('.close').forEach(btn => {
 });
 
 // Helpers
-function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+function escapeHtml(s) {
+    // Escapes quotes as well as & < >. The previous DOM-based helper (textContent
+    // -> innerHTML) left " and ' untouched, so it was unsafe in attribute and
+    // inline-handler context: this helper is interpolated into single-quoted
+    // onclick="viewTool('...')" strings built from tool names.
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
 }
 
 // Init
