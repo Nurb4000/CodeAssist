@@ -93,6 +93,55 @@ def test_auth_middleware_and_health(live_client):
         cfg.server.password = ""
 
 
+def test_unauthenticated_websocket_is_not_registered(live_client):
+    """A websocket that fails auth is closed with 4001 and must NOT be left in
+    the broadcast set (review item §1.14). The old code registered the socket
+    before checking auth and returned on a failed auth without unregistering,
+    leaking the entry into _active_websockets forever."""
+    import uuid
+
+    from codeassist import server
+
+    import pytest
+    from fastapi import WebSocketDisconnect
+
+    cfg = server.get_config()
+    before = len(server._active_websockets)
+    cfg.server.password = "wachtwoord"
+    try:
+        sid = f"unauth-{uuid.uuid4()}"
+        with live_client.websocket_connect(f"/ws/{sid}") as ws:
+            # The server closes the connection with 4001 before any message is
+            # exchanged; observing that close is what proves it never registered.
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_text()
+        assert exc.value.code == 4001
+        assert len(server._active_websockets) == before, (
+            "unauthenticated socket leaked into the broadcast set"
+        )
+    finally:
+        cfg.server.password = ""
+
+
+def test_authenticated_websocket_is_registered_then_cleaned_up(live_client):
+    """A websocket that passes auth is registered for broadcasting while live and
+    unregistered when it disconnects (no leak in either direction)."""
+    import time
+    import uuid
+
+    from codeassist import server
+
+    before = len(server._active_websockets)
+    sid = f"auth-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        # The endpoint registers the socket right after accept(), before its
+        # receive loop, so it is broadcast-ready without any message being sent.
+        time.sleep(0.2)
+        assert len(server._active_websockets) == before + 1
+
+    assert len(server._active_websockets) == before, "socket not unregistered on disconnect"
+
+
 def test_model_status_endpoint_works(live_client, monkeypatch):
     """/api/model/status must not 500.
 

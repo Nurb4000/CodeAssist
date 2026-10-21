@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextvars
 import hmac
 import json
 import logging
@@ -92,32 +93,50 @@ def get_trust_registry() -> TrustRegistry | None:
     return trust_registry
 
 
-async def broadcast_message(message: dict):
-    """Broadcast a message to all connected WebSocket clients."""
+async def broadcast_message(message: dict, session_id: str | None = None):
+    """Broadcast a message to connected WebSocket clients.
+
+    ``session_id`` scopes delivery to a single session's socket(s). Trust-approval
+    prompts carry per-session context (which file/path a client is probing), so
+    broadcasting them to every session would leak one client's tool and path
+    details to unrelated clients. When ``session_id`` is omitted the message is
+    treated as workspace-global and sent to every registered socket.
+    """
     global _active_websockets
-    if not _active_websockets:
+    if session_id is None:
+        targets = list(_active_websockets)
+    else:
+        targets = [ws for ws, sid in _ws_sessions.items() if sid == session_id]
+
+    if not targets:
         return
-    
+
     disconnected = set()
-    for ws in _active_websockets:
+    for ws in targets:
         try:
             await ws.send_json(message)
         except Exception as e:  # noqa: BLE001
             log.warning("Failed to broadcast to websocket: %s", e)
             disconnected.add(ws)
-    
+
     # Remove disconnected clients
     _active_websockets -= disconnected
+    for ws in disconnected:
+        _ws_sessions.pop(ws, None)
 
 
-def register_websocket(ws: WebSocket):
-    """Register a WebSocket connection."""
+def register_websocket(ws: WebSocket, session_id: str | None = None):
+    """Register a WebSocket connection, tagging it with its session id so
+    session-scoped broadcasts can reach only the right clients."""
     _active_websockets.add(ws)
+    if session_id is not None:
+        _ws_sessions[ws] = session_id
 
 
 def unregister_websocket(ws: WebSocket):
     """Unregister a WebSocket connection."""
     _active_websockets.discard(ws)
+    _ws_sessions.pop(ws, None)
 
 
 def _register_trust_callback(registry: TrustRegistry) -> None:
@@ -137,8 +156,14 @@ def _register_trust_callback(registry: TrustRegistry) -> None:
             return
         message = {"type": "trust_approval_required", **request.to_dict()}
 
+        # The registry callback is global and carries no session, but the prompt
+        # was raised while a particular connection was running. Read that
+        # connection's session from task-local context so the approval reaches
+        # only that client instead of every connected session.
+        session_id = _current_session_id.get()
+
         async def _broadcast():
-            await broadcast_message(message)
+            await broadcast_message(message, session_id=session_id)
 
         try:
             asyncio.run_coroutine_threadsafe(_broadcast(), loop)
@@ -159,6 +184,17 @@ lsp_client: "LSPClient | None" = None
 
 # Track active WebSocket connections for broadcasting
 _active_websockets: set[WebSocket] = set()
+# Maps each registered socket to the session it serves, so session-scoped
+# broadcasts reach only the relevant client(s).
+_ws_sessions: dict[WebSocket, str] = {}
+
+# The connection currently handling a turn. Set at the top of every websocket
+# endpoint run and read by the global trust-approval callback (which has no other
+# way to know which session triggered a prompt) so it can scope the approval
+# broadcast to that session instead of every connected client.
+_current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "codeassist_current_session_id", default=None
+)
 
 
 async def _merged_lsp_specs(cfg: Config) -> dict:
@@ -619,10 +655,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     from codeassist.session_hook import get_session_hook
     cfg = get_config()
 
-    await websocket.accept()
-    register_websocket(websocket)
+    # Tag this connection's task context so the global trust-approval callback
+    # (which has no session of its own) can scope approval prompts to us.
+    _current_session_id.set(session_id)
 
-    # Authenticate WebSocket connections via header only (never query params for security)
+    await websocket.accept()
+
+    # Authenticate BEFORE registering. Registering an unauthenticated socket
+    # both let it receive session-scoped broadcasts it should never see and, on
+    # a failed auth, leaked the entry into _active_websockets (the old code
+    # registered then returned on 4001 without unregistering). Only authenticated
+    # connections are tracked for broadcasting.
     password = cfg.server.password
     if password:
         authenticated = False
@@ -632,6 +675,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         if not authenticated:
             await websocket.close(code=4001, reason="Authentication required")
             return
+
+    register_websocket(websocket, session_id)
 
     session = await Session.get_or_create(session_id)
 

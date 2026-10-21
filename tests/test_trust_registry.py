@@ -275,8 +275,8 @@ class TestServerTrustCallback:
 
         sent = []
 
-        async def fake_broadcast(message):
-            sent.append(message)
+        async def fake_broadcast(message, session_id=None):
+            sent.append((message, session_id))
 
         monkeypatch.setattr(server, "broadcast_message", fake_broadcast)
 
@@ -295,8 +295,12 @@ class TestServerTrustCallback:
         # async callback's coroutine was dropped and never awaited).
         await asyncio.sleep(0.05)
         assert len(sent) == 1
-        assert sent[0]["type"] == "trust_approval_required"
-        assert sent[0]["file_path"] == str(target.resolve())
+        message, session_id = sent[0]
+        assert message["type"] == "trust_approval_required"
+        assert message["file_path"] == str(target.resolve())
+        # No connection context in this unit test, so the broadcast is not scoped
+        # to a session (falls back to workspace-global delivery).
+        assert session_id is None
 
     @pytest.mark.asyncio
     async def test_approved_flag_suppresses_broadcast(self, tmp_path, monkeypatch):
@@ -317,3 +321,82 @@ class TestServerTrustCallback:
         registry._approval_callback(None, True)
         await asyncio.sleep(0.05)
         assert sent == []
+
+
+class TestWebSocketBroadcastScoping:
+    """Server-side broadcast delivery must be scoped per session and only reach
+    registered (authenticated) sockets (review item §1.14)."""
+
+    class _FakeWS:
+        def __init__(self, sid):
+            self.sid = sid
+            self.sent = []
+
+        async def send_json(self, message):
+            self.sent.append(message)
+
+    @pytest.mark.asyncio
+    async def test_scoped_broadcast_reaches_only_that_session(self):
+        import asyncio
+
+        from codeassist import server
+
+        a = self._FakeWS("A")
+        b = self._FakeWS("B")
+        server.register_websocket(a, "A")
+        server.register_websocket(b, "B")
+
+        try:
+            await server.broadcast_message({"type": "prompt"}, session_id="A")
+            assert len(a.sent) == 1
+            assert b.sent == [], "session B must not receive session A's prompt"
+        finally:
+            server.unregister_websocket(a)
+            server.unregister_websocket(b)
+
+    @pytest.mark.asyncio
+    async def test_unscoped_broadcast_reaches_all_registered(self):
+        import asyncio
+
+        from codeassist import server
+
+        a = self._FakeWS("A")
+        b = self._FakeWS("B")
+        server.register_websocket(a, "A")
+        server.register_websocket(b, "B")
+
+        try:
+            await server.broadcast_message({"type": "global"})
+            assert len(a.sent) == 1
+            assert len(b.sent) == 1
+        finally:
+            server.unregister_websocket(a)
+            server.unregister_websocket(b)
+
+    @pytest.mark.asyncio
+    async def test_scoped_broadcast_to_unknown_session_sends_nothing(self):
+        import asyncio
+
+        from codeassist import server
+
+        a = self._FakeWS("A")
+        server.register_websocket(a, "A")
+        try:
+            await server.broadcast_message({"type": "x"}, session_id="nope")
+            assert a.sent == []
+        finally:
+            server.unregister_websocket(a)
+
+    @pytest.mark.asyncio
+    async def test_unregister_drops_socket_from_broadcasts(self):
+        import asyncio
+
+        from codeassist import server
+
+        a = self._FakeWS("A")
+        server.register_websocket(a, "A")
+        server.unregister_websocket(a)
+        assert a not in server._active_websockets
+        assert a not in server._ws_sessions
+        await server.broadcast_message({"type": "z"}, session_id="A")
+        assert a.sent == []
