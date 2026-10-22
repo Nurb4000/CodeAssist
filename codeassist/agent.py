@@ -1215,6 +1215,16 @@ class Agent:
         """
         log.info("Confirmation resolved: id=%s, approved=%s, trust_workspace=%s, trust_shell=%s, trust_tool=%s, remember=%s, trust_all=%s",
                  confirm_id, approved, trust_workspace, trust_shell, trust_tool, remember, trust_all)
+        # Re-validate against server-side state before applying any trust
+        # side-effects. ``_confirm_events`` is registered only when the agent
+        # loop actually raises a confirmation (for both tool prompts and
+        # question prompts), so an id that is absent here means the client is
+        # trying to enable trust out of band -- e.g. approving a fabricated id
+        # with trust_all=True to auto-approve every later tool call. Such a
+        # response is ignored.
+        if confirm_id not in self._confirm_events:
+            log.warning("Ignoring confirm_response for unknown confirmation id=%s", confirm_id)
+            return
         tool_name = self._confirm_tools.pop(confirm_id, None)
         if approved:
             await self.set_trust(trust_workspace=trust_workspace, trust_shell=trust_shell, trust_all=trust_all)

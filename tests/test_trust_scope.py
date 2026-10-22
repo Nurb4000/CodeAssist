@@ -58,6 +58,7 @@ async def test_trust_all_session_flag_skips_confirmation(tmp_path):
     """resolve_confirm(trust_all=True) gates every tool for the session (A1)."""
     agent = _agent("sess-AA", tmp_path)
     agent._confirm_tools["c1"] = "shell"
+    agent._confirm_events["c1"] = asyncio.Event()
     await agent.resolve_confirm("c1", True, trust_all=True)
     assert SESSION_TRUST["sess-AA"].get("all") is True
 
@@ -73,6 +74,7 @@ async def test_trust_all_session_flag_skips_confirmation(tmp_path):
 async def test_trust_all_isolated_per_session_id(tmp_path):
     agent = _agent("sess-AB", tmp_path)
     agent._confirm_tools["c1"] = "shell"
+    agent._confirm_events["c1"] = asyncio.Event()
     await agent.resolve_confirm("c1", True, trust_all=True)
     assert SESSION_TRUST["sess-AB"].get("all") is True
 
@@ -160,6 +162,7 @@ class TestConfirmationRequiredHonorsSessionTrust:
     async def test_per_tool_session_trust_suppresses_rules_ask(self, tmp_path):
         agent = _agent("sess-gate-tool", tmp_path)
         agent._confirm_tools["c1"] = "git"
+        agent._confirm_events["c1"] = asyncio.Event()
         await agent.resolve_confirm("c1", True, trust_tool=True)
         assert await agent._confirmation_required("git", {}, "ask") is False
 
@@ -221,6 +224,7 @@ async def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch)
     """resolve_confirm(trust_tool=True) must trust that tool for the session (A1)."""
     agent = _agent("sess-G", tmp_path)
     agent._confirm_tools["c1"] = "shell"
+    agent._confirm_events["c1"] = asyncio.Event()
     assert "shell" not in SESSION_TOOL_TRUST.get("sess-G", set())
 
     await agent.resolve_confirm("c1", True, trust_tool=True)
@@ -235,6 +239,7 @@ async def test_per_tool_session_trust_via_resolve_confirm(tmp_path, monkeypatch)
 async def test_per_tool_trust_isolated_between_sessions(tmp_path):
     agent = _agent("sess-H", tmp_path)
     agent._confirm_tools["c1"] = "shell"
+    agent._confirm_events["c1"] = asyncio.Event()
     await agent.resolve_confirm("c1", True, trust_tool=True)
 
     assert SESSION_TOOL_TRUST.get("sess-I") is None

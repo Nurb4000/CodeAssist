@@ -350,6 +350,21 @@ class TestAgentConfirmation:
         assert agent._trust_shell == True
 
     @pytest.mark.asyncio
+    async def test_resolve_confirm_unknown_id_does_not_enable_trust(self, agent):
+        """A confirm_response for an id the agent never raised must not enable
+        trust flags. This is the out-of-band escalation guard: a client sending
+        approved=true with trust_all/trust_shell/trust_workspace on a fabricated
+        id cannot turn those flags on for the session."""
+        # No _confirm_tools entry -> the id was never a real pending confirmation.
+        await agent.resolve_confirm("fabricated", approved=True, trust_all=True, trust_shell=True, trust_workspace=True)
+
+        assert agent._trust_all is False
+        assert agent._trust_shell is False
+        assert agent._trust_workspace_writes is False
+        # And nothing was recorded as resolved for the bogus id.
+        assert "fabricated" not in agent._confirm_results
+
+    @pytest.mark.asyncio
     async def test_wait_for_confirm_approved(self, agent):
         """Test waiting for confirmation that gets approved."""
         # Create a pending confirmation
@@ -375,7 +390,7 @@ class TestAgentConfirmation:
         event = asyncio.Event()
         agent._confirm_events["test_id"] = event
         agent._confirm_results["test_id"] = None
-        
+
         # Deny in a task
         async def deny_later():
             await asyncio.sleep(0.01)
