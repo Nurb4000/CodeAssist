@@ -682,10 +682,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # connections are tracked for broadcasting.
     password = cfg.server.password
     if password:
-        authenticated = False
         ws_protocol = websocket.headers.get("sec-websocket-protocol", "")
-        if hmac.compare_digest(ws_protocol, password):
-            authenticated = True
+        # hmac.compare_digest raises TypeError on non-ASCII str passwords (both
+        # args must be bytes or pure-ASCII str). Fail closed rather than crash
+        # the handler with a 500, matching _basic_auth_ok's HTTP path.
+        try:
+            authenticated = hmac.compare_digest(ws_protocol, password)
+        except TypeError:
+            authenticated = False
         if not authenticated:
             await websocket.close(code=4001, reason="Authentication required")
             return

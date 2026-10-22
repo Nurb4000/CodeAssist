@@ -142,6 +142,33 @@ def test_authenticated_websocket_is_registered_then_cleaned_up(live_client):
     assert len(server._active_websockets) == before, "socket not unregistered on disconnect"
 
 
+def test_websocket_auth_fails_closed_on_non_ascii_password(live_client):
+    """A non-ASCII server password must fail WS auth closed (4001), not crash the
+    handler with a 500. hmac.compare_digest raises TypeError on non-ASCII str
+    (both args must be bytes or pure-ASCII str); the HTTP basic-auth path handles
+    this, but the WS path did not."""
+    import uuid
+
+    from codeassist import server
+
+    import pytest
+    from fastapi import WebSocketDisconnect
+
+    cfg = server.get_config()
+    before = len(server._active_websockets)
+    old = cfg.server.password
+    cfg.server.password = "wachtwoörd🔒"
+    try:
+        sid = f"nonascii-{uuid.uuid4()}"
+        with live_client.websocket_connect(f"/ws/{sid}") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_text()
+        assert exc.value.code == 4001, "non-ASCII password must fail closed, not 500"
+        assert len(server._active_websockets) == before
+    finally:
+        cfg.server.password = old
+
+
 def test_model_status_endpoint_works(live_client, monkeypatch):
     """/api/model/status must not 500.
 
