@@ -22,6 +22,7 @@ from .plugins import PluginRegistry
 from .session import init_db
 from .skills import SkillRegistry
 from .tools import ToolRegistry, create_registry
+from .tools.security import WorkspaceViolationError, validate_path
 from .trust_registry import TrustRegistry
 
 if TYPE_CHECKING:
@@ -1073,12 +1074,24 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             elif data.get("type") == "approve_tool":
                 file_path = data.get("file_path")
-                if file_path and trust_registry:
-                    from pathlib import Path as PPath
-                    trust_registry.approve(PPath(file_path))
+                if not file_path:
+                    continue
+                # Re-validate workspace containment before trusting a
+                # client-supplied path. Approving marks the file as a trusted
+                # dynamic tool/plugin and persists its hash to
+                # ~/.codeassist/trusted_tools.json; an out-of-workspace approval
+                # would let a client authorize execution of arbitrary external
+                # code, so reject it here instead.
+                try:
+                    resolved = validate_path(file_path, cfg.workspace)
+                except WorkspaceViolationError as e:
+                    await websocket.send_json({"type": "error", "message": str(e)})
+                    continue
+                if trust_registry:
+                    trust_registry.approve(resolved)
                     await websocket.send_json({
                         "type": "tool_approved",
-                        "file_path": file_path,
+                        "file_path": str(resolved),
                     })
                     # Reload tools to pick up the newly trusted tool
                     if tools is not None:
@@ -1088,12 +1101,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             elif data.get("type") == "reject_tool":
                 file_path = data.get("file_path")
-                if file_path and trust_registry:
-                    from pathlib import Path as PPath
-                    trust_registry.reject(PPath(file_path))
+                if not file_path:
+                    continue
+                try:
+                    resolved = validate_path(file_path, cfg.workspace)
+                except WorkspaceViolationError as e:
+                    await websocket.send_json({"type": "error", "message": str(e)})
+                    continue
+                if trust_registry:
+                    trust_registry.reject(resolved)
                     await websocket.send_json({
                         "type": "tool_rejected",
-                        "file_path": file_path,
+                        "file_path": str(resolved),
                     })
 
     except WebSocketDisconnect:

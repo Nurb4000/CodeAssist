@@ -979,3 +979,82 @@ def test_ws_turn_writes_the_plan_to_its_own_session(live_client, monkeypatch):
             return [r[0] for r in await cur.fetchall()]
 
     assert asyncio.run(_rows()) == ["Plan item"]
+
+
+def test_approve_tool_rejects_out_of_workspace_path(live_client, monkeypatch):
+    """approve_tool must refuse a client-supplied path outside the workspace.
+
+    Approving marks a file as a trusted dynamic tool/plugin and persists its
+    hash to ``~/.codeassist/trusted_tools.json``. An out-of-workspace approval
+    would let a client authorize execution of arbitrary external code, so the
+    handler re-validates containment via ``validate_path()`` and returns an
+    error instead of calling ``trust_registry.approve()``. Regression for the
+    §2 backend bug (one-shot approval workspace-containment).
+    """
+    import uuid
+
+    from codeassist.dynamic_tools import DynamicToolLoader
+    from codeassist.trust_registry import TrustRegistry
+
+    approved = []
+
+    def _record_approve(self, path):
+        approved.append(str(path))
+
+    monkeypatch.setattr(TrustRegistry, "approve", _record_approve)
+    monkeypatch.setattr(DynamicToolLoader, "reload_registry", lambda self, tools: None)
+
+    outside = f"/nonexistent/outside-{uuid.uuid4().hex}.py"
+    sid = f"approve-outside-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "approve_tool", "file_path": outside})
+        seen = []
+        for _ in range(20):
+            data = ws.receive_json()
+            seen.append(data.get("type"))
+            if data.get("type") in ("error", "tool_approved"):
+                break
+
+        assert "tool_approved" not in seen, "out-of-workspace path was approved"
+        assert "error" in seen, f"expected a containment error, got {seen}"
+        assert approved == [], f"approve() must not run for out-of-workspace path: {approved}"
+
+
+def test_approve_tool_allows_in_workspace_path(live_client, monkeypatch):
+    """An in-workspace approval still goes through (containment satisfied)."""
+    import uuid
+    from pathlib import Path
+
+    from codeassist import server as server_mod
+    from codeassist.dynamic_tools import DynamicToolLoader
+    from codeassist.trust_registry import TrustRegistry
+
+    workspace = Path(server_mod.get_config().workspace)
+    approved = []
+
+    def _record_approve(self, path):
+        approved.append(str(path))
+
+    monkeypatch.setattr(TrustRegistry, "approve", _record_approve)
+    monkeypatch.setattr(DynamicToolLoader, "reload_registry", lambda self, tools: None)
+
+    inside = workspace / "tools" / f"approved_{uuid.uuid4().hex}.py"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_text("# trusted tool\n")
+    try:
+        sid = f"approve-inside-{uuid.uuid4()}"
+        with live_client.websocket_connect(f"/ws/{sid}") as ws:
+            ws.send_json({"type": "approve_tool", "file_path": str(inside)})
+            seen = []
+            for _ in range(20):
+                data = ws.receive_json()
+                seen.append(data.get("type"))
+                if data.get("type") in ("error", "tool_approved"):
+                    break
+
+            assert "tool_approved" in seen, f"in-workspace approval rejected: {seen}"
+            assert approved == [str(inside.resolve())], f"approve called with {approved}"
+    finally:
+        inside.unlink(missing_ok=True)
+        if inside.parent.exists() and not any(inside.parent.iterdir()):
+            inside.parent.rmdir()
