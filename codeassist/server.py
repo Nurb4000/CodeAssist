@@ -580,6 +580,10 @@ MAX_SESSION_NAME_LEN = 200
 MAX_MESSAGE_LEN = 100_000
 MAX_IMAGES_PER_MESSAGE = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+# Upper bound on user messages queued behind a running turn. Without a cap an
+# idle-but-connected client could exhaust memory by flooding the session; the
+# alternative to filling this is a polite rejection (see the WS handler).
+MAX_QUEUED_MESSAGES = 100
 ALLOWED_IMAGE_MIME = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 MAX_FILES_PER_MESSAGE = 5
@@ -792,6 +796,70 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     agent = build_agent(current_agent_name)
     agent_task: asyncio.Task | None = None
+    # User messages that arrive while a turn is running are queued here and run
+    # in order once the current turn finishes, instead of being rejected with
+    # "Agent is busy" (which silently dropped them -- see §2 FRAGILE item).
+    pending: asyncio.Queue = asyncio.Queue(maxsize=MAX_QUEUED_MESSAGES)
+    # True while a turn is running OR a queued turn is mid-start (past the
+    # synchronous claim, before run_agent_task's finally clears it). agent_task
+    # is None in that start window, so slot_busy -- not agent_task -- is what
+    # prevents two turns from launching at once across the receive loop and the
+    # done-callback path.
+    slot_busy = False
+
+    def _on_turn_done(turn_task):
+        """Start the next queued turn once this one finishes.
+
+        Registered as an ``asyncio.Task`` done-callback so it fires regardless of
+        how the turn ended, without coupling turn progression to the receive
+        loop (which sits blocked on ``receive_json`` between messages). If the
+        turn was cancelled -- Stop, or the client disconnecting -- the queued
+        follow-ups are dropped rather than continuing an abandoned session.
+        """
+        if pending.empty():
+            return
+        if turn_task.cancelled():
+            while not pending.empty():
+                pending.get_nowait()
+            return
+
+        async def _start_next():
+            nonlocal agent_task, agent, current_agent_name, slot_busy
+            # Claim the slot synchronously (no await between this check and the
+            # set) so a message arriving in the receive loop during the awaits
+            # below cannot also start a turn -- that would run two at once.
+            if slot_busy:
+                return
+            try:
+                content, images, files = pending.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            slot_busy = True
+            attachments = images + files
+            from codeassist.capabilities import model_vision_capable
+            started = False
+            try:
+                if images and not await model_vision_capable(cfg):
+                    # The active model cannot take images; skip silently (the
+                    # client is usually gone by now, so there is nothing to
+                    # reject to).
+                    slot_busy = False
+                    return
+                active_name = await resolve_agent_name()
+                if active_name != current_agent_name:
+                    current_agent_name = active_name
+                    agent = build_agent(active_name)
+                agent_task = asyncio.create_task(
+                    run_agent_task(agent, content, attachments),
+                )
+                agent_task.add_done_callback(_on_turn_done)
+                started = True
+            except Exception:
+                log.exception("Failed to start queued turn")
+            if not started:
+                slot_busy = False
+
+        asyncio.create_task(_start_next())
 
     # Tell the client which agent is active for this session (agent switcher).
     if agent_config_obj:
@@ -805,7 +873,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     async def run_agent_task(runner, message: str, attachments: list | None = None):
         """Relay one turn. `runner` is passed explicitly rather than closed over
         so a turn always uses the agent that was current when it was queued."""
-        nonlocal agent_task
+        nonlocal agent_task, slot_busy
         ended = False  # a `done` event already closed the run out
         try:
             async for event in runner.run(message, attachments or None):
@@ -833,6 +901,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 pass
         finally:
             agent_task = None
+            slot_busy = False
 
     try:
         while True:
@@ -855,10 +924,34 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "error", "message": f"Message too long. Maximum is {MAX_MESSAGE_LEN} characters."})
                     continue
                 if agent_task and not agent_task.done():
-                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    # A turn is already running; queue this message to run in
+                    # order once it finishes instead of dropping it. A full queue
+                    # gets a polite rejection rather than blocking the sender.
+                    try:
+                        pending.put_nowait((content, images, files))
+                    except asyncio.QueueFull:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Too many messages are queued. Please wait for the agent to finish.",
+                        })
                     continue
 
+                # A queued turn may be mid-start here (agent_task momentarily
+                # None). Claim synchronously before any await so we never launch
+                # two turns at once.
+                if slot_busy:
+                    try:
+                        pending.put_nowait((content, images, files))
+                    except asyncio.QueueFull:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Too many messages are queued. Please wait for the agent to finish.",
+                        })
+                    continue
+
+                slot_busy = True
                 if images and not await model_vision_capable(cfg):
+                    slot_busy = False
                     await websocket.send_json({
                         "type": "error",
                         "message": "This model/server does not support images. You can still attach text files.",
@@ -873,6 +966,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     current_agent_name = active_name
                     agent = build_agent(active_name)
                 agent_task = asyncio.create_task(run_agent_task(agent, content, attachments))
+                agent_task.add_done_callback(_on_turn_done)
 
             elif data.get("type") == "cancel":
                 if agent_task and not agent_task.done():

@@ -784,6 +784,61 @@ def test_undo_and_rejected_while_turn_running(live_client, monkeypatch):
         ws.send_json({"type": "cancel"})
 
 
+def test_user_message_queued_not_rejected_while_turn_running(live_client, monkeypatch):
+    """A user message that arrives while a turn is running must be queued and run
+    in order once the turn finishes -- not rejected with 'Agent is busy' and
+    silently dropped.     Regression for the §2 FRAGILE item."""
+    import asyncio
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+
+    seen_prompts = []
+
+    async def _stream(self, messages, tools=None):
+        prompt = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                prompt = m["content"]
+                break
+        seen_prompts.append(prompt)
+        yield TextDelta(f"turn:{prompt}")
+        await asyncio.sleep(1.0)  # keep this turn running long enough to queue the next
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    sid = f"queue-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "first"})
+
+        # Wait until turn 1 is actually streaming; that proves it is running and
+        # that a second message sent now will be queued, not run immediately.
+        started = False
+        for _ in range(100):
+            data = ws.receive_json()
+            if data.get("type") == "text_delta" and data.get("content") == "turn:first":
+                started = True
+                break
+        assert started, f"turn 1 never reached its stream; saw {seen_prompts}"
+
+        # Queue a second message while turn 1 is still running.
+        ws.send_json({"type": "user_message", "content": "second"})
+
+        # It must be queued (no 'Agent is busy' rejection) and then run once the
+        # first turn finishes -- so turn 2's output eventually arrives.
+        second_ran = False
+        for _ in range(100):
+            data = ws.receive_json()
+            if data.get("type") == "error" and data.get("message") == "Agent is busy, please wait":
+                assert False, f"queued message was rejected instead of queued: {data}"
+            if data.get("type") == "text_delta" and data.get("content") == "turn:second":
+                second_ran = True
+                break
+        assert second_ran, f"queued message never ran; saw {seen_prompts}"
+
+
 def test_plan_tasks_are_persisted_and_scoped_per_session(live_client, monkeypatch):
     """A session's plan belongs to that session and outlives the process.
 
