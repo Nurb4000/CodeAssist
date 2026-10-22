@@ -308,6 +308,20 @@ async def _init_subsystems(cfg: Config):
     # Initialize trust registry for secure tool/plugin loading
     trust_registry = TrustRegistry()
     _register_trust_callback(trust_registry)
+
+    # Wire background-subagent completion notifications so a parent session is
+    # actually told when a fire-and-forget subagent finishes (previously the
+    # notification was enqueued but never consumed). Delivery is scoped to the
+    # parent session, matching the per-session broadcast policy.
+    from .subagent import subagent_manager
+
+    async def _notify_subagent_complete(task):
+        await broadcast_message(
+            {"type": "subagent_completed", **task.to_dict()},
+            session_id=task.parent_session_id,
+        )
+
+    subagent_manager.on_background_complete = _notify_subagent_complete
     
     mcp_client = MCPClient() if cfg.mcp.enabled else None
     skill_registry = SkillRegistry(cfg.workspace, cfg.skills) if cfg.skills.enabled else None
