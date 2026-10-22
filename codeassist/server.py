@@ -889,6 +889,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     agent_task.cancel()
 
             elif data.get("type") == "undo":
+                if agent_task and not agent_task.done():
+                    # A turn is mid-flight and holds an in-memory _messages
+                    # snapshot. Deleting rows under it would leave that snapshot
+                    # stale (and could strand tool_calls with no results), so the
+                    # edit has to wait for the turn to finish -- same guard the
+                    # user_message path applies.
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
                 deleted = await session.undo_last_turn()
                 await websocket.send_json({
                     "type": "undo_done",
@@ -896,6 +904,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 })
 
             elif data.get("type") == "rollback":
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
                 message_id = data.get("message_id")
                 if message_id:
                     deleted = await session.delete_messages_after(message_id)

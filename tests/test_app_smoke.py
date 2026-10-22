@@ -742,6 +742,48 @@ def test_ws_cancel_while_waiting_for_first_token(live_client, monkeypatch):
     assert elapsed < 10, f"Stop took {elapsed:.1f}s -- it waited on the stream"
 
 
+def test_undo_and_rejected_while_turn_running(live_client, monkeypatch):
+    """Undo/rollback must not mutate a transcript while a turn is running.
+
+    The running agent holds an in-memory ``_messages`` snapshot; deleting rows
+    mid-turn leaves that snapshot stale and can strand ``tool_calls`` with no
+    results, so the provider rejects the next request. The edit has to wait for
+    the turn to finish -- the same guard the ``user_message`` path applies."""
+    import asyncio
+    import time
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+
+    async def _slow_stream(self, *args, **kwargs):
+        await asyncio.sleep(30)  # keep the turn running well past the test
+        yield TextDelta("far too late")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _slow_stream)
+
+    sid = f"undo-busy-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "run slowly"})
+        time.sleep(0.5)  # let the turn reach its stream before editing
+
+        for kind in ("undo", "rollback"):
+            ws.send_json({"type": kind, "message_id": "some-id"})
+            seen = []
+            for _ in range(20):
+                data = ws.receive_json()
+                seen.append(data.get("type"))
+                if data.get("type") in ("error", "undo_done", "rollback_done"):
+                    break
+
+            assert f"{kind}_done" not in seen, f"{kind} executed mid-turn; agent snapshot will go stale"
+            assert "error" in seen, f"expected a busy error for {kind}, got {seen}"
+
+        # Tear down the still-running turn.
+        ws.send_json({"type": "cancel"})
+
+
 def test_plan_tasks_are_persisted_and_scoped_per_session(live_client, monkeypatch):
     """A session's plan belongs to that session and outlives the process.
 
