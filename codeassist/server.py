@@ -1038,7 +1038,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if question_id:
                     await agent.resolve_confirm(question_id, False)
                     question_tool = tools.get("question")
-                    if question_tool and hasattr(question_tool, "reject_question"):
+                    # Only dismiss a prompt this turn actually raised. reject_question
+                    # mutates the process-wide QuestionTool state and writes to the
+                    # questions table, so a fabricated/stale id (one the agent is not
+                    # waiting on) must not touch shared state mid-turn -- the same
+                    # out-of-band class the confirm_id membership guard closes for
+                    # trust approvals (§15.18).
+                    if (question_tool and hasattr(question_tool, "reject_question")
+                            and agent.has_pending_confirmation(question_id)):
                         question_tool.reject_question(question_id)
 
             elif data.get("type") == "switch_agent":

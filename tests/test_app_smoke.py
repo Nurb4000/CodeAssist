@@ -784,6 +784,90 @@ def test_undo_and_rejected_while_turn_running(live_client, monkeypatch):
         ws.send_json({"type": "cancel"})
 
 
+def test_ws_switch_agent_busy_while_turn_running(live_client, monkeypatch):
+    """switch_agent must not swap the running agent mid-turn.
+
+    A switch rebuilds the agent (permission ruleset, step budget) under a turn
+    that already holds a snapshot of the old one, so -- like undo/rollback -- it
+    is rejected with a busy error until the turn finishes instead of mutating
+    shared state underneath the running agent. Regression for the §2 fragile
+    out-of-band mid-turn race."""
+    import asyncio
+    import time
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+
+    async def _slow_stream(self, *args, **kwargs):
+        await asyncio.sleep(30)  # keep the turn running well past the test
+        yield TextDelta("far too late")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _slow_stream)
+
+    sid = f"switch-busy-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        _drain_until(ws, "active_agent")  # starts on the default agent
+        ws.send_json({"type": "user_message", "content": "run slowly"})
+        time.sleep(0.5)  # let the turn reach its stream before switching
+
+        ws.send_json({"type": "switch_agent", "agent_name": "research"})
+        seen = []
+        for _ in range(20):
+            data = ws.receive_json()
+            seen.append(data.get("type"))
+            if data.get("type") == "error":
+                break
+
+        assert "agent_switched" not in seen, "switch_agent ran mid-turn; agent rebuilt under a running turn"
+        assert "error" in seen, f"expected a busy error for switch_agent, got {seen}"
+
+        # Tear down the still-running turn.
+        ws.send_json({"type": "cancel"})
+
+
+def test_ws_question_rejected_ignores_fabricated_id(live_client, monkeypatch):
+    """A question_rejected for an id the current turn never raised must not touch
+    shared state.
+
+    reject_question mutates the process-wide QuestionTool dicts and writes the
+    questions table, so it has to be gated on a genuinely pending confirmation --
+    otherwise any client could mutate that state out of band mid-turn. The WS
+    receive loop is strictly ordered, so a quick follow-up turn guarantees the
+    fabricated request has been processed by the time its ``done`` arrives.
+    Regression for the §2 fragile out-of-band mid-turn race."""
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, Usage
+    from codeassist.tools.advanced import QuestionTool
+
+    calls = []
+    original = QuestionTool.reject_question
+
+    def _recording(self, question_id):
+        calls.append(question_id)
+        return original(self, question_id)
+
+    monkeypatch.setattr(QuestionTool, "reject_question", _recording)
+
+    async def _quick_stream(self, messages, tools=None):
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _quick_stream)
+
+    sid = f"question-fabricated-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        _drain_until(ws, "active_agent")
+        # Fabricated id first; processed before the follow-up turn (WS is ordered).
+        ws.send_json({"type": "question_rejected", "id": "fabricated-not-pending"})
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_until(ws, "done")
+
+    assert calls == [], f"reject_question ran for a non-pending id: {calls}"
+
+
 def test_user_message_queued_not_rejected_while_turn_running(live_client, monkeypatch):
     """A user message that arrives while a turn is running must be queued and run
     in order once the turn finishes -- not rejected with 'Agent is busy' and

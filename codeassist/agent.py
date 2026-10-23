@@ -1207,6 +1207,18 @@ class Agent:
         """
         return self._confirm_requests.pop(confirm_id, None)
 
+    def has_pending_confirmation(self, confirm_id: str) -> bool:
+        """Whether ``confirm_id`` refers to a prompt this turn actually raised.
+
+        Out-of-band WS events (a stale/duplicate ``confirm_response``, a
+        fabricated ``question_rejected``) arrive while the turn is running and
+        must not mutate shared process-wide state -- the trust registry, the
+        question tool's per-session dicts, the questions table. Only an id that
+        is currently pending (registered when the loop raised the prompt) is
+        genuine; everything else is dropped here before it can touch anything.
+        """
+        return confirm_id in self._confirm_events
+
     async def resolve_confirm(self, confirm_id: str, approved: bool, trust_workspace: bool = False, trust_shell: bool = False, trust_tool: bool = False, remember: bool = False, trust_all: bool = False, answer: str | None = None):
         """Resolve a pending confirmation from WebSocket.
 
