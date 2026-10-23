@@ -248,6 +248,10 @@ class Config:
                 name=raw.get("agent", {}).get("name", "CodeAssist"),
                 default_agent=raw.get("agent", {}).get("default_agent", "default"),
                 subagent_depth=raw.get("agent", {}).get("subagent_depth", 1),
+                auto_create_skills=raw.get("agent", {}).get("auto_create_skills", False),
+                auto_create_tools=raw.get("agent", {}).get("auto_create_tools", False),
+                max_auto_creations=raw.get("agent", {}).get("max_auto_creations", 3),
+                min_confidence=raw.get("agent", {}).get("min_confidence", 0.7),
             ),
             tools=ToolConfig(
                 shell_timeout=raw.get("tools", {}).get("shell_timeout", 120),

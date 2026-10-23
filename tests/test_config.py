@@ -51,6 +51,39 @@ shell_timeout = 60
         assert config.agent.name == "TestAgent"
         assert config.tools.shell_timeout == 60
 
+    def test_agent_auto_creation_fields_loaded_from_toml(self, tmp_path):
+        """The four auto-creation fields (auto_create_skills, auto_create_tools,
+        max_auto_creations, min_confidence) must be read from [agent] in the
+        TOML. They were silently dropped by AgentConfig(), so session_hook's
+        auto-creation guards always saw the defaults regardless of config."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[agent]
+auto_create_skills = true
+auto_create_tools = true
+max_auto_creations = 7
+min_confidence = 0.9
+""")
+        config = Config.load(config_file)
+        assert config.agent.auto_create_skills is True
+        assert config.agent.auto_create_tools is True
+        assert config.agent.max_auto_creations == 7
+        assert config.agent.min_confidence == 0.9
+
+    def test_agent_auto_creation_fields_default_when_omitted(self, tmp_path):
+        """When [agent] omits the auto-creation fields, the dataclass defaults
+        still apply (nothing regresses to a non-default)."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[agent]
+max_iterations = 10
+""")
+        config = Config.load(config_file)
+        assert config.agent.auto_create_skills is False
+        assert config.agent.auto_create_tools is False
+        assert config.agent.max_auto_creations == 3
+        assert config.agent.min_confidence == 0.7
+
     def test_env_variable_substitution(self, tmp_path, monkeypatch):
         """Test environment variable substitution for API keys."""
         monkeypatch.setenv("TEST_API_KEY", "my-secret-key")
