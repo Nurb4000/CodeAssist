@@ -1759,6 +1759,28 @@ class Agent:
 
                     break
 
+                except asyncio.CancelledError:
+                    # A hard task cancel (Stop) can land mid-stream, before the
+                    # cooperative cancel_event check above runs. Persist what
+                    # already streamed so the user didn't watch it vanish, then
+                    # re-raise so the turn still unwinds as cancelled. Shielded
+                    # like the Phase 2 writes so a second cancel cannot tear the
+                    # DB write off half-written; nothing streamed means there is
+                    # no partial output to lose and the empty placeholder is
+                    # dropped by the step's finally.
+                    if accumulated_text or accumulated_reasoning or tool_calls:
+                        try:
+                            await asyncio.shield(
+                                self._persist_interrupted_step(
+                                    stream_msg_id, accumulated_text,
+                                    accumulated_reasoning, tool_calls,
+                                )
+                            )
+                            self._active_placeholder_id = None
+                        except Exception:
+                            log.exception("Failed to persist interrupted step")
+                    raise
+
                 except ContextWindowExceeded as e:
                     if context_retries >= MAX_CONTEXT_RETRIES or self.cancel_event.is_set():
                         log.error(

@@ -2287,6 +2287,35 @@ class TestAgentStop:
         assert "cancelled" in [e.type for e in events]
 
     @pytest.mark.asyncio
+    async def test_hard_cancel_mid_stream_persists_partial_output(self, agent, mock_session):
+        """A hard task cancel (Stop's ``agent_task.cancel()``) that lands mid-stream
+        must still persist the text that already arrived. The cooperative check
+        only runs at the top of a stream iteration, so an unbuffered cancel would
+        otherwise bypass it and leave the placeholder empty -- the text the user
+        watched stream in is lost. Regression for §2 fragile item 4."""
+        from codeassist.llm import TextDelta
+
+        started = asyncio.Event()
+
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("half an answer")
+            started.set()
+            await asyncio.sleep(30)  # stay mid-stream until cancelled
+
+        agent.llm.stream = fake_stream
+
+        task = asyncio.create_task(_drain(agent.run("go")))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+
+        last = mock_session.update_message.call_args_list[-1]
+        assert last.kwargs["content"] == "half an answer", \
+            "partial text is saved despite a hard mid-stream cancel"
+
+    @pytest.mark.asyncio
     async def test_cancel_mid_stream_answers_streamed_tool_calls(self, agent, mock_session):
         """A tool call that streamed before the stop still needs a tool result,
         or the transcript is invalid for the next turn."""
