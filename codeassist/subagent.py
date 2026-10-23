@@ -32,6 +32,7 @@ class SubagentTask:
             "result": self.result,
             "error": self.error,
             "background": self.background,
+            "parent_session_id": self.parent_session_id,
         }
 
 

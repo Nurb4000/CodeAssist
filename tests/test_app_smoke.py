@@ -259,6 +259,27 @@ def test_active_tasks_route_returns_the_task(live_client):
         subagent_manager._tasks.pop(task.id, None)
 
 
+def test_list_tasks_filter_by_session_id(live_client):
+    """/api/subagents/tasks?session_id= must return that session's tasks.
+
+    The route filters on `parent_session_id`, but SubagentTask.to_dict() did not
+    include it, so every filtered query returned [] even when matching tasks
+    existed (§8)."""
+    task = seed_active_subagent_task("sess-filter")
+    try:
+        r = live_client.get("/api/subagents/tasks", params={"session_id": "sess-filter"})
+        assert r.status_code == 200, r.text
+        ids = {t["id"] for t in r.json()["tasks"]}
+        assert task.id in ids
+        # A different session id must not match.
+        r2 = live_client.get("/api/subagents/tasks", params={"session_id": "other"})
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["tasks"] == []
+    finally:
+        from codeassist.subagent import subagent_manager
+        subagent_manager._tasks.pop(task.id, None)
+
+
 def test_api_status_shape(live_client):
     r = live_client.get("/api/status")
     assert r.status_code == 200
