@@ -2571,6 +2571,68 @@ class TestAgentStop:
         # Transcript stays valid: the tool call is answered.
         self._assert_no_dangling_tool_calls(mock_session)
 
+    @pytest.mark.asyncio
+    async def test_nudged_empty_steps_do_not_leak_blank_assistant_rows(self, agent, mock_session):
+        """A step that produces nothing but nudges and continues must not leak a
+        blank assistant row. Each iteration overwrites ``_active_placeholder_id``
+        with the new step's placeholder; a nudged step never finalizes its own
+        row, so the previous empty placeholder is orphaned as a blank bubble until
+        the turn ends. Regression for the §3 agent-loop empty-placeholder leak."""
+        # Give each added message a stable, trackable id.
+        ids = iter(range(1000, 1100))
+        placeholder_ids = []
+
+        async def _add_message(role, content=None, **kwargs):
+            mid = next(ids)
+            if role == "assistant" and not (content or "").strip() and not kwargs.get("tool_calls"):
+                placeholder_ids.append(mid)
+            return mid
+
+        mock_session.add_message = AsyncMock(side_effect=_add_message)
+        mock_session.delete_message = AsyncMock(return_value=None)
+        mock_session.update_message = AsyncMock(return_value=None)
+
+        # One tool step (so continuation nudging is possible), then three empty
+        # steps. Without the fix the two intermediate empties are orphaned.
+        agent.config.agent.max_iterations = 4
+        agent._trust_all = True
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+        async def tool_execute(name, args):
+            return ToolResult(output="ok", error=False)
+
+        agent.tools.execute = tool_execute
+
+        state = {"n": 0}
+
+        async def fake_stream(messages, openai_tools):
+            if state["n"] == 0:
+                yield ToolCall(id="c0", name="read", arguments={"path": "/tmp/x"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+            else:
+                # Empty: no text, no reasoning, no tool calls.
+                yield Finish("stop", usage=Usage(prompt_tokens=0, completion_tokens=0))
+            state["n"] += 1
+
+        agent.llm.stream = fake_stream
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "go"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            await _drain(agent.run("go"))
+
+        assert len(placeholder_ids) >= 3, f"expected several empty steps, saw {len(placeholder_ids)}"
+        deleted = {c.args[0] for c in mock_session.delete_message.call_args_list if c.args}
+        finalized = deleted | {c.args[0] for c in mock_session.update_message.call_args_list if c.args}
+        leaked = set(placeholder_ids) - finalized
+        assert not leaked, f"blank assistant rows leaked into the transcript: {leaked}"
+
     @staticmethod
     def _assert_no_dangling_tool_calls(mock_session):
         """Every tool call written to the session must have a result with it."""

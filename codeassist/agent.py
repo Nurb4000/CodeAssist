@@ -1698,6 +1698,12 @@ class Agent:
             stream_start = time.monotonic()
             stream_timeout = float(getattr(self.config.llm, "timeout", 120))  # seconds
 
+            # Discard the previous step's unfinalized placeholder before creating
+            # a new one. A step that produces nothing nudges and continues
+            # (Phase 4) without ever finalizing its own row, so overwriting the
+            # reference here would orphan a blank assistant bubble; the turn's
+            # finally only discards the last one left standing.
+            await self._discard_active_placeholder()
             # Save placeholder immediately so partial responses survive crashes
             stream_msg_id = await self.session.add_message("assistant", content="")
             self._active_placeholder_id = stream_msg_id
