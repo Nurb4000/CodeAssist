@@ -769,10 +769,17 @@ function appendUserMessage(text, images = []) {
     messagesEl.appendChild(div);
 }
 
-// Main-flow target for errors/summaries: reuse the latest main message or start a
-// fresh assistant message. Work steps live in the work block, not here.
+// Main-flow target for errors/summaries: reuse the latest assistant message or
+// start a fresh one. Work steps live in the work block, not here. Only an
+// assistant bubble may be reused — if the last main-flow node is the user's own
+// message (the normal case right after sending, before any reply), injecting
+// here would render the error/cancellation/refusal inside the user's bubble.
 function ensureMainMessage() {
-    return lastMainMsgEl || appendAssistantMessage('');
+    const role = lastMainMsgEl && lastMainMsgEl.querySelector('.message-role');
+    if (role && role.classList.contains('assistant')) {
+        return lastMainMsgEl;
+    }
+    return appendAssistantMessage('');
 }
 
 function appendAssistantMessage(text) {
