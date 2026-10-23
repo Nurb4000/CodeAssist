@@ -719,6 +719,29 @@ class TestQAPairExtraction:
         assert any("auth.py" in f for f in meta["file_references"])
 
     @pytest.mark.asyncio
+    async def test_reply_after_parses_tool_calls_json_string(self, session_hook):
+        """``_extract_reply_after`` receives raw session rows where ``tool_calls`` is
+        a JSON string (as ``get_messages()`` returns). It must parse that string
+        before iterating -- iterating the raw string walks characters and raised
+        AttributeError, which aborted knowledge extraction for any tool-using
+        reply. Regression for the §6 session-storage tool_calls-string bug."""
+        await init_db()
+        messages = [
+            {"role": "user", "content": "Can you refactor the auth module to use tokens?"},
+            {
+                "role": "assistant",
+                "content": "Switching auth.py to JWT token validation.",
+                "tool_calls": json.dumps([
+                    {"function": {"name": "read", "arguments": '{"file_path": "src/auth.py"}'}},
+                ]),
+            },
+        ]
+        reply = session_hook._extract_reply_after(messages, 0)
+
+        assert "read" in reply["tools"], f"tool name not extracted from JSON-string tool_calls: {reply}"
+        assert any("auth.py" in f for f in reply["files"]), f"file path not extracted: {reply}"
+
+    @pytest.mark.asyncio
     async def test_no_answer_marked(self, session_hook):
         await init_db()
         messages = [

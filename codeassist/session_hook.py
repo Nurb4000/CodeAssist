@@ -835,7 +835,14 @@ Provide a JSON response with:
                 text = (msg.get("content") or "").strip()
                 if text:
                     parts.append(text)
-                for tc in msg.get("tool_calls") or []:
+                # ``tool_calls`` arrives as a JSON string from the raw session
+                # rows; parse it before iterating. Iterating the string directly
+                # (the old behavior) walked characters, so ``tc.get(...)`` raised
+                # AttributeError and aborted knowledge extraction for any reply
+                # that used tools.
+                raw_tool_calls = msg.get("tool_calls")
+                tool_calls = json.loads(raw_tool_calls) if isinstance(raw_tool_calls, str) else (raw_tool_calls or [])
+                for tc in tool_calls:
                     fn = tc.get("function", {}) or {}
                     name = fn.get("name")
                     if name:
