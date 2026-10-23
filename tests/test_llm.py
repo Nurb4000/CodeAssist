@@ -170,6 +170,7 @@ class TestStream:
         chunk1.choices[0].delta = MagicMock()
         chunk1.choices[0].delta.content = "Hello"
         chunk1.choices[0].delta.tool_calls = None
+        chunk1.choices[0].finish_reason = None  # intermediate chunk: no finish yet
         chunk1.usage = None
         
         chunk2 = MagicMock()
@@ -177,6 +178,7 @@ class TestStream:
         chunk2.choices[0].delta = MagicMock()
         chunk2.choices[0].delta.content = " World"
         chunk2.choices[0].delta.tool_calls = None
+        chunk2.choices[0].finish_reason = None  # intermediate chunk: no finish yet
         chunk2.usage = None
         
         chunk3 = MagicMock()
@@ -214,6 +216,48 @@ class TestStream:
         assert events[2].usage.completion_tokens == 5
 
     @pytest.mark.asyncio
+    async def test_stream_finish_emitted_when_usage_omitted(self, llm_client):
+        """A provider that reports finish_reason but omits usage must still emit
+        a Finish event. Gating Finish on chunk.usage dropped it entirely for such
+        chunks (local backends and content-filter blocks omit usage), so cost
+        tracking and refusal/safety-filter handling never ran and the
+        finish_reason was lost."""
+        chunk1 = MagicMock()
+        chunk1.choices = [MagicMock()]
+        chunk1.choices[0].delta = MagicMock()
+        chunk1.choices[0].delta.content = "Blocked"
+        chunk1.choices[0].delta.tool_calls = None
+        chunk1.choices[0].finish_reason = None
+        chunk1.usage = None
+
+        chunk2 = MagicMock()
+        chunk2.choices = [MagicMock()]
+        chunk2.choices[0].delta = MagicMock()
+        chunk2.choices[0].delta.content = None
+        chunk2.choices[0].delta.tool_calls = None
+        chunk2.choices[0].finish_reason = "content_filter"
+        chunk2.usage = None
+
+        async def mock_create(*args, **kwargs):
+            async def stream_response():
+                yield chunk1
+                yield chunk2
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        events = []
+        async for event in llm_client.stream([{"role": "user", "content": "Hi"}]):
+            events.append(event)
+
+        assert len(events) == 2
+        assert isinstance(events[0], TextDelta)
+        assert isinstance(events[1], Finish)
+        assert events[1].finish_reason == "content_filter"
+        assert events[1].usage.prompt_tokens == 0
+        assert events[1].usage.completion_tokens == 0
+
+    @pytest.mark.asyncio
     async def test_stream_tool_call(self, llm_client):
         """Test streaming a tool call."""
         # Create mock tool call delta
@@ -237,6 +281,7 @@ class TestStream:
         chunk1.choices[0].delta = MagicMock()
         chunk1.choices[0].delta.content = None
         chunk1.choices[0].delta.tool_calls = [tc_delta1]
+        chunk1.choices[0].finish_reason = None  # intermediate chunk: no finish yet
         chunk1.usage = None
         
         chunk2 = MagicMock()
@@ -244,6 +289,7 @@ class TestStream:
         chunk2.choices[0].delta = MagicMock()
         chunk2.choices[0].delta.content = None
         chunk2.choices[0].delta.tool_calls = [tc_delta2]
+        chunk2.choices[0].finish_reason = None  # intermediate chunk: no finish yet
         chunk2.usage = None
         
         chunk3 = MagicMock()
@@ -291,6 +337,7 @@ class TestStream:
         chunk1.choices[0].delta.tool_calls[0].function = MagicMock()
         chunk1.choices[0].delta.tool_calls[0].function.name = "test"
         chunk1.choices[0].delta.tool_calls[0].function.arguments = "invalid json"
+        chunk1.choices[0].finish_reason = None  # intermediate chunk: no finish yet
         chunk1.usage = None
         
         chunk2 = MagicMock()
@@ -353,11 +400,15 @@ class TestStream:
         async for event in llm_client.stream([{"role": "user", "content": "Test"}]):
             events.append(event)
         
-        # Should have retried and succeeded
+        # Should have retried and succeeded. The final chunk reports a
+        # finish_reason but omits usage (§5): a Finish is now emitted so cost
+        # tracking and finish handling run even without usage.
         assert call_count[0] == 3
-        assert len(events) == 1
+        assert len(events) == 2
         assert isinstance(events[0], TextDelta)
         assert events[0].content == "Success"
+        assert isinstance(events[1], Finish)
+        assert events[1].finish_reason == "stop"
 
     @pytest.mark.asyncio
     async def test_mid_stream_failure_after_text_is_not_retried(self, llm_client):
@@ -420,6 +471,7 @@ class TestStream:
             chunk.choices[0].delta = MagicMock()
             chunk.choices[0].delta.content = None
             chunk.choices[0].delta.tool_calls = [tc]
+            chunk.choices[0].finish_reason = None  # intermediate chunk, no finish yet
             chunk.usage = None
             return chunk
 
@@ -549,8 +601,13 @@ class TestLLMEvents:
         async for event in llm_client.stream([{"role": "user", "content": "hi"}]):
             events.append(event)
 
-        # Nothing to emit (no content, no reasoning, no usage) — must not crash.
-        assert len(events) == 0
+        # No text or reasoning is emitted for the empty delta (must not crash).
+        # A finish_reason is still reported even without usage (§5), so a Finish
+        # is now emitted — cost tracking and finish handling run.
+        assert [e for e in events if isinstance(e, (TextDelta, ReasoningDelta))] == []
+        assert len(events) == 1
+        assert isinstance(events[0], Finish)
+        assert events[0].finish_reason == "stop"
 
     @pytest.mark.asyncio
     async def test_stream_content_and_reasoning_both_emitted(self, llm_client):
@@ -576,11 +633,15 @@ class TestLLMEvents:
         async for event in llm_client.stream([{"role": "user", "content": "go"}]):
             events.append(event)
 
-        assert len(events) == 2
+        # Content and reasoning are yielded as separate events; the finish_reason
+        # (with usage omitted, §5) now also emits a Finish.
+        assert len(events) == 3
         assert isinstance(events[0], TextDelta)
         assert events[0].content == "The answer"
         assert isinstance(events[1], ReasoningDelta)
         assert events[1].content == "hidden chain of thought"
+        assert isinstance(events[2], Finish)
+        assert events[2].finish_reason == "stop"
 
 
 class TestModerationClassification:

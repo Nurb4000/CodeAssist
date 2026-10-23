@@ -389,13 +389,18 @@ class LLMClient:
                                     if tc_delta.function.arguments:
                                         current_tool_calls[idx]["arguments"] += tc_delta.function.arguments
 
-                    if chunk.usage:
+                    # Emit Finish whenever the stream reports a finish_reason, even
+                    # when the provider omits usage (local backends and
+                    # content-filter blocks do). Gating on chunk.usage dropped
+                    # finish_reason entirely for those chunks, so cost tracking
+                    # and refusal/safety-filter handling never ran.
+                    if choice and choice.finish_reason:
                         event = await self._apply_event_transforms(
                             Finish(
-                                finish_reason=choice.finish_reason if choice else "stop",
+                                finish_reason=choice.finish_reason,
                                 usage=Usage(
-                                    prompt_tokens=chunk.usage.prompt_tokens or 0,
-                                    completion_tokens=chunk.usage.completion_tokens or 0,
+                                    prompt_tokens=(chunk.usage.prompt_tokens if chunk.usage else 0) or 0,
+                                    completion_tokens=(chunk.usage.completion_tokens if chunk.usage else 0) or 0,
                                 ),
                             )
                         )
