@@ -199,3 +199,80 @@ class TestSessionManager:
         assert schema["name"] == "session"
         assert "description" in schema
         assert "parameters" in schema
+
+
+class TestSessionToolContextIsolation:
+    """Regression tests for per-turn session binding (ContextVar isolation).
+
+    ``SessionTool`` is a single process-wide instance; ``execute()`` falls back
+    to a shared ``current_session_id`` when the model omits ``session_id``.
+    Without a turn-bound ContextVar, two sessions streaming concurrently would
+    resolve that fallback to whichever connection bound last and fork/export/
+    summary/share the wrong conversation. The turn binds its own session via
+    :meth:`SessionTool.active` (mirroring the ``todo`` tool), so each resolves
+    its own id. See §15.21 / §2 fragile item 2.
+    """
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_precedence(self):
+        from codeassist.session_manager import SessionTool
+
+        tool = SessionTool(current_session_id="sess-shared")
+
+        # An explicit arg wins over the binding and the shared fallback.
+        assert tool._resolve_session("sess-explicit") == "sess-explicit"
+        # Otherwise the turn-bound ContextVar wins over the shared fallback.
+        with tool.active("sess-a"):
+            assert tool._resolve_session(None) == "sess-a"
+            # ...but an explicit arg still wins inside a binding.
+            assert tool._resolve_session("sess-b") == "sess-b"
+
+    @pytest.mark.asyncio
+    async def test_interleaved_turns_target_their_own_session(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from codeassist.session_manager import SessionManager, SessionTool
+
+        tool = SessionTool(current_session_id="sess-shared")
+
+        seen = []
+
+        async def _fake_fork(session_id, name=None):
+            seen.append(session_id)
+            return SimpleNamespace(id="new-" + session_id)
+
+        monkeypatch.setattr(SessionManager, "fork_session", _fake_fork)
+
+        # Simulate interleaving: A's turn begins, then B's starts and finishes
+        # entirely inside A's, then A resumes. With a shared attribute both forks
+        # would target "sess-shared" (or whichever bound last), not their own id.
+        with tool.active("sess-a"):
+            with tool.active("sess-b"):
+                await tool.execute(action="fork")
+            await tool.execute(action="fork")
+
+        assert seen == ["sess-b", "sess-a"], f"wrong session targeted: {seen}"
+
+    @pytest.mark.asyncio
+    async def test_binding_released_after_turn(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from codeassist.session_manager import SessionManager, SessionTool
+
+        tool = SessionTool(current_session_id="sess-shared")
+
+        seen = []
+
+        async def _fake_fork(session_id, name=None):
+            seen.append(session_id)
+            return SimpleNamespace(id="x")
+
+        monkeypatch.setattr(SessionManager, "fork_session", _fake_fork)
+
+        with tool.active("sess-a"):
+            await tool.execute(action="fork")
+        # After the turn the ContextVar is reset; a bare call falls back to the
+        # shared per-connect id, not the finished turn's session.
+        await tool.execute(action="fork")
+
+        assert seen == ["sess-a", "sess-shared"], f"binding leaked into later turn: {seen}"

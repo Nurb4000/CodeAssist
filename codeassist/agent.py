@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -1252,21 +1253,32 @@ class Agent:
     async def run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         """Run one turn, bound to this agent's session.
 
-        The plan list lives on a single, process-wide tool instance, so the
-        session is bound for the whole turn via a task-local context. Binding it
-        as a plain attribute would let a second session streaming at the same
-        time redirect this turn's todo writes into its own plan.
+        The plan list and session-tool fallbacks live on single, process-wide
+        tool instances, so the running turn's session is bound for the whole turn
+        via a task-local context (ContextVar). Binding it as a plain attribute
+        would let a second session streaming at the same time win the fallback and
+        redirect this turn's todo writes or session-tool fork/export/summary into
+        its own conversation.
         """
+        session_tool = self.tools.get("session")
         todo_tool = self.tools.get("todo")
-        if todo_tool is None or not hasattr(todo_tool, "load_session"):
-            async for event in self._run(user_message, attachments):
-                yield event
-            return
-        # Hydrate before the turn starts: after a restart the only copy of the
-        # plan is on disk, and without this the turn would start from an empty
-        # list and overwrite it.
-        await todo_tool.load_session(self.session.id)
-        with todo_tool.active(self.session.id):
+        todo_ready = todo_tool is not None and hasattr(todo_tool, "load_session")
+
+        with contextlib.ExitStack() as scope:
+            # Bind the session for the whole turn first so any tool that reads it
+            # as a fallback (session, todo) sees this turn's id, not another
+            # connection's.
+            if session_tool is not None and hasattr(session_tool, "active"):
+                scope.enter_context(session_tool.active(self.session.id))
+            if not todo_ready:
+                async for event in self._run(user_message, attachments):
+                    yield event
+                return
+            # Hydrate before the turn starts: after a restart the only copy of the
+            # plan is on disk, and without this the turn would start from an empty
+            # list and overwrite it.
+            await todo_tool.load_session(self.session.id)
+            scope.enter_context(todo_tool.active(self.session.id))
             async for event in self._run(user_message, attachments):
                 yield event
 

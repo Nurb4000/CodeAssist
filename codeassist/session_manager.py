@@ -1,5 +1,8 @@
+import contextlib
 import json
 import re
+from collections.abc import Iterator
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -8,6 +11,16 @@ from .session import Session
 
 if TYPE_CHECKING:  # pragma: no cover
     from .tools import ToolResult
+
+
+# The session a *running turn* belongs to. A ContextVar rather than a plain
+# attribute: each asyncio task gets its own copy of the context, so two sessions
+# streaming at the same time each resolve their own fallback id. SessionTool is
+# a single process-wide instance (see tools/__init__.py), and its execute()
+# falls back to ``current_session_id`` when the model omits ``session_id``; a
+# shared attribute would let whichever run bound last win and fork/export/summary
+# the wrong conversation. This mirrors the ``todo`` tool's isolation.
+_active_session: ContextVar[str | None] = ContextVar("session_active_session", default=None)
 
 
 class SessionManager:
@@ -181,6 +194,30 @@ class SessionTool:
         self.current_session_id = current_session_id
         self.workspace = workspace
 
+    @contextlib.contextmanager
+    def active(self, session_id: str | None) -> Iterator[None]:
+        """Bind this tool's session for the duration of a running turn.
+
+        Mirrors ``TodoTool.active``: the turn's session is stored in a task-local
+        ContextVar so two sessions streaming at the same time each resolve their
+        own fallback id instead of clobbering the shared ``current_session_id``.
+        """
+        token = _active_session.set(session_id)
+        try:
+            yield
+        finally:
+            _active_session.reset(token)
+
+    def _resolve_session(self, session_id: str | None) -> str:
+        """Resolve which session an action targets.
+
+        Precedence: an explicit ``session_id`` argument wins; otherwise the
+        running turn's ContextVar (set by :meth:`active`); finally the shared
+        per-connect fallback. Without the ContextVar a concurrent session that
+        bound last would win and fork/export/summary/share the wrong conversation.
+        """
+        return session_id or _active_session.get() or self.current_session_id
+
     def schema(self) -> dict:
         return {
             "name": self.name,
@@ -196,7 +233,7 @@ class SessionTool:
         from .tools import ToolResult  # local: tools imports this module
 
         if action == "fork":
-            target_id = session_id or self.current_session_id
+            target_id = self._resolve_session(session_id)
             try:
                 new_session = await SessionManager.fork_session(target_id, name)
                 return ToolResult(output=f"Forked session. New session ID: {new_session.id}")
@@ -204,7 +241,7 @@ class SessionTool:
                 return ToolResult(output=f"Error forking session: {e}", error=True)
 
         elif action == "export":
-            target_id = session_id or self.current_session_id
+            target_id = self._resolve_session(session_id)
             try:
                 export_data = await SessionManager.export_session(target_id, redact)
                 return ToolResult(output=json.dumps(export_data, indent=2))
@@ -212,7 +249,7 @@ class SessionTool:
                 return ToolResult(output=f"Error exporting session: {e}", error=True)
 
         elif action == "share":
-            target_id = session_id or self.current_session_id
+            target_id = self._resolve_session(session_id)
             try:
                 result = await SessionManager.export_session(
                     target_id, redact=True, as_bundle=True, workspace=self.workspace,
@@ -242,7 +279,7 @@ class SessionTool:
                 return ToolResult(output=f"Error importing session: {e}", error=True)
 
         elif action == "summary":
-            target_id = session_id or self.current_session_id
+            target_id = self._resolve_session(session_id)
             try:
                 summary = await SessionManager.get_session_summary(target_id)
                 return ToolResult(output=json.dumps(summary, indent=2))
