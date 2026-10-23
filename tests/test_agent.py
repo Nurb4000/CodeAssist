@@ -2520,6 +2520,57 @@ class TestAgentStop:
         await asyncio.sleep(0.05)
         self._assert_no_dangling_tool_calls(mock_session)
 
+    @pytest.mark.asyncio
+    async def test_genuine_tool_error_is_reported_not_mislabeled_as_cancel(self, agent, mock_session):
+        """A tool that actually raises must be reported to the model with its real
+        error, not persisted as 'Cancelled by user before this tool ran.'
+        asyncio.gather(return_exceptions=True) aggregates a genuine exception into
+        the results list instead of raising, so it fell through the same
+        'cancelled' path and hid the failure while telling the model the user
+        stopped it. Regression for the §3 agent-loop gather mislabel bug."""
+        async def failing_execute(name, args):
+            raise RuntimeError("disk full")
+
+        agent.tools.execute = failing_execute
+        agent.config.agent.max_iterations = 5
+        agent._trust_all = True
+        agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+        async def turn():
+            yield ToolCall(id="c1", name="write", arguments={"path": "/tmp/x", "content": "y"})
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = lambda messages, openai_tools: turn()
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "go"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            events = await _drain(agent.run("go"))
+
+        # The real error must reach the transcript, not a cancellation placeholder.
+        tool_msgs = [c for c in mock_session.add_message.call_args_list
+                     if c.args and c.args[0] == "tool"]
+        assert tool_msgs, "the errored tool call was left with no result"
+        combined = " ".join(str(c.kwargs.get("content")) for c in tool_msgs)
+        assert "disk full" in combined, f"real error not persisted: {combined!r}"
+        assert "Cancelled by user" not in combined, (
+            f"genuine error mislabeled as cancel: {combined!r}"
+        )
+
+        # And it surfaced to the model as a tool_result event carrying the error.
+        result_events = [e for e in events if e.type == "tool_result"]
+        assert result_events, "no tool_result event yielded for the failed tool"
+        assert "disk full" in str(result_events[-1].data.get("output"))
+
+        # Transcript stays valid: the tool call is answered.
+        self._assert_no_dangling_tool_calls(mock_session)
+
     @staticmethod
     def _assert_no_dangling_tool_calls(mock_session):
         """Every tool call written to the session must have a result with it."""

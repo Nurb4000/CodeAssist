@@ -2133,17 +2133,40 @@ class Agent:
 
                     # Separate completed results from cancelled/failed ones.
                     # return_exceptions=True lets us preserve partial results
-                    # when some tools finished before cancellation.
+                    # when some tools finished before cancellation. A genuine
+                    # tool *exception* must not be mistaken for a user cancel:
+                    # with return_exceptions=True the exception lands in the
+                    # results list rather than raising, so classify by type and
+                    # report real failures with their actual error instead of
+                    # the "Cancelled by user" placeholder.
                     completed = []
                     cancelled_tcs = []
+                    errored_tcs = []
                     for tc, res in zip(confirmed_tool_calls, results):
-                        if isinstance(res, BaseException):
+                        if isinstance(res, asyncio.CancelledError):
                             cancelled_tcs.append(tc)
+                        elif isinstance(res, BaseException):
+                            errored_tcs.append((tc, res))
                         else:
                             completed.append(res)
 
                     if cancelled_tcs:
                         await self._answer_unrun_tool_calls(cancelled_tcs)
+
+                    for tc, exc in errored_tcs:
+                        error_output = (
+                            f"Tool '{tc.name}' failed with {type(exc).__name__}: {exc}"
+                        )
+                        truncated_err = truncate_tool_result(
+                            error_output, max_tokens=self.config.tools.tool_output_max_tokens,
+                        )
+                        await self.session.add_message(
+                            "tool", content=truncated_err, tool_call_id=tc.id,
+                        )
+                        self._messages_dirty = True
+                        yield AgentEvent("tool_result", {
+                            "id": tc.id, "name": tc.name, "output": truncated_err,
+                        })
 
                     for tc, result, truncated, duration_ms in completed:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
