@@ -78,6 +78,7 @@ let workBlockUserToggled = false; // user opened/closed the Work section by hand
 let ranTools = false;      // did the previous turn use tools? (new-step boundary)
 let workStepCount = 0;     // completed/committed work steps (for the Work header)
 let runWasRefused = false; // last turn was stopped by a provider safety filter
+let runWasCancelled = false; // last turn was stopped by the user (server sends cancelled then done)
 let workBlockEl = null, workActiveEl = null, workHistoryEl = null;
 // Dedicated container for *past* reasoning. The active step keeps its reasoning
 // visible inline; once a step completes its thinking-block is moved here (collapsed
@@ -1793,9 +1794,10 @@ function connectWS() {
             hideProgress();
             endRun();
             if (hasFollowUpContent()) showContinueButton();
-            // A refused turn produced nothing, so the "Complete" badge would be
-            // a lie. The refusal block above already closed the turn out.
-            if (!runWasRefused) {
+            // A refused or cancelled turn produced nothing verifiable, so the
+            // "Complete" badge would be a lie. The refusal/cancel blocks above
+            // already closed those turns out.
+            if (!runWasRefused && !runWasCancelled) {
                 // Show clear "done" indicator
                 const doneDiv = document.createElement('div');
                 doneDiv.className = 'message-actions';
@@ -1803,11 +1805,13 @@ function connectWS() {
                 messagesEl.appendChild(doneDiv);
             }
             runWasRefused = false;
+            runWasCancelled = false;
             scrollToBottom();
             setBusy(false);
         } else if (data.type === 'cancelled') {
             hideProgress();
             endRun();
+            runWasCancelled = true;
             ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--yellow);margin-top:8px;font-style:italic;">Stopped by user</p>`;
             scrollToBottom();
         } else if (data.type === 'reasoning') {
