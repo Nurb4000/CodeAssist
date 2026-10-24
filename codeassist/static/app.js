@@ -102,10 +102,10 @@ function highlightToolOutput(text) {
     if (text.includes('\n') || text.startsWith('Error') || text.match(/^[{\[]/)) {
         try {
             if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-                return '<pre><code>' + hljs.highlight(escapeHtml(JSON.stringify(JSON.parse(text), null, 2)), {language: 'json'}).value + '</code></pre>';
+                return '<pre><code>' + hljs.highlight(JSON.stringify(JSON.parse(text), null, 2), {language: 'json'}).value + '</code></pre>';
             }
         } catch(e) {}
-        return '<pre><code>' + (hljs.highlightAuto(escaped).value) + '</pre></code>';
+        return '<pre><code>' + (hljs.highlightAuto(text).value) + '</code></pre>';
     }
     return escaped;
 }
