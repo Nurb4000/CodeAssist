@@ -4,6 +4,13 @@ import pytest
 from codeassist.session import Session, init_db
 
 
+async def _count(db, table, column, value):
+    cursor = await db.execute(
+        f"SELECT COUNT(*) AS n FROM {table} WHERE {column} = ?", (value,)
+    )
+    return (await cursor.fetchone())["n"]
+
+
 class TestSession:
     """Test session CRUD operations."""
 
@@ -208,6 +215,116 @@ class TestSession:
         # Verify messages are gone
         messages = await session.get_messages()
         assert len(messages) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_session_orphans_no_child_tables(self):
+        """Session.delete must clear every session-owned table.
+
+        The schema declares ON DELETE CASCADE on these tables, but the pool never
+        enables PRAGMA foreign_keys, so the cascade never fires and rows were
+        orphaned (tool_executions, llm_usage, session_summaries, session_tags,
+        file_snapshots, questions, todos, subagent_tasks, session_exports). Insert
+        one row into each and assert they are all gone after delete()."""
+        from codeassist.session import get_db
+
+        await init_db()
+        session = await Session.create(name="To Delete")
+        msg_id = await session.add_message("user", "hi")
+        child = await Session.create(name="Subagent Child")
+
+        async def _insert(table, rows):
+            cols = ", ".join(rows[0].keys())
+            placeholders = ", ".join("?" * len(rows[0]))
+            for r in rows:
+                await db.execute(
+                    f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
+                    list(r.values()),
+                )
+
+        async with get_db() as db:
+            await _insert(
+                "session_summaries",
+                [{"id": "s1", "session_id": session.id, "summary": "sum"}],
+            )
+            await _insert(
+                "tool_executions",
+                [{"id": "t1", "session_id": session.id, "tool_name": "read"}],
+            )
+            await _insert(
+                "llm_usage",
+                [{"id": "u1", "session_id": session.id, "model": "gpt"}],
+            )
+            await _insert(
+                "session_tags",
+                [{"id": "g1", "session_id": session.id, "tag": "red"}],
+            )
+            await _insert(
+                "file_snapshots",
+                [
+                    {
+                        "id": "f1",
+                        "session_id": session.id,
+                        "file_path": "/tmp/a.txt",
+                        "action": "write",
+                    }
+                ],
+            )
+            await _insert(
+                "questions",
+                [
+                    {
+                        "id": "q1",
+                        "session_id": session.id,
+                        "message_id": msg_id,
+                        "questions": "what?",
+                    }
+                ],
+            )
+            await _insert(
+                "todos",
+                [{"id": "d1", "session_id": session.id, "content": "do a thing"}],
+            )
+            await _insert(
+                "session_exports",
+                [{"id": "x1", "session_id": session.id}],
+            )
+            await _insert(
+                "subagent_tasks",
+                [
+                    {
+                        "id": "p1",
+                        "parent_session_id": session.id,
+                        "child_session_id": child.id,
+                        "description": "sidekick",
+                        "subagent_type": "code",
+                    }
+                ],
+            )
+
+        await session.delete()
+
+        async with get_db() as db:
+            for table in (
+                "session_summaries",
+                "tool_executions",
+                "llm_usage",
+                "session_tags",
+                "file_snapshots",
+                "questions",
+                "todos",
+                "session_exports",
+            ):
+                cursor = await db.execute(
+                    f"SELECT COUNT(*) AS n FROM {table} WHERE session_id = ?",
+                    (session.id,),
+                )
+                assert (await cursor.fetchone())["n"] == 0
+
+            # subagent_tasks is keyed by parent/child, so check both sides.
+            parent_rows = await _count(db, "subagent_tasks", "parent_session_id", session.id)
+            assert parent_rows == 0
+            child_rows = await _count(db, "subagent_tasks", "child_session_id", child.id)
+            assert child_rows == 0
 
     @pytest.mark.asyncio
     async def test_fork_session(self):

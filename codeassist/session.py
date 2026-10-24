@@ -1050,16 +1050,35 @@ class Session:
 
     async def delete(self):
         async with get_db() as db:
-            await db.execute(
-                "DELETE FROM message_attachments WHERE message_id IN "
-                "(SELECT id FROM messages WHERE session_id = ?)",
-                (self.id,),
-            )
-            await db.execute("DELETE FROM messages WHERE session_id = ?", (self.id,))
             # The pool does not enable PRAGMA foreign_keys, so the ON DELETE
-            # CASCADE declared on these tables never fires. Remove the session's
-            # plan rows explicitly rather than leaking them.
-            await db.execute("DELETE FROM plan_tasks WHERE session_id = ?", (self.id,))
+            # CASCADE declared on every table below never fires. Delete each
+            # session-owned table explicitly, or its rows are orphaned forever.
+            # Order is irrelevant without FK enforcement; children go before the
+            # session row itself. knowledge_entries is intentionally left: its
+            # source_session_id is only a pointer into shared, cross-session KB
+            # data that other sessions may still reference.
+            scoped_deletes = (
+                ("DELETE FROM message_attachments WHERE message_id IN "
+                 "(SELECT id FROM messages WHERE session_id = ?)"),
+                "DELETE FROM messages WHERE session_id = ?",
+                "DELETE FROM session_exports WHERE session_id = ?",
+                "DELETE FROM session_summaries WHERE session_id = ?",
+                "DELETE FROM tool_executions WHERE session_id = ?",
+                "DELETE FROM llm_usage WHERE session_id = ?",
+                "DELETE FROM session_tags WHERE session_id = ?",
+                "DELETE FROM file_snapshots WHERE session_id = ?",
+                "DELETE FROM questions WHERE session_id = ?",
+                "DELETE FROM todos WHERE session_id = ?",
+                "DELETE FROM plan_tasks WHERE session_id = ?",
+            )
+            for stmt in scoped_deletes:
+                await db.execute(stmt, (self.id,))
+            # subagent_tasks is keyed by parent/child, so match either side.
+            await db.execute(
+                "DELETE FROM subagent_tasks WHERE "
+                "parent_session_id = ? OR child_session_id = ?",
+                (self.id, self.id),
+            )
             await db.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
             await db.commit()
 
