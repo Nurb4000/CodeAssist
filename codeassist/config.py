@@ -259,7 +259,7 @@ class Config:
                 webfetch_max_chars=raw.get("tools", {}).get("webfetch_max_chars", 30000),
                 websearch_max_chars=raw.get("tools", {}).get("websearch_max_chars", 30000),
                 websearch_engine=raw.get("tools", {}).get("websearch_engine", "duckduckgo"),
-                tool_output_max_tokens=raw.get("tools", {}).get("tool_output_max_tokens", 4000),
+                tool_output_max_tokens=raw.get("tools", {}).get("tool_output_max_tokens", 2000),
             ),
             mcp=MCPConfig(
                 enabled=raw.get("mcp", {}).get("enabled", False),

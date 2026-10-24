@@ -84,6 +84,20 @@ max_iterations = 10
         assert config.agent.max_auto_creations == 3
         assert config.agent.min_confidence == 0.7
 
+    def test_tool_output_max_tokens_default_matches_dataclass(self, tmp_path):
+        """Config.load() and the ToolConfig dataclass must agree on defaults.
+
+        They drifted: the dataclass defaulted tool_output_max_tokens to 2000
+        (the value test_settings.py relies on) while Config.load defaulted it to
+        4000, so whichever path built the object won. Asserting both sides guard
+        against the two defaults diverging again (§7 FRAGILE / §13 #14)."""
+        from codeassist.config import ToolConfig
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[server]\nworkspace = '.'\n")
+        loaded = Config.load(config_file).tools.tool_output_max_tokens
+        assert loaded == ToolConfig().tool_output_max_tokens == 2000
+
     def test_env_variable_substitution(self, tmp_path, monkeypatch):
         """Test environment variable substitution for API keys."""
         monkeypatch.setenv("TEST_API_KEY", "my-secret-key")
