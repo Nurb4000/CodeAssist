@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import signal
 from pathlib import Path
 
 from . import Tool, ToolResult
@@ -54,13 +56,22 @@ class ShellTool(Tool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd_path,
+                start_new_session=True,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
+            # `command` runs under /bin/sh -c; a backgrounded grandchild inherits
+            # the shell's process group. proc.kill() only reaps the shell and
+            # orphans the grandchild, which then runs for the full original
+            # lifetime. Putting the child in its own session and killing the
+            # whole group on timeout reaps grandchildren too.
             try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
             return ToolResult(output=f"Error: command timed out after {timeout}s", error=True)
         except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error executing command: {e}", error=True)
