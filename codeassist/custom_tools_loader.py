@@ -299,4 +299,11 @@ def get_custom_tool_registry(workspace: Path, trust_registry: TrustRegistry | No
     workspace = Path(workspace).resolve()
     if _custom_tool_registry is None or Path(_custom_tool_registry.workspace) != workspace:
         _custom_tool_registry = CustomToolRegistry(workspace, trust_registry=trust_registry)
+    elif trust_registry is not None:
+        # The singleton pins its tools_dir at construction, so it can't be
+        # recreated if a later call re-keys to the original workspace. Propagate
+        # a newly-supplied trust registry here; without this an early call with
+        # trust_registry=None pins trust checks off process-wide (§8) and
+        # discover() would load untrusted tools regardless of approval state.
+        _custom_tool_registry.trust_registry = trust_registry
     return _custom_tool_registry
