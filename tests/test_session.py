@@ -127,6 +127,34 @@ class TestSession:
         assert row["n"] == 0
 
     @pytest.mark.asyncio
+    async def test_delete_messages_after_cleans_referencing_questions(self):
+        """Rolling back a turn must drop questions raised against the messages it
+        removes. ``questions.message_id`` has no foreign key, so the cascade never
+        fired and the question was orphaned by the rollback."""
+        from codeassist.session import get_db
+
+        await init_db()
+        session = await Session.create()
+
+        before = await session.add_message("user", "before")
+        during = await session.add_message("assistant", "raised a question")
+
+        # A question the assistant raised during the turn being rolled back.
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO questions (id, session_id, message_id, questions) "
+                "VALUES (?, ?, ?, ?)",
+                ("q-orphan", session.id, during, "Can you clarify?"),
+            )
+
+        deleted = await session.delete_messages_after(before)
+        assert deleted >= 1, "precondition: the turn was actually rolled back"
+
+        async with get_db() as db:
+            assert await _count(db, "messages", "id", during) == 0
+            assert await _count(db, "questions", "message_id", during) == 0
+
+    @pytest.mark.asyncio
     async def test_add_multiple_messages(self):
         """Test adding multiple messages."""
         await init_db()

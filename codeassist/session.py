@@ -1099,6 +1099,15 @@ class Session:
                 "(SELECT id FROM messages WHERE session_id = ? AND created_at > ?)",
                 (self.id, ref_ts),
             )
+            # questions.message_id has no FK, so cascade never fires: drop any
+            # question raised against a message in the deleted range or it is
+            # orphaned (the same cleanup delete_message does for a single row).
+            await db.execute(
+                "DELETE FROM questions WHERE message_id IN "
+                "(SELECT id FROM messages WHERE session_id = ? AND created_at > ?) "
+                "AND session_id = ?",
+                (self.id, ref_ts, self.id),
+            )
             cursor = await db.execute(
                 "DELETE FROM messages WHERE session_id = ? AND created_at > ?",
                 (self.id, ref_ts),
