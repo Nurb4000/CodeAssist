@@ -215,6 +215,15 @@ class MCPClient:
                 return f"Error: MCP tool call failed: {response.text}"
 
             data = response.json()
+            # A JSON-RPC error carries no `result`; surface it as a tool failure
+            # instead of collapsing to "" (which the adapter reads as an empty
+            # success).
+            if "error" in data:
+                detail = data["error"]
+                message = (
+                    detail.get("message") if isinstance(detail, dict) else str(detail)
+                )
+                return f"Error: MCP tool '{tool_name}' failed: {message}"
             content = data.get("result", {}).get("content", [])
 
             if isinstance(content, list):
