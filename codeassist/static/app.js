@@ -1716,7 +1716,16 @@ function connectWS() {
     };
 
     ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (err) {
+            // A corrupt or half-sent frame (e.g. mid-reconnect) must not throw an
+            // uncaught exception out of the handler and abort dispatch of later
+            // frames. Drop it and keep listening.
+            console.error('Ignoring malformed WebSocket frame:', err);
+            return;
+        }
 
         if (data.type === 'active_agent') {
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
