@@ -27,10 +27,12 @@ async def create_mcp_server(body: dict):
     from codeassist.session import MCPServer
 
     from ..server import get_config
+    name = body.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
     cfg = get_config()
     if not cfg.mcp.enabled:
         raise HTTPException(status_code=400, detail="MCP is not enabled")
-    name = body.get("name")
     server_config = body.get("config", {})
     server = await MCPServer.create(name, server_config)
     from ..server import reload_mcp_servers, spawn_reload

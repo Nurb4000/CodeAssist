@@ -20,8 +20,13 @@ async def list_lsp_servers():
 async def create_lsp_server(body: dict):
     """Create a new LSP server configuration. Body must contain 'name' and 'command'."""
     from codeassist.session import LSPServer
+
+    name = body.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
     server = await LSPServer.create(
-        name=body.get("name"),
+        name=name,
         command=body.get("command"),
         args=body.get("args", []),
         languages=body.get("languages", []),
