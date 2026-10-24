@@ -291,7 +291,15 @@ class LLMClient:
             except openai.RateLimitError as e:
                 log.warning("LLM rate limit hit (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
                 if attempt < MAX_RETRIES - 1:
-                    retry_after = float(e.headers.get("retry-after", backoff)) if hasattr(e, 'headers') else backoff
+                    # Retry-After may be seconds (numeric) or an HTTP-date;
+                    # float() raises on a date, so fall back to the backoff
+                    # budget rather than crashing the rate-limit handler. The
+                    # header lives on the response, not the error object.
+                    try:
+                        resp_headers = e.response.headers if getattr(e, "response", None) is not None else {}
+                        retry_after = float(resp_headers.get("retry-after", backoff))
+                    except (ValueError, TypeError):
+                        retry_after = backoff
                     jitter = retry_after * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
                     sleep_time = max(0.1, retry_after + jitter)
                     log.info("Rate limited. Retrying in %.1fs...", sleep_time)

@@ -2,6 +2,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import openai
 import pytest
 
@@ -409,6 +410,86 @@ class TestStream:
         assert events[0].content == "Success"
         assert isinstance(events[1], Finish)
         assert events[1].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_honors_numeric_retry_after(self, llm_client):
+        """A numeric Retry-After header (seconds) is honored as the retry delay,
+        not silently ignored in favor of the fixed backoff (§5)."""
+        call_count = [0]
+        req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+        def _rate_limited(delay):
+            resp = httpx.Response(429, headers={"retry-after": str(delay)}, request=req)
+            return openai.RateLimitError("rate limited", response=resp, body=None)
+
+        async def mock_create(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise _rate_limited(5)
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = "OK"
+            chunk.choices[0].finish_reason = "stop"
+            chunk.usage = None
+
+            async def stream_response():
+                yield chunk
+
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        with patch("codeassist.llm.asyncio.sleep") as mock_sleep:
+            async for _ in llm_client.stream([{"role": "user", "content": "Hi"}]):
+                pass
+
+        assert call_count[0] == 3
+        slept = mock_sleep.call_args_list[0].args[0]
+        # Honored Retry-After (~5s, with jitter) vs the ignored case (~1s backoff).
+        assert 3.0 < slept < 7.0, f"expected the provider's ~5s Retry-After to be honored, slept {slept}"
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_httpdate_retry_after_does_not_crash(self, llm_client):
+        """An HTTP-date Retry-After ("Wed, 21 Oct 2026 ...") must not crash the
+        handler: float() raises ValueError on a date. Fall back to the backoff
+        budget and retry (§5)."""
+        call_count = [0]
+        req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+        def _rate_limited():
+            resp = httpx.Response(
+                429, headers={"retry-after": "Wed, 21 Oct 2026 07:22:00 GMT"}, request=req
+            )
+            return openai.RateLimitError("rate limited", response=resp, body=None)
+
+        async def mock_create(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise _rate_limited()
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = "OK"
+            chunk.choices[0].finish_reason = "stop"
+            chunk.usage = None
+
+            async def stream_response():
+                yield chunk
+
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        with patch("codeassist.llm.asyncio.sleep"):
+            events = []
+            async for event in llm_client.stream([{"role": "user", "content": "Hi"}]):
+                events.append(event)
+
+        # No ValueError propagated; the retry succeeded after 3 attempts.
+        assert call_count[0] == 3
+        texts = [e.content for e in events if isinstance(e, TextDelta)]
+        assert texts == ["OK"]
 
     @pytest.mark.asyncio
     async def test_mid_stream_failure_after_text_is_not_retried(self, llm_client):
