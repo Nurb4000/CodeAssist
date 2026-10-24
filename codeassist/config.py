@@ -131,6 +131,29 @@ class PermissionConfig:
     trust_all: str = "ask"
 
 
+# Valid values for PermissionConfig.trust_all. Anything else in TOML is a typo
+# and must fail loudly at load rather than silently falling back to "ask"
+# (masking an admin's intent on a security-relevant, auto-approve setting).
+_TRUST_ALL_OPTIONS = ("ask", "session", "always")
+
+
+def _validate_trust_all(permissions_raw: dict) -> str:
+    """Return the trusted-all mode from a raw ``[permissions]`` table.
+
+    Raises ``ValueError`` on an unknown value so a malformed config.toml fails
+    at startup instead of silently defaulting to "ask" (§13 #14). The admin
+    Settings UI rejects the same values via validate_setting; this mirrors that
+    guard for the TOML load path.
+    """
+    value = permissions_raw.get("trust_all", "ask")
+    if value not in _TRUST_ALL_OPTIONS:
+        raise ValueError(
+            f"Invalid permissions.trust_all={value!r} in config.toml; "
+            f"must be one of {_TRUST_ALL_OPTIONS}"
+        )
+    return value
+
+
 @dataclass
 class CompactionConfig:
     enabled: bool = True
@@ -304,7 +327,7 @@ class Config:
                 tool_result_max_tokens=raw.get("compaction", {}).get("tool_result_max_tokens", 4000),
             ),
             permissions=PermissionConfig(
-                trust_all=raw.get("permissions", {}).get("trust_all", "ask"),
+                trust_all=_validate_trust_all(raw.get("permissions", {})),
             ),
         )
         config.refresh_workspace()

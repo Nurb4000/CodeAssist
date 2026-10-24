@@ -1,5 +1,6 @@
 """Tests for configuration system."""
 
+import pytest
 
 from codeassist.config import Config
 
@@ -271,6 +272,28 @@ trust_all = "always"
         
         config = Config.load(config_file)
         assert config.permissions.trust_all == "always"
+
+    def test_permissions_trust_all_invalid_raises(self, tmp_path):
+        """A malformed permissions.trust_all in TOML must fail loudly at load,
+        not silently fall back to 'ask' (§13 #14). trust_all auto-approves every
+        tool call, so a typo must never be swallowed into an unintended mode."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[permissions]
+trust_all = "sometimes"
+""")
+        with pytest.raises(ValueError, match="Invalid permissions.trust_all"):
+            Config.load(config_file)
+
+    def test_permissions_trust_all_session_accepted(self, tmp_path):
+        """'session' is a valid (ephemeral) mode and must load without raising."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[permissions]
+trust_all = "session"
+""")
+        config = Config.load(config_file)
+        assert config.permissions.trust_all == "session"
 
 
 class TestPermissionConfigDefaults:
