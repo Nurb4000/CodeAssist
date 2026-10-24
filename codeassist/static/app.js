@@ -467,6 +467,7 @@ function startRename(sessionId, nameSpan) {
 }
 
 async function createSession() {
+    if (isStreaming) return; // a live turn owns the socket; creating mid-run would strand it
     const res = await api('POST', '/api/sessions');
     currentSessionId = res.id;
     // A brand-new session has no plan, and now has its own -- nothing to clear
@@ -492,6 +493,7 @@ async function switchSession(id) {
 }
 
 async function deleteSession(id) {
+    if (isStreaming) return; // a live turn owns the socket; deleting mid-run would strand it
     if (!window.confirm('Delete this session? This cannot be undone.')) return;
     await api('DELETE', `/api/sessions/${id}`);
     if (currentSessionId === id) {
