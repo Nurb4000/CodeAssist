@@ -1,9 +1,13 @@
 """Tests for codeassist.custom_tools_loader — the process-wide singleton and
 trust-registry propagation (§8 backlog)."""
 
+from pathlib import Path
+
 import pytest
 
 from codeassist import custom_tools_loader as ctl
+from codeassist.custom_tools_loader import CustomToolRegistry
+from codeassist.trust_registry import TrustRegistry
 
 
 @pytest.fixture
@@ -53,3 +57,43 @@ def test_explicit_none_does_not_wipe_a_real_registry(isolated_singleton, tmp_pat
 
     assert r2 is r1
     assert r2.trust_registry is real
+
+
+def _write_custom_tool(root: Path, name: str = "trustflagtool") -> Path:
+    """Create a minimal valid custom tool module under <root>/runtime/custom_tools.
+
+    The stem doubles as the sys.modules name (custom_tool_<stem>); a unique
+    default keeps this from colliding with the ``mytool`` module left cached by
+    tests/test_disk_registry_edit.py::test_remove_custom_tool_deletes_file.
+    """
+    tools_dir = root / "runtime" / "custom_tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    path = tools_dir / f"{name}.py"
+    source = (
+        'def execute(**kwargs):\n'
+        '    return "ok"\n\n'
+        'TOOLS = {\n'
+        '    "__NAME__": {\n'
+        '        "description": "A test custom tool",\n'
+        '        "parameters": {"type": "object", "properties": {}},\n'
+        '    }\n'
+        '}\n'
+    )
+    path.write_text(source.replace("__NAME__", name), encoding="utf-8")
+    return path
+
+
+def test_approved_custom_tool_loads_marked_trusted(tmp_path):
+    """A tool that passed the trust gate must report trusted=True, not the
+    CustomTool default of False (§8)."""
+    tool_file = _write_custom_tool(tmp_path)
+    registry = TrustRegistry(registry_path=tmp_path / "trust.json")
+    registry.approve(tool_file)
+
+    loader = CustomToolRegistry(tmp_path, trust_registry=registry)
+    loader.discover()
+
+    tool = loader.get_tool("trustflagtool")
+    assert tool is not None, "the approved tool should have loaded"
+    assert tool.trusted is True, "a loaded custom tool is trusted by definition"
+    assert loader.list_tools()[0]["trusted"] is True

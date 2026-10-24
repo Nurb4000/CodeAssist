@@ -67,6 +67,12 @@ class CustomToolRegistry:
     def _load_tool(self, tool_path: Path):
         """Load a single custom tool module."""
         # Check trust before loading
+        # A tool only loads once its hash is approved in the registry (TRUSTED);
+        # UNTRUSTED and PENDING_APPROVAL are skipped above, so a loaded tool is
+        # trusted by definition. Record that here -- previously the CustomTool
+        # below was built without a trust flag and always defaulted to False,
+        # reporting every loaded custom tool as untrusted (§8).
+        trusted = True
         if self.trust_registry:
             trust_status = self.trust_registry.check_trust(tool_path, file_type="custom_tool")
             if trust_status == TrustStatus.UNTRUSTED:
@@ -75,6 +81,7 @@ class CustomToolRegistry:
             elif trust_status == TrustStatus.PENDING_APPROVAL:
                 log.info("Custom tool '%s' pending approval, skipping load", tool_path.name)
                 return
+            trusted = trust_status == TrustStatus.TRUSTED
         
         module_name = f"custom_tool_{tool_path.stem}"
         
@@ -112,6 +119,7 @@ class CustomToolRegistry:
                 parameters=tool_def.get("parameters", {}),
                 execute_func=execute_func,
                 source_path=str(tool_path),
+                trusted=trusted,
             )
             
             self._tools[tool_name] = custom_tool
