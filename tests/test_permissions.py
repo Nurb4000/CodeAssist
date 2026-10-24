@@ -44,6 +44,18 @@ class TestPermissionRule:
         assert rule.matches_path("src/main.py")
         assert not rule.matches_path("tests/main.py")
 
+    def test_valid_actions_are_accepted(self):
+        """Every documented action (including 'confirm', which enters via
+        per-agent config) must construct without raising."""
+        for action in ("allow", "deny", "ask", "confirm"):
+            PermissionRule(tool_name="read", action=action)
+
+    def test_invalid_action_raises(self):
+        """An unknown action is a malformed rule and must fail loudly rather
+        than silently no-op (it would otherwise fall back to 'ask')."""
+        with pytest.raises(ValueError, match="Invalid permission action"):
+            PermissionRule(tool_name="read", action="permit")
+
 
 class TestPermissionRuleset:
     def test_default_ask(self):
@@ -178,6 +190,15 @@ class TestPermissionManager:
         assert await pm.check_permission("write", ".env") == "deny"
         assert await pm.check_permission("write", "src/main.py") == "allow"
         assert await pm.check_permission("write", "other/file.txt") == "ask"
+
+    @pytest.mark.asyncio
+    async def test_initialize_rejects_invalid_action(self):
+        """A malformed action in the permission config must raise at load, not
+        silently become a no-op rule (§13 #14)."""
+        pm = PermissionManager()
+        config = {"write": {"*": "maybe"}}
+        with pytest.raises(ValueError, match="Invalid permission action"):
+            await pm.initialize(config)
 
     @pytest.mark.asyncio
     async def test_saved_deny_is_authoritative(self):

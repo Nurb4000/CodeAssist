@@ -17,14 +17,28 @@ from .session import get_db
 
 log = logging.getLogger(__name__)
 
+# Actions a PermissionRule may carry. "confirm" enters via per-agent config
+# (AgentPermissions.to_ruleset); the others come from saved preferences and the
+# legacy dict/str formats. Anything else is a malformed config or DB row and
+# must fail loudly rather than silently no-op (an unknown action never matches
+# allow/deny, so it falls back to "ask" — masking the error). See §13 #14.
+VALID_RULE_ACTIONS = ("allow", "deny", "ask", "confirm")
+
 
 @dataclass
 class PermissionRule:
     """A single permission rule for a tool."""
     tool_name: str
-    action: str  # "allow", "deny", "ask"
+    action: str  # one of VALID_RULE_ACTIONS
     pattern: str = "*"  # Glob pattern for file paths
     description: str = ""
+
+    def __post_init__(self) -> None:
+        if self.action not in VALID_RULE_ACTIONS:
+            raise ValueError(
+                f"Invalid permission action {self.action!r} for tool "
+                f"{self.tool_name!r}; must be one of {VALID_RULE_ACTIONS}"
+            )
 
     def matches_path(self, file_path: str) -> bool:
         """Check if a file path matches this rule's pattern."""
