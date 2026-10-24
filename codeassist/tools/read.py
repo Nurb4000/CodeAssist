@@ -29,6 +29,10 @@ class ReadTool(Tool):
             log.warning("Path validation failed for read: %s", e)
             return ToolResult(output=f"Error: {e}", error=True)
 
+        if offset < 0 or limit < 0:
+            return ToolResult(
+                output="Error: offset and limit must be non-negative", error=True
+            )
         if not path.exists():
             return ToolResult(output=f"Error: file not found: {file_path}", error=True)
         if path.is_dir():
