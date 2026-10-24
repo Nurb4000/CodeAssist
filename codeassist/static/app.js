@@ -114,7 +114,15 @@ async function api(method, path, body) {
     const opts = { method, headers: { 'Content-Type': 'application/json' } };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(path, opts);
-    return res.json();
+    // Parse defensively and surface HTTP failures instead of swallowing them:
+    // a non-JSON error body (500 page, plain-text failure) used to throw an
+    // unhandled rejection here, and a non-ok response was returned as-is, so
+    // callers saw parsed garbage instead of the error. Mirrors admin.js's api().
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+    }
+    return data;
 }
 
 async function loadConfig() {
