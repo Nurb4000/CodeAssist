@@ -188,6 +188,13 @@ class TestAgentManager:
         default = manager.get_default_agent()
         assert default is not None
 
+    def test_get_default_agent_returns_none_when_empty(self):
+        """An empty registry must degrade to ``None``, not raise ``StopIteration``
+        from the ``.get()`` fallback's ``next(iter({}))``. ``get_default_agent``
+        is public API and callers may rely on a graceful empty-state."""
+        manager = AgentManager()
+        assert manager.get_default_agent() is None
+
     @pytest.mark.asyncio
     async def test_create_agent(self):
         """Test creating a new agent."""

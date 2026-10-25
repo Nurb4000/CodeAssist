@@ -545,8 +545,10 @@ class AgentManager:
             for key, config in self._agents.items()
         ]
 
-    def get_default_agent(self) -> AgentConfig:
-        """Get the default agent."""
+    def get_default_agent(self) -> AgentConfig | None:
+        """Get the default agent, or None if none are registered."""
+        if not self._agents:
+            return None
         return self._agents.get(self._default_agent_name, next(iter(self._agents.values())))
 
     async def create_agent(self, name: str, **kwargs) -> AgentConfig:
