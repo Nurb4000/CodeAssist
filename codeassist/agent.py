@@ -2281,9 +2281,10 @@ class Agent:
             hit_max_iterations = True
 
         if not self.cancel_event.is_set() and hit_max_iterations:
-            yield AgentEvent("error", {
+            yield AgentEvent("incomplete", {
                 "message": f"Reached maximum iterations ({step_limit}). "
                            "The task may not be fully complete. You can continue in a new message."
             })
+            return
 
         yield AgentEvent("done")

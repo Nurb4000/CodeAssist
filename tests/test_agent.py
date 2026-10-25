@@ -1434,6 +1434,48 @@ class TestAgentStepLimit:
             assert "done" in types
             assert "error" not in types
 
+    @pytest.mark.asyncio
+    async def test_max_iterations_flags_incomplete_not_error(self, agent, mock_session):
+        """A turn whose model keeps working past the iteration budget must be
+        flagged `incomplete` (a soft 'may not be done' warning), never `error`
+        followed by `done`. Previously the max-iterations path emitted an
+        `error` event and then a `done` event, so the client rendered a red
+        "Error: Reached maximum iterations" banner AND a green "✓ Complete"
+        badge on the same turn -- contradictory signals for a task that simply
+        ran out of budget. Mirrors the continuation-nudge path, which yields
+        `incomplete` and returns without `done`. See §15.51."""
+        agent.config.agent.max_iterations = 2
+
+        with patch("codeassist.agent.build_openai_messages") as mock_build, \
+             patch("codeassist.agent.check_context_limit") as mock_ctx, \
+             patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=128000)), \
+             patch("codeassist.agent.KnowledgeBase.log_tool_execution", new=AsyncMock()):
+            mock_build.return_value = [{"role": "user", "content": "keep going"}]
+            mock_ctx.return_value = {
+                "needs_compaction": False, "total_tokens": 10,
+                "usage_pct": 1.0, "severity": "ok",
+            }
+            mock_session.get_messages = AsyncMock(return_value=[{"role": "user", "content": "keep going"}])
+            agent.config.tools.tool_output_max_tokens = 1000000
+            agent._trust_all = True
+            agent.tools.execute = AsyncMock(return_value=ToolResult(output="ok", error=False))
+            agent._tool_output_store.save_if_needed = AsyncMock(return_value=None)
+
+            async def keep_working(messages, openai_tools):
+                yield ToolCall(id="c1", name="shell", arguments={"command": "echo"})
+                yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+            agent.llm.stream = keep_working
+
+            events = []
+            async for event in agent.run("keep going"):
+                events.append(event)
+
+            types = [e.type for e in events]
+            assert "incomplete" in types
+            assert "error" not in types
+            assert "done" not in types
+
 
 class TestAgentRefusal:
     """A provider safety block stops the turn and explains itself."""
