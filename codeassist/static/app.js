@@ -1911,10 +1911,21 @@ function sendMessage() {
     if ((!text && !hasImages && !hasFiles) || isStreaming) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // Capture the session we queued against: a retry interval polls the live
+        // `ws`, which connectWS()/switchSession() swap out. Without tracking the
+        // session here, a message queued for one session can be delivered on the
+        // socket of a session the user switched to in the meantime (§9).
+        const queuedSessionId = currentSessionId;
         showError('Not connected to server. Reconnecting...');
         connectWS();
         // Queue the message to send after connection
         const checkAndSend = setInterval(() => {
+            if (currentSessionId !== queuedSessionId) {
+                // The turn's session changed while we were waiting -- drop the
+                // queue rather than delivering to the wrong session.
+                clearInterval(checkAndSend);
+                return;
+            }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 clearInterval(checkAndSend);
                 hideError();
