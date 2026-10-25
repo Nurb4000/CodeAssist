@@ -117,7 +117,11 @@ class SessionManager:
         """Import session data from export."""
         new_session = await Session.create(name=name or "Imported Session")
 
-        for msg in export_data.get("messages", []):
+        for idx, msg in enumerate(export_data.get("messages", [])):
+            if not isinstance(msg, dict) or "role" not in msg:
+                raise ValueError(
+                    f"imported message #{idx} is malformed: missing required 'role' field"
+                )
             tool_calls_raw = msg.get("tool_calls")
             await new_session.add_message(
                 role=msg["role"],

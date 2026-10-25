@@ -124,7 +124,10 @@ async def import_session(body: dict):
         export_data = json.loads(data) if isinstance(data, str) else data
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON data")
-    new_session = await SessionManager.import_session(export_data, name)
+    try:
+        new_session = await SessionManager.import_session(export_data, name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"id": new_session.id}
 
 

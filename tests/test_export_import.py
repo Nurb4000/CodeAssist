@@ -300,3 +300,13 @@ def test_base_tool_export_route(client):
     assert payload["format"] == "codeassist-base-tools-bundle"
     files = {b["file"] for b in payload["data"]["base_tools"]}
     assert "read.py" in files
+
+
+def test_session_import_route_rejects_malformed_payload(client):
+    """A message missing 'role' used to KeyError out of import_session and
+    surface as a 500; it must now be a clean 400."""
+    client, _ = client
+    body = {"data": {"messages": [{"content": "orphan without a role"}]}}
+    r = client.post("/api/sessions/import", json=body)
+    assert r.status_code == 400, r.text
+    assert "role" in r.json()["detail"]

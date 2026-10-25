@@ -104,6 +104,15 @@ class TestSessionManager:
         assert messages[0]["content"] == "Original message"
 
     @pytest.mark.asyncio
+    async def test_import_session_rejects_message_missing_role(self):
+        """A malformed export whose message lacks 'role' must raise a clear
+        ValueError, not an unhandled KeyError that surfaces as a 500."""
+        await init_db()
+        export_data = {"messages": [{"content": "orphan"}]}
+        with pytest.raises(ValueError, match="missing required 'role'"):
+            await SessionManager.import_session(export_data, "Bad Import")
+
+    @pytest.mark.asyncio
     async def test_export_import_preserves_reasoning_content(self):
         """reasoning_content must survive an export->import round trip so a
         reasoning model's thinking block is not lost when sharing sessions."""
