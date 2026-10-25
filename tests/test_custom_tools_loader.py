@@ -97,3 +97,27 @@ def test_approved_custom_tool_loads_marked_trusted(tmp_path):
     assert tool is not None, "the approved tool should have loaded"
     assert tool.trusted is True, "a loaded custom tool is trusted by definition"
     assert loader.list_tools()[0]["trusted"] is True
+
+
+def test_remove_tool_clears_in_memory_and_sys_modules(tmp_path):
+    """remove_tool must drop the tool from both the in-memory registry and
+    sys.modules; a wrong-key ``_modules.pop`` plus unreachable dead code left
+    stale module refs behind (§8)."""
+    import sys
+
+    tool_file = _write_custom_tool(tmp_path)
+    registry = TrustRegistry(registry_path=tmp_path / "trust.json")
+    registry.approve(tool_file)
+
+    loader = CustomToolRegistry(tmp_path, trust_registry=registry)
+    loader.discover()
+    assert loader.get_tool("trustflagtool") is not None
+
+    module_key = f"custom_tool_{tool_file.stem}"
+    assert module_key in sys.modules, "precondition: the tool is import-cached"
+    assert "trustflagtool" in loader._modules, "precondition: the tool is registered"
+
+    loader.remove_tool("trustflagtool")
+
+    assert "trustflagtool" not in loader._modules, "the in-memory entry is dropped"
+    assert module_key not in sys.modules, "the sys.modules entry is dropped (no leak)"

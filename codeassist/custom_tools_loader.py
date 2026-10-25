@@ -190,23 +190,15 @@ class CustomToolRegistry:
         if not resolved.is_file():
             return None
         resolved.unlink()
-        # Drop from live in-memory registry too.
+        # Drop from the live registries. `_tools`/`_modules` are keyed by tool
+        # name; `sys.modules` is keyed by the import module name
+        # (custom_tool_<stem>), so all three must be cleared or stale modules
+        # leak until the next discover() overwrites them (§8).
         self._tools.pop(name, None)
-        self._modules.pop(f"custom_tool_{resolved.stem}", None)
+        self._modules.pop(name, None)
+        sys.modules.pop(f"custom_tool_{resolved.stem}", None)
         return resolved
-        root = self.tools_dir.resolve()
-        try:
-            candidate.relative_to(root)
-        except ValueError:
-            return None
-        if not candidate.is_file():
-            return None
-        candidate.unlink()
-        # Drop from live in-memory registry too.
-        self._tools.pop(name, None)
-        self._modules.pop(f"custom_tool_{candidate.stem}", None)
-        return candidate
-    
+        
     def reload(self):
         """Reload all custom tools."""
         self._tools.clear()
