@@ -11,6 +11,32 @@ async def _count(db, table, column, value):
     return (await cursor.fetchone())["n"]
 
 
+@pytest.mark.asyncio
+async def test_get_db_rolls_back_failed_operation():
+    """A failed operation must not leave an open transaction / write lock for the
+    next borrower of a pooled connection. SQLite reports a connection's own
+    uncommitted writes, so without a rollback on error the failed insert would
+    surface to the reused connection as stale rows (the _DBPool.release bug)."""
+    from codeassist.session import get_db, init_db
+
+    await init_db()
+    async with get_db() as db:
+        await db.execute("CREATE TABLE rolltest (id INTEGER)")
+        await db.commit()
+
+    # A failing write inside get_db() must leave the pooled connection clean.
+    with pytest.raises(RuntimeError):
+        async with get_db() as db:
+            await db.execute("INSERT INTO rolltest (id) VALUES (99)")
+            raise RuntimeError("boom")
+
+    async with get_db() as db2:
+        cursor = await db2.execute("SELECT COUNT(*) FROM rolltest WHERE id = 99")
+        count = (await cursor.fetchone())[0]
+
+    assert count == 0, "failed operation must be rolled back for the next borrower"
+
+
 class TestSession:
     """Test session CRUD operations."""
 

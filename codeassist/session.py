@@ -117,6 +117,16 @@ async def get_db():
     conn = await pool.acquire()
     try:
         yield conn
+    except Exception:
+        # A failed operation can leave an open transaction / write lock on this
+        # connection. Roll it back before returning the connection to the pool so
+        # the next borrower starts clean instead of inheriting a stale write lock
+        # (WAL + busy_timeout reduce but do not remove that hazard).
+        try:
+            await conn.rollback()
+        except Exception:  # noqa: BLE001, S110 - closed/already-rolled-back conn is fine
+            pass
+        raise
     finally:
         await pool.release(conn)
 
