@@ -205,7 +205,7 @@ class MCPClient:
                     "id": str(uuid.uuid4()),
                     "method": "tools/call",
                     "params": {
-                        "name": tool.name.replace(f"mcp_{tool.server_name}_", ""),
+                        "name": tool.name.removeprefix(f"mcp_{tool.server_name}_"),
                         "arguments": arguments,
                     },
                 },

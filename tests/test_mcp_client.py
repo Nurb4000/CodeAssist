@@ -71,3 +71,28 @@ async def test_call_tool_wraps_error_message():
 
     assert output.startswith("Error:")
     assert "bad args" in output
+
+
+@pytest.mark.asyncio
+async def test_mcp_prefix_stripped_only_once():
+    """A tool whose name contains the server prefix more than once must have
+    only the leading prefix stripped before the call is sent to the MCP server.
+    str.replace strips every occurrence; removeprefix strips a single leading
+    one, which is what the server expects."""
+    client, tool_name, server = _client(tool_name="mcp_foo_mcp_foo_bar", server="foo")
+
+    captured = {}
+
+    async def fake_post(url, json):
+        captured["name"] = json["params"]["name"]
+        return types.SimpleNamespace(
+            status_code=200,
+            text="x",
+            json=lambda: {"result": {"content": [{"type": "text", "text": "ok"}]}},
+        )
+
+    client._clients[server] = types.SimpleNamespace(post=fake_post)
+
+    assert await client.call_tool(tool_name, {}) == "ok"
+    # Only the leading ``mcp_foo_`` is removed; the inner occurrence stays.
+    assert captured["name"] == "mcp_foo_bar"
