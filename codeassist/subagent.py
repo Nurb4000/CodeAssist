@@ -78,7 +78,7 @@ class SubagentManager:
         task_id: str | None = None,
     ) -> SubagentTask:
         """Create a new subagent task."""
-        tid = task_id or str(uuid.uuid4())[:8]
+        tid = task_id or str(uuid.uuid4())
 
         # Check if resuming existing task
         existing = self._tasks.get(tid)

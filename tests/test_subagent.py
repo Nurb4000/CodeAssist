@@ -226,3 +226,41 @@ async def test_subagent_nesting_is_bounded_by_depth(stub_deps):
 
     assert "Max subagent depth" in out
     assert "nested-ok" not in out
+
+
+@pytest.mark.asyncio
+async def test_create_task_ids_are_collision_resistant(monkeypatch):
+    """Subagent task ids must carry enough entropy that two creates do not
+    collide and silently return the earlier task. Truncating uuid4 to 8 hex chars
+    (~32 bits) made collisions possible; a collision returned the existing task
+    instead of creating a new one, swallowing the second subagent."""
+    from codeassist import subagent as subagent_mod
+
+    # Two distinct ids that share their first 8 hex chars (what a truncated id
+    # collision looks like).
+    values = iter(
+        [
+            "11111111-0000-4000-8000-000000000001",
+            "11111111-0000-4000-8000-000000000002",
+        ]
+    )
+
+    def fake_uuid4():
+        return next(values)
+
+    monkeypatch.setattr(subagent_mod.uuid, "uuid4", fake_uuid4)
+
+    mgr = SubagentManager()
+    t1 = await mgr.create_task(
+        description="d1", prompt="p", subagent_type="general",
+        parent_session_id="parent-1",
+    )
+    t2 = await mgr.create_task(
+        description="d2", prompt="p", subagent_type="general",
+        parent_session_id="parent-2",
+    )
+
+    # Full-entropy ids stay distinct even with a shared 8-char prefix; without
+    # the fix both collapse to "11111111" and the second create returns the first.
+    assert t1.id != t2.id
+    assert len(mgr.list_tasks()) == 2
