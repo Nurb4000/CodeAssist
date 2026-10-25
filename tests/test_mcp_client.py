@@ -74,6 +74,37 @@ async def test_call_tool_wraps_error_message():
 
 
 @pytest.mark.asyncio
+async def test_connect_server_preserves_config_env_markers(monkeypatch):
+    """Connecting to an MCP server must not rewrite the caller's config -- in
+    particular the ``env`` sub-dict's ``env:<NAME>`` markers must survive so a
+    reload re-resolves them. The old code resolved env in place, mutating the
+    persisted config on every connect (and dropping the markers on reload)."""
+    from codeassist import mcp_client
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"result": {"tools": []}}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(mcp_client.httpx, "AsyncClient", _FakeClient)
+
+    config = {"url": "http://example/mcp", "env": {"API_KEY": "env:MY_API_KEY"}}
+    await mcp_client.MCPClient()._connect_server("foo", config)
+
+    # Markers intact -- the config dict was not mutated in place.
+    assert config["env"] == {"API_KEY": "env:MY_API_KEY"}
+
+
+@pytest.mark.asyncio
 async def test_mcp_prefix_stripped_only_once():
     """A tool whose name contains the server prefix more than once must have
     only the leading prefix stripped before the call is sent to the MCP server.

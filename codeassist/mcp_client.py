@@ -100,13 +100,6 @@ class MCPClient:
             raise ValueError(f"Server '{name}' missing 'url' configuration")
 
         headers = config.get("headers", {})
-        env = config.get("env", {})
-
-        # Apply environment variables
-        import os
-        for key, value in env.items():
-            if isinstance(value, str) and value.startswith("env:"):
-                env[key] = os.environ.get(value[4:], "")
 
         client = httpx.AsyncClient(
             headers={**headers, "Content-Type": "application/json"},
