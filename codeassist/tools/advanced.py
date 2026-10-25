@@ -509,6 +509,14 @@ class TaskTool(Tool):
         if max_depth <= 0:
             return ToolResult(output="Error: Subagents are disabled (subagent_depth=0).", error=True)
 
+        # Depth of this spawn = the nesting level of the agent running this tool.
+        # The main agent runs at 0; each subagent increments by one (set in
+        # _run_subagent), so a nested spawn is caught by start_task's guard
+        # instead of always passing a constant 0 (which made unbounded nesting
+        # possible, blocked only by the prompt-text instruction).
+        from codeassist.subagent import _subagent_depth
+        current_depth = _subagent_depth.get()
+
         # Create or resume task
         task = await subagent_manager.create_task(
             description=description,
@@ -528,7 +536,7 @@ class TaskTool(Tool):
                         self._agent_runner,
                         self._config,
                         self._tools_registry,
-                        depth=0,
+                        depth=current_depth,
                     )
                 except Exception:
                     log.exception("Background subagent %s failed", task.id)
@@ -550,7 +558,7 @@ class TaskTool(Tool):
                     self._agent_runner,
                     self._config,
                     self._tools_registry,
-                    depth=0,
+                    depth=current_depth,
                 )
 
                 status = "completed" if task.status == "completed" else "error"

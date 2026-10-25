@@ -187,3 +187,42 @@ async def test_background_completion_notifies_and_drains_queue(stub_deps):
     assert len(delivered) == 1
     assert delivered[0].id == task.id
     assert task.id not in mgr._notifications, "notification queue must be drained"
+
+
+@pytest.mark.asyncio
+async def test_subagent_nesting_is_bounded_by_depth(stub_deps):
+    """A subagent that spawns another subagent must be bounded by
+    subagent_depth. TaskTool used to pass a constant depth=0 to start_task, so
+    the nesting guard (`depth >= subagent_depth`) never fired and unbounded
+    nesting was prevented only by the prompt-text instruction. Now each level
+    increments a per-execution depth, so with subagent_depth=1 the first-level
+    subagent runs but its nested spawn is rejected by the guard."""
+    from codeassist.session import init_db
+    from codeassist.subagent import _subagent_depth
+
+    await init_db()
+    mgr = SubagentManager()
+    cfg = SimpleNamespace(agent=SimpleNamespace(subagent_depth=1))
+
+    async def nesting_runner(agent, prompt):
+        # The first-level subagent runs one level below the main agent.
+        assert _subagent_depth.get() == 1
+        nested = await mgr.create_task(
+            description="n", prompt="np", subagent_type="general",
+            parent_session_id="parent-nest",
+        )
+        # Spawn the nested task at THIS level's depth, exactly as TaskTool does.
+        result = await mgr.start_task(
+            nested.id, _runner_with("nested-ok"), cfg, None,
+            depth=_subagent_depth.get(),
+        )
+        yield SimpleNamespace(type="text_delta", data={"content": result})
+
+    parent = await mgr.create_task(
+        description="p", prompt="pp", subagent_type="general",
+        parent_session_id="parent-1",
+    )
+    out = await mgr.start_task(parent.id, nesting_runner, cfg, None)
+
+    assert "Max subagent depth" in out
+    assert "nested-ok" not in out

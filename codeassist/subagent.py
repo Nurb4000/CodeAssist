@@ -1,10 +1,18 @@
 import asyncio
 import logging
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 log = logging.getLogger(__name__)
+
+# Nesting level of the agent currently executing. The main agent runs at 0;
+# each spawned subagent runs one level deeper. TaskTool reads this to pass its
+# own depth to start_task so the nesting guard in start_task actually sees
+# increasing depths instead of a constant 0 (which made unbounded nesting
+# possible, blocked only by the prompt-text instruction).
+_subagent_depth: ContextVar[int] = ContextVar("_subagent_depth", default=0)
 
 
 @dataclass
@@ -158,6 +166,8 @@ class SubagentManager:
         ``asyncio.Task`` (cancellable via ``_running``) and so every exit path --
         completion, error, and cancellation -- persists the task to the database.
         """
+        from codeassist.subagent import _subagent_depth
+        _depth_token = _subagent_depth.set(depth + 1)
         try:
             # Create child session
             from codeassist.session import Session
@@ -246,6 +256,8 @@ class SubagentManager:
             task.completed_at = datetime.now(UTC).isoformat()
             await self._persist_task(task)
             raise
+        finally:
+            _subagent_depth.reset(_depth_token)
 
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel a running task.
