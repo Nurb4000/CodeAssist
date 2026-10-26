@@ -1,3 +1,4 @@
+import itertools
 import logging
 from pathlib import Path
 
@@ -39,13 +40,19 @@ class ReadTool(Tool):
             return ToolResult(output=f"Error: {file_path} is a directory, not a file", error=True)
 
         try:
-            content = path.read_text(errors="replace")
+            # Read only the requested line window instead of loading the whole
+            # file: read_text() pulled every line into memory up front, so slicing
+            # a small range out of a large file blew the heap. islice keeps memory
+            # to O(limit); the total is counted in its own streaming pass.
+            with path.open("r", errors="replace") as f:
+                sliced = [
+                    ln.rstrip("\n")
+                    for ln in itertools.islice(f, offset, offset + limit)
+                ]
+            with path.open("r", errors="replace") as f:
+                total = sum(1 for _ in f)
         except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error reading {file_path}: {e}", error=True)
-
-        lines = content.splitlines()
-        total = len(lines)
-        sliced = lines[offset : offset + limit]
 
         numbered = []
         for i, line in enumerate(sliced, start=offset + 1):
