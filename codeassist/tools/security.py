@@ -18,6 +18,31 @@ _BLOCKED_LINK_LOCAL_IPS = {
     "fd00:ec2::254",    # AWS IPv6 metadata
 }
 
+# Well-known non-HTTP internal service ports. A validated host on any of these is
+# treated as an SSRF vector into local admin/database/remote-access services even
+# when the host itself resolves to a public IP -- the concern is the *service*,
+# not the address. HTTP(S) (80/443) and other web ports are intentionally left
+# open so legitimate fetches are not broken.
+_BLOCKED_SERVICE_PORTS = frozenset({
+    20, 21,     # FTP / FTP-data
+    22,         # SSH
+    23,         # Telnet
+    25,         # SMTP
+    110,        # POP3
+    135, 139,   # MSRPC / NetBIOS
+    445,        # SMB
+    1433, 1434, # MSSQL
+    1521,       # Oracle
+    3306,       # MySQL
+    3389,       # RDP
+    5432,       # PostgreSQL
+    5672,       # AMQP
+    6379,       # Redis
+    9042, 9200, 9300,  # Cassandra / Elasticsearch
+    11211,      # Memcached
+    27017,      # MongoDB
+})
+
 
 class WorkspaceViolationError(Exception):
     """Raised when a path escapes the workspace boundary."""
@@ -128,6 +153,15 @@ def validate_url(url: str) -> bool:
         return False
 
     if parsed.scheme not in ("http", "https"):
+        return False
+
+    # Reject well-known internal service ports up front. Accessing .port raises
+    # ValueError on an out-of-range port, which we fail closed on.
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port is not None and port in _BLOCKED_SERVICE_PORTS:
         return False
 
     hostname = parsed.hostname
