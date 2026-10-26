@@ -1746,8 +1746,9 @@ class Agent:
             # and replaying this step cannot duplicate output or events.
             context_retries = 0
             while True:
+                stream_gen = self.llm.stream(messages, openai_tools)
                 try:
-                    async for event in self.llm.stream(messages, openai_tools):
+                    async for event in stream_gen:
                         if self.cancel_event.is_set():
                             # Stop arrived mid-stream. Save what already streamed
                             # before unwinding, otherwise the turn ends with an
@@ -1893,6 +1894,18 @@ class Agent:
                         "usage_pct": ctx_after["usage_pct"],
                         "severity": ctx_after["severity"],
                     })
+                finally:
+                    # Always release the provider stream when this step's try/except
+                    # exits -- normal completion, timeout `break`, mid-stream `return`,
+                    # or an caught exception -- so a suspended httpx connection is not
+                    # left dangling until garbage collection. Closing an already
+                    # exhausted generator is a no-op; guard so cleanup can't mask the
+                    # reason we're here.
+                    try:
+                        await stream_gen.aclose()
+                    except Exception:
+                        log.debug("Error closing LLM stream during cleanup", exc_info=True)
+
             # A safety filter that also produced text (or tool calls) is a partial
             # result, not a refusal — keep it and let the normal flow continue.
             # Only a turn that came back empty *and* carries a filter finish

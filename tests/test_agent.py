@@ -643,6 +643,47 @@ class TestAgentRun:
         assert "done" in types
 
     @pytest.mark.asyncio
+    async def test_abandoned_stream_is_closed_on_timeout(self, agent, mock_session):
+        """A step whose provider stream is abandoned mid-flight (here a timeout)
+        must close the generator so its httpx connection is released promptly
+        rather than left dangling until garbage collection (§5)."""
+        import asyncio
+
+        from codeassist.llm import TextDelta
+
+        agent.config.agent.max_iterations = 1
+        agent.config.llm.timeout = 0.05  # seconds
+
+        calls = {"aclose": False}
+
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("a")
+            await asyncio.sleep(0.2)  # run past the timeout
+            yield TextDelta("b")
+
+        class _Tracking:
+            def __init__(self, gen):
+                self._gen = gen
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return await self._gen.__anext__()
+
+            async def aclose(self):
+                calls["aclose"] = True
+                await self._gen.aclose()
+
+        agent.llm.stream = lambda m, t: _Tracking(fake_stream(m, t))
+
+        events = []
+        async for event in agent.run("Hello"):
+            events.append(event)
+
+        assert calls["aclose"] is True
+
+    @pytest.mark.asyncio
     async def test_run_emits_and_persists_reasoning(self, agent, mock_session):
         """Reasoning model output is emitted as a 'reasoning' event and
         persisted in session.update_message.reasoning_content (schema v10)."""
