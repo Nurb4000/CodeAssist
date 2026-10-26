@@ -1131,10 +1131,20 @@ class Agent:
                 return False
             if action == "deny":
                 return True  # Will be handled as denied below
-        except Exception as e:  # noqa: BLE001 — fall back to legacy trust on any permission-check error
-            log.debug("Permission check failed, falling back to legacy: %s", e)
+            # action == "ask": fall through to the legacy CONFIRM_TOOLS allowlist
+            # below, preserving pre-permission-system behavior for tools the
+            # ruleset does not explicitly cover.
+        except Exception as e:  # noqa: BLE001 -- fail closed on any permission-check error
+            # Fail closed. A permission-check error must not silently allow the
+            # tool: the old fallback (`tool_name in CONFIRM_TOOLS`) let every
+            # non-write tool (read/http/process/custom/...) run with no prompt
+            # whenever the manager errored -- a fail-open gap. Log loudly so a
+            # broken permission system is visible instead of transparently open.
+            log.warning("Permission check for %s failed; requiring confirmation: %s", tool_name, e)
+            return True
 
-        # Legacy fallback: tools in CONFIRM_TOOLS need confirmation
+        # Legacy fallback for an "ask" ruleset decision: tools in CONFIRM_TOOLS
+        # still require confirmation.
         return tool_name in CONFIRM_TOOLS
 
     async def get_permission_action(self, tool_name: str, arguments: dict) -> str:

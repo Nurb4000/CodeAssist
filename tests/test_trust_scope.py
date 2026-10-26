@@ -127,6 +127,23 @@ async def test_config_trust_all_ask_still_confirms(tmp_path):
     assert await agent.needs_confirmation("git", {}) is True
 
 
+@pytest.mark.asyncio
+async def test_needs_confirmation_fails_closed_on_perm_error(tmp_path, monkeypatch):
+    """A permission-check error must fail closed (require confirmation), not fall
+    back to the legacy {write,edit,shell,git} allowlist and silently let every
+    other tool run with no prompt. ``read`` is not in that set, so the old code
+    returned False here -- a fail-open gap."""
+    agent = _config_agent("sess-FC", tmp_path)
+
+    class _Boom:
+        async def check_permission(self, tool_name, file_path, ruleset):
+            raise RuntimeError("permission manager unavailable")
+
+    monkeypatch.setattr("codeassist.agent.permission_manager", _Boom())
+
+    assert await agent.needs_confirmation("read", {"file_path": str(tmp_path / "a.py")}) is True
+
+
 class TestConfirmationRequiredHonorsSessionTrust:
     """The confirmation gate must consult session-trust flags even when the
     permission rules return "ask".
