@@ -1092,6 +1092,15 @@ class Session:
             await db.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
             await db.commit()
 
+        # Per-session trust flags live in process-wide dicts keyed by session id
+        # (agent.py). They intentionally survive reconnects but must not survive
+        # deletion -- popping them here stops those dicts from growing without
+        # bound as sessions are created and deleted over the life of the server.
+        from codeassist.agent import SESSION_TOOL_TRUST, SESSION_TRUST
+
+        SESSION_TRUST.pop(self.id, None)
+        SESSION_TOOL_TRUST.pop(self.id, None)
+
     async def delete_messages_after(self, message_id: str) -> int:
         """Delete all messages after a given message ID. Returns count of deleted messages."""
         async with get_db() as db:

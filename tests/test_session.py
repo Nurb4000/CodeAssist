@@ -381,6 +381,25 @@ class TestSession:
             assert child_rows == 0
 
     @pytest.mark.asyncio
+    async def test_delete_session_clears_process_wide_trust(self):
+        """Session.delete must clear the per-session trust flags from the
+        process-wide dicts. They intentionally survive reconnects but must not
+        survive deletion -- otherwise every created/deleted session leaks entries
+        into SESSION_TRUST / SESSION_TOOL_TRUST until the server exhausts memory."""
+        from codeassist.agent import SESSION_TOOL_TRUST, SESSION_TRUST
+
+        await init_db()
+        session = await Session.create(name="Trustee")
+
+        SESSION_TRUST[session.id] = {"workspace": True, "shell": False}
+        SESSION_TOOL_TRUST[session.id] = {"read", "write"}
+
+        await session.delete()
+
+        assert session.id not in SESSION_TRUST
+        assert session.id not in SESSION_TOOL_TRUST
+
+    @pytest.mark.asyncio
     async def test_fork_session(self):
         """Test forking a session."""
         await init_db()
