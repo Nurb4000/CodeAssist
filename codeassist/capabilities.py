@@ -104,7 +104,16 @@ def is_external_backend(base_url: str) -> bool:
     return "." in host
 
 
-_cache: dict = {"expires": 0.0, "info": _default_info()}
+# Capability detection is per-backend, so the snapshot is keyed by the backend's
+# normalized base_url. A base_url change at runtime (the settings API applies it
+# live) must invalidate the cache immediately rather than serving the previous
+# backend's vision/model/context detection for up to CACHE_TTL.
+_cache: dict = {"expires": 0.0, "info": _default_info(), "base_url": ""}
+
+
+def _cache_key(cfg) -> str:
+    """Identity of the backend being probed (normalized base_url)."""
+    return (cfg.llm.base_url or "").strip().rstrip("/").lower()
 
 
 def _parse_vision(model_data: dict) -> bool:
@@ -232,6 +241,7 @@ async def _probe_backend(cfg) -> dict | None:
 
 
 async def _refresh(cfg) -> dict:
+    _cache["base_url"] = _cache_key(cfg)
     info = await _probe_backend(cfg)
     if info is None:
         # Couldn't probe the backend (e.g. base_url not loaded yet). Cache a
@@ -252,7 +262,7 @@ async def model_vision_capable(cfg) -> bool:
     if cfg.llm.vision:
         return True
     now = time.monotonic()
-    if now > _cache["expires"]:
+    if _cache_key(cfg) != _cache.get("base_url") or now > _cache["expires"]:
         await _refresh(cfg)
     return _cache["info"]["vision"]
 
@@ -266,7 +276,7 @@ async def get_backend_info(cfg) -> dict:
       - ``source``   — ``"backend"`` when auto-detected, ``None`` otherwise
     """
     now = time.monotonic()
-    if now > _cache["expires"]:
+    if _cache_key(cfg) != _cache.get("base_url") or now > _cache["expires"]:
         await _refresh(cfg)
     info = _cache["info"]
     return {

@@ -21,10 +21,10 @@ def _reset_capabilities_cache():
     import codeassist.capabilities as cap_mod
 
     real_probe = cap_mod._probe_backend
-    cap_mod._cache = {"expires": 0.0, "info": _default_info()}
+    cap_mod._cache = {"expires": 0.0, "info": _default_info(), "base_url": ""}
     yield
     cap_mod._probe_backend = real_probe
-    cap_mod._cache = {"expires": 0.0, "info": _default_info()}
+    cap_mod._cache = {"expires": 0.0, "info": _default_info(), "base_url": ""}
 
 
 def _cfg(**llm_overrides):
@@ -105,6 +105,31 @@ async def test_get_backend_info_cache_is_refreshed():
     cap_mod._cache["expires"] = time.monotonic() - 1
     second = await get_backend_info(cfg)
     assert second["model"] == "m2"
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidated_on_backend_switch():
+    """A runtime base_url change must force a fresh probe; the previous
+    backend's detection must not linger until the TTL expires."""
+    import codeassist.capabilities as cap_mod
+
+    calls = {"n": 0}
+
+    async def _probe(cfg):
+        calls["n"] += 1
+        return {**_default_info(), "model": f"model-{calls['n']}"}
+
+    cap_mod._probe_backend = _probe
+
+    cfg_a = _cfg(base_url="http://a.example:8080/v1")
+    assert (await get_backend_info(cfg_a))["model"] == "model-1"
+    # Same backend -> cached, no second probe.
+    assert (await get_backend_info(cfg_a))["model"] == "model-1"
+    assert calls["n"] == 1
+    # Switch backend -> must re-probe and detect the new backend.
+    cfg_b = _cfg(base_url="http://b.example:9090/v1")
+    assert (await get_backend_info(cfg_b))["model"] == "model-2"
+    assert calls["n"] == 2
 
 
 class TestParseVision:
