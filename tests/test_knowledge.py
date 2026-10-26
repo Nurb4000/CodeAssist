@@ -1028,6 +1028,34 @@ class TestExportImport:
         results = await KnowledgeBase.fulltext_search_knowledge("uniquephrase")
         assert any("uniquephrase" in (r.get("content") or "") for r in results)
 
+    @pytest.mark.asyncio
+    async def test_import_drops_arbitrary_client_columns(self):
+        """import_all must not let a client-supplied export inject arbitrary
+        column names into the INSERT. A row carrying a key that is not a real
+        column of the target table is dropped, so a hostile snapshot can neither
+        write to unexpected columns nor fail the whole import."""
+        from codeassist.session import get_db
+
+        await init_db()
+
+        malicious_row = {
+            "entry_type": "convention", "scope": "project",
+            "content": "injected row", "confidence": 0.5,
+            "__evil__": "DROP TABLE knowledge_entries",  # not a real column
+        }
+        export = {"version": 1, "data": {"knowledge_entries": [malicious_row]}}
+
+        counts = await KnowledgeBase.import_all(export)
+        assert counts.get("knowledge_entries") == 1
+
+        async with get_db() as db:
+            cur = await db.execute(
+                "SELECT * FROM knowledge_entries WHERE content = ?", ("injected row",)
+            )
+            row = dict(await cur.fetchone())
+        assert row is not None
+        assert "__evil__" not in row
+
 
 class TestPII:
     @pytest.mark.asyncio

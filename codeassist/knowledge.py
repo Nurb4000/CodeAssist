@@ -1034,6 +1034,19 @@ class KnowledgeBase:
         from .session import get_db
         counts = {}
         async with get_db() as db:
+            # Whitelist of valid columns per table, read from the live schema so it
+            # can't drift from CREATE TABLE / migrations. A client-supplied export
+            # may carry arbitrary keys; without this they'd be interpolated into
+            # the INSERT column list and written to unexpected (or nonexistent)
+            # columns. Values stay parameterised, so this only bounds the column
+            # names -- not the payloads.
+            valid_columns = {
+                table: {
+                    row[1]
+                    for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+                }
+                for table in KnowledgeBase.EXPORT_TABLES
+            }
             for table in KnowledgeBase.EXPORT_TABLES:
                 rows = export.get("data", {}).get(table, [])
                 if not rows:
@@ -1057,6 +1070,8 @@ class KnowledgeBase:
                             vals.append(source_session_id)
                         elif k == "embedding":
                             continue  # skip binary blobs
+                        elif k not in valid_columns[table]:
+                            continue  # drop columns absent from the table schema
                         else:
                             cols.append(k)
                             vals.append(v)
