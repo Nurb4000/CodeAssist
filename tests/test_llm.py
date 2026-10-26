@@ -492,6 +492,44 @@ class TestStream:
         assert texts == ["OK"]
 
     @pytest.mark.asyncio
+    async def test_rate_limit_caps_hostile_retry_after(self, llm_client):
+        """A hostile Retry-After header (seconds) must be capped at the backoff
+        ceiling so it can't stall the turn for hours across retries (§5)."""
+        from codeassist.llm import JITTER_FACTOR, MAX_BACKOFF
+
+        call_count = [0]
+        req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+        def _rate_limited():
+            resp = httpx.Response(429, headers={"retry-after": "3600"}, request=req)
+            return openai.RateLimitError("rate limited", response=resp, body=None)
+
+        async def mock_create(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise _rate_limited()
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = "OK"
+            chunk.choices[0].finish_reason = "stop"
+            chunk.usage = None
+
+            async def stream_response():
+                yield chunk
+
+            return stream_response()
+
+        llm_client.client.chat.completions.create = mock_create
+
+        with patch("codeassist.llm.asyncio.sleep") as mock_sleep:
+            async for _ in llm_client.stream([{"role": "user", "content": "Hi"}]):
+                pass
+
+        slept = mock_sleep.call_args_list[0].args[0]
+        assert slept <= MAX_BACKOFF * (1 + JITTER_FACTOR), f"Retry-After not capped: slept {slept:.1f}s"
+
+    @pytest.mark.asyncio
     async def test_mid_stream_failure_after_text_is_not_retried(self, llm_client):
         """Once text has been yielded, a reconnect would duplicate it.
 

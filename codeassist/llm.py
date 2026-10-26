@@ -300,6 +300,11 @@ class LLMClient:
                         retry_after = float(resp_headers.get("retry-after", backoff))
                     except (ValueError, TypeError):
                         retry_after = backoff
+                    # A hostile server could send a huge numeric Retry-After (seconds);
+                    # cap it at the backoff ceiling so one header can't stall the turn
+                    # for hours across retries. HTTP-date values fall through to the
+                    # backoff budget above (float() rejects them).
+                    retry_after = min(retry_after, MAX_BACKOFF)
                     jitter = retry_after * random.uniform(-JITTER_FACTOR, JITTER_FACTOR)
                     sleep_time = max(0.1, retry_after + jitter)
                     log.info("Rate limited. Retrying in %.1fs...", sleep_time)
