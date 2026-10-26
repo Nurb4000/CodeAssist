@@ -202,17 +202,15 @@ class PluginRegistry:
         return results
 
     def reload(self):
-        """Hot-reload all plugins."""
-        for plugin_name in list(self._plugins.keys()):
-            plugin_path = None
-            for dir_name in (self.config.directories if self.config else []):
-                candidate = self.workspace / dir_name / plugin_name
-                if candidate.exists():
-                    plugin_path = candidate
-                    break
-            if plugin_path:
-                del self._plugins[plugin_name]
-                self._load_plugin(plugin_path)
+        """Hot-reload all plugins by re-scanning the configured directories.
+
+        A full re-scan both prunes plugins whose source has been deleted and
+        picks up newly added ones. The previous implementation only reloaded
+        existing keys, so a deleted plugin stayed registered and a new one was
+        never loaded.
+        """
+        self._plugins.clear()
+        self.discover()
         log.info("Reloaded %d plugins", len(self._plugins))
 
 

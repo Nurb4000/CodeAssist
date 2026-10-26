@@ -159,6 +159,41 @@ def test_remove_plugin_deletes_dir(tmp_path):
     assert not pdir.exists()
 
 
+def test_reload_prunes_deleted_and_picks_up_new_plugins(tmp_path):
+    """`PluginRegistry.reload()` must re-scan disk: a plugin whose source was
+    deleted has to be pruned, and a newly added plugin has to be loaded. The
+    old implementation only reloaded existing keys, so deleted plugins stayed
+    registered and new ones were never picked up."""
+    from codeassist.config import PluginConfig
+    from codeassist.plugins import PluginRegistry
+
+    def _write_plugin(name):
+        pdir = tmp_path / "codeassist" / "plugins" / name
+        pdir.mkdir(parents=True)
+        (pdir / "plugin.py").write_text(
+            "def register(config):\n    return {'tools': [], 'hooks': {}}\n",
+            encoding="utf-8",
+        )
+        (pdir / "plugin.json").write_text('{"version": "1.0", "config": {}}', encoding="utf-8")
+        return pdir
+
+    _write_plugin("demo")
+    cfg = PluginConfig(enabled=True, directories=["codeassist/plugins"])
+    reg = PluginRegistry(tmp_path, cfg)
+    reg.discover()
+    assert reg.get_plugin("demo") is not None
+
+    # Delete one plugin, then add a brand-new one, then reload.
+    import shutil
+    shutil.rmtree(tmp_path / "codeassist" / "plugins" / "demo")
+    _write_plugin("brandnew")
+
+    reg.reload()
+
+    assert reg.get_plugin("demo") is None, "deleted plugin must be pruned on reload"
+    assert reg.get_plugin("brandnew") is not None, "newly added plugin must be loaded on reload"
+
+
 def test_remove_custom_tool_deletes_file(tmp_path):
     from codeassist.custom_tools_loader import CustomToolRegistry
 
