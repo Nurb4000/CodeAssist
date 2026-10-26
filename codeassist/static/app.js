@@ -611,7 +611,7 @@ function workStepMessageEl(step) {
 }
 
 function appendStepProse(step, prose) {
-    if (prose) workStepMessageEl(step).innerHTML = marked.parse(prose);
+    if (prose) workStepMessageEl(step).innerHTML = sanitizeHtml(marked.parse(prose));
 }
 
 function appendStepReasoning(step, reasoning) {
@@ -803,7 +803,7 @@ function appendAssistantMessage(text) {
         `<div class="message-content"></div>`;
     messagesEl.appendChild(div);
     lastMainMsgEl = div;
-    div.querySelector('.message-content').innerHTML = marked.parse(text);
+    div.querySelector('.message-content').innerHTML = sanitizeHtml(marked.parse(text));
     applyThinkingVisibility(div.querySelector('.thinking-block'));
     return div;
 }
@@ -1110,7 +1110,7 @@ function handleProse(content) {
     if (isNewTurn) closeActiveStep();   // previous turn used tools → new step
     const unit = startPendingUnit();
     pendingProseBuf += content;
-    unit.querySelector('.message-content').innerHTML = marked.parse(pendingProseBuf);
+    unit.querySelector('.message-content').innerHTML = sanitizeHtml(marked.parse(pendingProseBuf));
     maybeScrollToBottom();
 }
 
@@ -1266,6 +1266,30 @@ function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
+}
+
+// marked v12 has no built-in sanitizer and passes raw HTML through parse(), so
+// prose streamed from the model (prompt-injectable) would otherwise land live in
+// the DOM via innerHTML (<script>, inline event handlers, javascript: URLs).
+// Parse the rendered string with DOMParser -- which does not execute scripts or
+// handlers -- drop the dangerous nodes and attributes, and return cleaned markup.
+function sanitizeHtml(input) {
+    if (!input) return '';
+    const doc = new DOMParser().parseFromString(input, 'text/html');
+    doc.querySelectorAll('script,style,iframe,object,embed,form,input,textarea')
+        .forEach((el) => el.remove());
+    doc.querySelectorAll('*').forEach((el) => {
+        for (const attr of Array.from(el.attributes)) {
+            const name = attr.name.toLowerCase();
+            const value = attr.value;
+            if (name.startsWith('on') ||
+                (name === 'href' && /^javascript:|^\s*data:/i.test(value)) ||
+                (name === 'src' && /^javascript:/i.test(value))) {
+                el.removeAttribute(attr.name);
+            }
+        }
+    });
+    return doc.body ? doc.body.innerHTML : input;
 }
 
 function showQuestionDialog(questionId, data) {
