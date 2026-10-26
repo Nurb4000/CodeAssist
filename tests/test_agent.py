@@ -402,6 +402,20 @@ class TestAgentConfirmation:
         result = await agent.wait_for_confirm("test_id")
         assert result == False
 
+    @pytest.mark.asyncio
+    async def test_wait_for_confirm_times_out_and_denies(self, agent, monkeypatch):
+        """An unanswered confirmation must not hang the turn forever. After
+        CONFIRM_TIMEOUT elapses it is treated as a denial (the safe default for a
+        tool that needs explicit approval), and the pending event is cleaned up."""
+        monkeypatch.setattr("codeassist.agent.CONFIRM_TIMEOUT", 0.01)
+        # A pending confirmation that is never answered.
+        agent._confirm_events["test_id"] = asyncio.Event()
+
+        result = await agent.wait_for_confirm("test_id")
+
+        assert result is False
+        assert "test_id" not in agent._confirm_events
+
 
 class TestAgentQuestionFlow:
     """The question tool must deliver the user's answer text to the model,

@@ -44,6 +44,14 @@ log = logging.getLogger(__name__)
 # TODO: Remove once all callers have migrated to the permission system.
 CONFIRM_TOOLS = {"write", "edit", "shell", "git"}
 
+# Upper bound on how long a tool confirmation may go unanswered before it is
+# treated as a denial. Without this, `wait_for_confirm` awaits an asyncio.Event
+# forever, so a client that requests a confirmation but never answers (e.g. it
+# disconnects without triggering cancel()) wedges the whole turn. Generous on
+# purpose -- a human may take a while to respond -- but bounded so a stuck turn
+# cannot hang indefinitely.
+CONFIRM_TIMEOUT = 15 * 60
+
 # Shell command risk classification for arity-based approval reduction.
 # Read-only commands auto-approve; destructive commands still require confirmation.
 _READONLY_SHELL_COMMANDS = frozenset({
@@ -1201,12 +1209,25 @@ class Agent:
         return bool(tool_name == "shell" and self._trust_shell)
 
     async def wait_for_confirm(self, confirm_id: str) -> bool:
-        """Wait for user to approve/deny a tool execution."""
+        """Wait for user to approve/deny a tool execution.
+
+        Bounded by ``CONFIRM_TIMEOUT`` so an unanswered prompt (a client that
+        never answers, or disconnects without triggering ``cancel()``) cannot
+        hang the turn forever. A timeout is treated as a denial -- the safe
+        default for any tool that requires explicit approval.
+        """
         event = asyncio.Event()
         self._confirm_events[confirm_id] = event
-        await event.wait()
-        result = self._confirm_results.pop(confirm_id, False)
-        self._confirm_events.pop(confirm_id, None)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=CONFIRM_TIMEOUT)
+            result = self._confirm_results.pop(confirm_id, False)
+        except TimeoutError:
+            log.warning(
+                "Confirmation %s unanswered after %.0fs; denying.", confirm_id, CONFIRM_TIMEOUT,
+            )
+            result = False
+        finally:
+            self._confirm_events.pop(confirm_id, None)
         return result
 
     def get_confirm_context(self, confirm_id: str) -> dict | None:
