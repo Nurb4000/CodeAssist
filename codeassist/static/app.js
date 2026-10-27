@@ -475,15 +475,21 @@ function startRename(sessionId, nameSpan) {
 
 async function createSession() {
     if (isStreaming) return; // a live turn owns the socket; creating mid-run would strand it
-    const res = await api('POST', '/api/sessions');
-    currentSessionId = res.id;
-    // A brand-new session has no plan, and now has its own -- nothing to clear
-    // server-side. Clearing the shared list here used to wipe the plan of
-    // whichever session you had been working in.
-    clearPlanDisplay();
-    await loadSessions();
-    showWelcome();
-    connectWS();
+    try {
+        const res = await api('POST', '/api/sessions');
+        currentSessionId = res.id;
+        // A brand-new session has no plan, and now has its own -- nothing to clear
+        // server-side. Clearing the shared list here used to wipe the plan of
+        // whichever session you had been working in.
+        clearPlanDisplay();
+        await loadSessions();
+        showWelcome();
+        connectWS();
+    } catch (e) {
+        // A failed create (server 500, network blip) used to reject unhandled in
+        // the click handler -- no feedback, just a console error. Surface it.
+        showError(e.message || 'Failed to create session');
+    }
 }
 
 function switchSession(id) {
@@ -522,16 +528,23 @@ async function runSwitch(id) {
 async function deleteSession(id) {
     if (isStreaming) return; // a live turn owns the socket; deleting mid-run would strand it
     if (!window.confirm('Delete this session? This cannot be undone.')) return;
-    await api('DELETE', `/api/sessions/${id}`);
-    if (currentSessionId === id) {
-        currentSessionId = null;
-        messagesEl.innerHTML = '';
-        clearPlanDisplay(); // the plan went with the session
-        resetFlowSections();
-        showWelcome();
-        if (ws) ws.close();
+    try {
+        await api('DELETE', `/api/sessions/${id}`);
+        if (currentSessionId === id) {
+            currentSessionId = null;
+            messagesEl.innerHTML = '';
+            clearPlanDisplay(); // the plan went with the session
+            resetFlowSections();
+            showWelcome();
+            if (ws) ws.close();
+        }
+        await loadSessions();
+    } catch (e) {
+        // A failed delete (server 500, network blip) used to reject unhandled in
+        // the click handler -- no feedback. Surface it; the session is untouched
+        // if the DELETE itself failed, or still gone if only loadSessions failed.
+        showError(e.message || 'Failed to delete session');
     }
-    await loadSessions();
 }
 
 async function loadMessages() {
