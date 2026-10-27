@@ -801,8 +801,12 @@ function showWelcome() {
 function beginTurnSections() {
     activeStepEl = null;
     workBlockEl = workActiveEl = workHistoryEl = null;
-    pastThinkingEl = pastThinkingListEl = null;
-    pastThinkingCount = 0;
+    // The past-thinking container is a per-session accumulator: leave it and its
+    // count intact across turns so the next turn appends to the same node
+    // (ensurePastThinkingContainer reuses a still-connected container) instead of
+    // building a duplicate "Past thinking (0)" section. It is reset on a full
+    // #messages wipe (resetThinkingContainer / loadMessages / showWelcome), which
+    // is the correct boundary for starting a fresh session's reasoning.
 }
 
 function appendUserMessage(text, images = []) {
