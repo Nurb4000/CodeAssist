@@ -349,3 +349,35 @@ model = "some-model"
 """)
 
         assert Config.load(config_file).llm.embedding_model == ""
+
+    def test_cost_config_defaults_off_and_unlimited(self):
+        """Budget enforcement is opt-in: with no [cost] table the tracker stays
+        disabled and every limit unlimited, so existing users see no change."""
+        from codeassist.cost_tracker import BudgetConfig
+
+        cfg = Config.load("/nonexistent/config.toml")
+        assert cfg.cost == BudgetConfig()
+        assert cfg.cost.enabled is False
+        assert cfg.cost.max_cost_per_session == 0.0
+        assert cfg.cost.hard_limit is True
+
+    def test_cost_config_loaded_from_toml(self, tmp_path):
+        """The [cost] table must load into Config.cost so the agent loop can
+        enforce it (previously never wired -- enforcement was dead)."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""
+[cost]
+enabled = true
+max_cost_per_session = 5.0
+max_tokens_per_message = 1000
+max_tokens_per_session = 500000
+warning_threshold_pct = 90
+hard_limit = false
+""")
+        cfg = Config.load(config_file)
+        assert cfg.cost.enabled is True
+        assert cfg.cost.max_cost_per_session == 5.0
+        assert cfg.cost.max_tokens_per_message == 1000
+        assert cfg.cost.max_tokens_per_session == 500000
+        assert cfg.cost.warning_threshold_pct == 90
+        assert cfg.cost.hard_limit is False

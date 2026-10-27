@@ -16,6 +16,7 @@ from codeassist.agent import (
     _LoopDetector,
     _restates,
 )
+from codeassist.cost_tracker import BudgetConfig
 from codeassist.llm import (
     ContextWindowExceeded,
     Finish,
@@ -52,6 +53,10 @@ def mock_config(tmp_path):
     config.llm.base_url = ""
     config.agent.max_iterations = 3
     config.tools.tool_output_max_tokens = 4000
+    # A real BudgetConfig, not a MagicMock: the agent passes config.cost straight
+    # into CostTracker(), whose check_budget() does arithmetic on it. A bare
+    # MagicMock would raise TypeError comparing it to int.
+    config.cost = BudgetConfig()
     return config
 
 
@@ -87,6 +92,36 @@ def agent(mock_config, mock_session, mock_tools):
         agent = Agent(mock_config, mock_session, mock_tools, system_prompt="Test prompt")
         agent.llm = mock_llm
         return agent
+
+
+class TestCostTrackerWiring:
+    """The agent must pass the session's configured budget to CostTracker, not a
+    bare disabled one. Without this, [cost] in config.toml is ignored and budget
+    enforcement stays dead (§7)."""
+
+    def test_tracker_receives_configured_budget(self):
+        from codeassist.config import Config
+
+        cfg = Config()
+        cfg.cost.enabled = True
+        cfg.cost.max_cost_per_session = 100.0
+        with patch("codeassist.agent.LLMClient"):
+            agent = Agent(cfg, MagicMock(), MagicMock())
+        # Same object flows through -- the tracker sees enabled=True + the ceiling.
+        assert agent.cost_tracker.config is cfg.cost
+        assert isinstance(agent.cost_tracker.config, BudgetConfig)
+        assert agent.cost_tracker.config.enabled is True
+        assert agent.cost_tracker.config.max_cost_per_session == 100.0
+
+    def test_default_config_leaves_budget_disabled(self):
+        """A fresh Config() must not start stopping turns: enabled stays False
+        so users who never set [cost] see no behaviour change."""
+        from codeassist.config import Config
+
+        cfg = Config()
+        with patch("codeassist.agent.LLMClient"):
+            agent = Agent(cfg, MagicMock(), MagicMock())
+        assert agent.cost_tracker.config.enabled is False
 
 
 class TestClassifyShellRisk:

@@ -128,25 +128,38 @@ class CostTracker:
         return record
 
     def check_budget(self) -> tuple[bool, str]:
-        """Check if budget is exceeded. Returns (ok, message)."""
+        """Check if budget is exceeded. Returns (ok, message).
+
+        ``hard_limit`` decides the reaction: with the default (True) an exceeded
+        limit stops the turn (``ok=False``); with ``False`` it only warns and the
+        turn continues (``ok=True``). This field was previously never read, so
+        enforcement could not be put in "warn-only" mode.
+        """
         if not self.config.enabled:
             return True, ""
 
         total_tokens = self._total_prompt_tokens + self._total_completion_tokens
+        exceeded: str | None = None
 
         # Check token limits
         if self.config.max_tokens_per_session > 0:
             pct = (total_tokens / self.config.max_tokens_per_session) * 100
             if pct >= 100:
-                return False, f"Token budget exceeded: {total_tokens:,} / {self.config.max_tokens_per_session:,} tokens"
-            if pct >= self.config.warning_threshold_pct:
+                exceeded = f"Token budget exceeded: {total_tokens:,} / {self.config.max_tokens_per_session:,} tokens"
+            elif pct >= self.config.warning_threshold_pct:
                 log.warning("Token usage at %.0f%% of budget", pct)
 
         # Check cost limits
-        if self.config.max_cost_per_session > 0 and self._total_cost >= self.config.max_cost_per_session:
-            return False, f"Cost budget exceeded: ${self._total_cost:.4f} / ${self.config.max_cost_per_session:.2f}"
+        if exceeded is None and self.config.max_cost_per_session > 0 and self._total_cost >= self.config.max_cost_per_session:
+            exceeded = f"Cost budget exceeded: ${self._total_cost:.4f} / ${self.config.max_cost_per_session:.2f}"
 
-        return True, ""
+        if exceeded is None:
+            return True, ""
+
+        if not self.config.hard_limit:
+            log.warning("Budget limit reached (warn-only; hard_limit disabled): %s", exceeded)
+            return True, ""
+        return False, exceeded
 
     def check_message_limit(self, prompt_tokens: int, completion_tokens: int) -> tuple[bool, str]:
         """Check if a single message would exceed limits."""

@@ -17,6 +17,7 @@ from codeassist.agent import (
     Agent,
     _restates,
 )
+from codeassist.cost_tracker import BudgetConfig
 from codeassist.llm import Finish, TextDelta, ToolCall, Usage
 from codeassist.tools import ToolResult
 
@@ -95,6 +96,10 @@ def config(tmp_path):
     cfg.llm.base_url = ""
     cfg.agent.max_iterations = 20
     cfg.tools.tool_output_max_tokens = 1000000
+    # The agent passes config.cost straight into CostTracker(), whose check_budget
+    # does arithmetic on it. A bare MagicMock raises TypeError comparing to int,
+    # so give it a real (disabled-by-default) BudgetConfig here.
+    cfg.cost = BudgetConfig()
     return cfg
 
 

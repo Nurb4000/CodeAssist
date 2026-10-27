@@ -771,8 +771,10 @@ class Agent:
         self._trust_workspace_writes = stored_trust.get("workspace", False)
         self._trust_shell = stored_trust.get("shell", False)
         self._trust_all = stored_trust.get("all", False)
-        # Cost tracking
-        self.cost_tracker = CostTracker()
+        # Cost tracking. Wire the session's budget from Config so a [cost] table
+        # in config.toml actually enforces (previously CostTracker() was always
+        # bare -> enabled=False, so budget enforcement was dead (§7)).
+        self.cost_tracker = CostTracker(self.config.cost)
         # Incremental message cache — avoids DB fetch on every iteration
         self._messages: list[dict] | None = None
         self._messages_dirty: bool = True
@@ -1799,6 +1801,15 @@ class Agent:
                                 completion_tokens=event.usage.completion_tokens,
                                 local=not is_external_backend(self.config.llm.base_url),
                             )
+                            # Enforce the per-message token ceiling (check_message_limit
+                            # previously had no caller). A single oversized response is
+                            # warned about, not fatal -- it cannot be unsent.
+                            ok, limit_msg = self.cost_tracker.check_message_limit(
+                                event.usage.prompt_tokens,
+                                event.usage.completion_tokens,
+                            )
+                            if not ok:
+                                log.warning("Message over token limit: %s", limit_msg)
                             yield AgentEvent("finish", {
                                 "reason": event.finish_reason,
                                 "usage": {

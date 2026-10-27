@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .cost_tracker import BudgetConfig
+
 log = logging.getLogger(__name__)
 
 
@@ -191,6 +193,11 @@ class Config:
     instructions: InstructionsConfig = field(default_factory=InstructionsConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
+    # Per-session cost/token budget. Reuses cost_tracker.BudgetConfig so the
+    # agent loop enforces exactly what Config.load reads from [cost]; previously
+    # this table existed but was never wired here, so CostTracker() was always
+    # bare (enabled=False) and enforcement was dead (§7).
+    cost: BudgetConfig = field(default_factory=BudgetConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
     def refresh_workspace(self) -> None:
@@ -328,6 +335,14 @@ class Config:
             ),
             permissions=PermissionConfig(
                 trust_all=_validate_trust_all(raw.get("permissions", {})),
+            ),
+            cost=BudgetConfig(
+                enabled=raw.get("cost", {}).get("enabled", False),
+                max_tokens_per_session=raw.get("cost", {}).get("max_tokens_per_session", 0),
+                max_tokens_per_message=raw.get("cost", {}).get("max_tokens_per_message", 0),
+                max_cost_per_session=raw.get("cost", {}).get("max_cost_per_session", 0.0),
+                warning_threshold_pct=raw.get("cost", {}).get("warning_threshold_pct", 80.0),
+                hard_limit=raw.get("cost", {}).get("hard_limit", True),
             ),
         )
         config.refresh_workspace()

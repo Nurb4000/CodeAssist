@@ -132,6 +132,25 @@ class TestCostBudget:
         tracker.record_usage("qwen3-max", 10_000_000, 10_000_000)
         assert tracker.check_budget()[0] is True
 
+    def test_hard_limit_default_stops_the_turn(self):
+        """Default hard_limit=True: an exceeded limit must stop the turn."""
+        tracker = CostTracker(BudgetConfig(enabled=True, max_cost_per_session=1.0))
+        tracker.record_usage("gpt-4o", 1_000_000, 0)
+        ok, msg = tracker.check_budget()
+        assert ok is False
+        assert "Cost budget exceeded" in msg
+
+    def test_hard_limit_false_warns_only(self):
+        """hard_limit=False puts enforcement in warn-only mode: the limit is
+        reached but the turn continues (ok=True). This field was previously
+        never read, so warn-only could never actually be selected."""
+        tracker = CostTracker(
+            BudgetConfig(enabled=True, max_cost_per_session=1.0, hard_limit=False)
+        )
+        tracker.record_usage("gpt-4o", 1_000_000, 0)
+        ok, _msg = tracker.check_budget()
+        assert ok is True
+
 
 def test_model_costs_table_is_non_empty():
     """Guard against a refactor emptying the table and silently zeroing all cost."""
@@ -166,3 +185,32 @@ class TestRecordRetention:
         tracker.reset()
         assert len(tracker.records) == 0
         assert tracker.get_summary()["num_completions"] == 0
+
+
+class TestMessageLimit:
+    """Per-message token ceiling. check_message_limit had no caller before, so
+    max_tokens_per_message was dead even when enabled."""
+
+    def test_over_limit_is_rejected(self):
+        tracker = CostTracker(BudgetConfig(enabled=True, max_tokens_per_message=1000))
+        ok, msg = tracker.check_message_limit(600, 500)
+        assert ok is False
+        assert "Message too large" in msg
+
+    def test_under_limit_is_allowed(self):
+        tracker = CostTracker(BudgetConfig(enabled=True, max_tokens_per_message=1000))
+        ok, _msg = tracker.check_message_limit(400, 500)
+        assert ok is True
+
+    def test_disabled_is_noop(self):
+        """A bare tracker (enabled=False) never rejects -- matches the old dead
+        behaviour for users who do not configure a budget."""
+        tracker = CostTracker()
+        ok, _msg = tracker.check_message_limit(10_000_000, 10_000_000)
+        assert ok is True
+
+    def test_zero_limit_is_unlimited(self):
+        """max_tokens_per_message=0 means 'no per-message cap'."""
+        tracker = CostTracker(BudgetConfig(enabled=True, max_tokens_per_message=0))
+        ok, _msg = tracker.check_message_limit(10_000_000, 10_000_000)
+        assert ok is True
