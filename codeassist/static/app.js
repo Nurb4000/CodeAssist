@@ -2065,10 +2065,11 @@ function showCompactionNotice(msg) {
 }
 
 function hideError() {
-    const errors = messagesEl.querySelectorAll('.system-error');
-    if (errors.length > 0) {
-        errors[errors.length - 1].remove();
-    }
+    // Clear every system error, not just the last. A prior error (e.g. a failed
+    // create/delete or an earlier reconnect banner) used to outlive this call and
+    // stay on screen forever; hideError() is the recovery path, so it should wipe
+    // the error state wholesale.
+    messagesEl.querySelectorAll('.system-error').forEach((div) => div.remove());
 }
 
 let statusTimers = [];
