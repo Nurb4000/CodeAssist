@@ -41,6 +41,13 @@ const MAX_FILES_PER_MESSAGE = 5;
 const MAX_FILE_BYTES = 256 * 1024;
 
 let currentSessionId = null;
+// Serializes session switches. switchSession() is synchronous: it captures the
+// target id up front and chains runSwitch(id) onto this queue, so a rapid double
+// click (or an import that switches right after a manual one) can never launch
+// two overlapping loadMessages()s that wipe each other's transcript. runSwitch()
+// re-checks staleness after every await and bails if the user switched again or a
+// turn started in the meantime.
+let sessionSwitchQueue = Promise.resolve();
 let ws = null;
 let wsConnected = false;
 let isStreaming = false;
@@ -479,16 +486,36 @@ async function createSession() {
     connectWS();
 }
 
-async function switchSession(id) {
-    if (isStreaming) return;
+function switchSession(id) {
+    // Synchronous on purpose: capture the target id immediately so two overlapping
+    // switches cannot interleave. Each call chains runSwitch(id) onto
+    // sessionSwitchQueue; runSwitch() re-checks staleness after every await and only
+    // one (the last) actually loads + connects. Returns the queue promise so callers
+    // that `await switchSession(...)` still settle once the switch finishes.
+    if (isStreaming) return sessionSwitchQueue;
     currentSessionId = id;
     hideContinueButton();
     // Plans are persisted per session, so switching no longer destroys
     // anything: drop the old session's panel and load the new one's.
     clearPlanDisplay();
+    sessionSwitchQueue = sessionSwitchQueue
+        .then(() => runSwitch(id))
+        .catch((e) => showError(e.message || 'Failed to switch session'));
+    return sessionSwitchQueue;
+}
+
+// Runs a single serialized switch. Bails (no-op) if a turn started or the user has
+// switched to another session since this call was queued -- checked before and
+// after every await so an out-of-order response can never render one session's
+// transcript while currentSessionId points at another.
+async function runSwitch(id) {
+    if (isStreaming || id !== currentSessionId) return; // bailed by a later switch / a new turn
     await loadSessions();
+    if (isStreaming || id !== currentSessionId) return;
     await loadMessages();
+    if (isStreaming || id !== currentSessionId) return;
     await loadTodos();
+    if (isStreaming || id !== currentSessionId) return;
     connectWS();
 }
 
