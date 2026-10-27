@@ -1598,10 +1598,24 @@ function openModal(bodyHtml, actionsHtml) {
     const close = () => {
         backdrop.remove();
         if (typeof backdrop._onClose === 'function') backdrop._onClose();
+        document.removeEventListener('keydown', onEscape);
     };
-    backdrop.addEventListener('keydown', (e) => {
+    // Listen on document, not the backdrop: when the modal opens nothing inside
+    // it is focused, so an Escape keydown targets the body / the element that
+    // opened the modal and never bubbles through the backdrop -- the old
+    // listener therefore never fired and Escape could not dismiss a modal (§9).
+    const onEscape = (e) => {
         if (e.key === 'Escape') close();
-    });
+    };
+    document.addEventListener('keydown', onEscape);
+    // The export/import Cancel buttons dismiss via bd.remove() rather than
+    // close(), so wrap remove() to drop the document listener too and keep
+    // listeners from accumulating across dialogs.
+    const originalRemove = backdrop.remove.bind(backdrop);
+    backdrop.remove = () => {
+        document.removeEventListener('keydown', onEscape);
+        originalRemove();
+    };
     backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
     card.querySelector('.modal-close')?.addEventListener('click', close);
     return backdrop;
