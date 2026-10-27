@@ -2476,21 +2476,31 @@ function initSidebarToggle() {
 initSidebarToggle();
 
 (async () => {
-    loadWsPassword();
-    await loadConfig();
-    let sessions = await api('GET', '/api/sessions');
-    if (sessions.length === 0) {
-        // Auto-create first session
-        const res = await api('POST', '/api/sessions');
-        currentSessionId = res.id;
-        sessions = await api('GET', '/api/sessions');
-        showWelcome();
-        connectWS();
-    } else {
-        currentSessionId = sessions[0].id;
-        await loadMessages();
-        await loadTodos();
-        connectWS();
+    try {
+        loadWsPassword();
+        await loadConfig();
+        let sessions = await api('GET', '/api/sessions');
+        if (sessions.length === 0) {
+            // Auto-create first session
+            const res = await api('POST', '/api/sessions');
+            currentSessionId = res.id;
+            sessions = await api('GET', '/api/sessions');
+            showWelcome();
+            connectWS();
+        } else {
+            currentSessionId = sessions[0].id;
+            await loadMessages();
+            await loadTodos();
+            connectWS();
+        }
+        await loadSessions();
+    } catch (e) {
+        // The boot sequence has several awaits that can reject (loadConfig,
+        // /api/sessions, loadTodos, loadSessions). Before this fix a failure
+        // rejected unhandled here -- the page went blank with no feedback and a
+        // console error. Surface it so the user sees why the app will not load.
+        // loadMessages() now handles its own fetch failures, so it does not reach
+        // here; this catch is for the other boot awaits.
+        showError(e.message || 'Failed to load the app');
     }
-    await loadSessions();
 })();
