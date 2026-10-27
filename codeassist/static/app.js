@@ -461,8 +461,17 @@ function startRename(sessionId, nameSpan) {
         input.remove();
         nameSpan.style.display = '';
         if (save && newName && newName !== current) {
-            nameSpan.textContent = newName;
-            await api('PATCH', `/api/sessions/${sessionId}`, { name: newName });
+            try {
+                // Optimistic update: show the new name before the round-trip.
+                nameSpan.textContent = newName;
+                await api('PATCH', `/api/sessions/${sessionId}`, { name: newName });
+            } catch (e) {
+                // Roll back and surface the failure: the sidebar name must match
+                // what the server accepted. Before this the rejected PATCH threw
+                // unhandled, leaving the shown name inconsistent with no feedback.
+                nameSpan.textContent = current;
+                showError(e.message || 'Failed to rename session');
+            }
         }
     };
 
