@@ -1776,6 +1776,10 @@ function removeWsPasswordPrompt() {
 
 function connectWS() {
     if (ws) {
+        // Drop the outgoing socket's onclose before closing so its reconnect
+        // timer does not fire for a socket we are abandoning. The frame guard
+        // below (thisWs !== ws) is what actually stops a late frame from the
+        // previous session dispatching after a switch; see ws.onmessage.
         ws.onclose = null;
         ws.close();
     }
@@ -1791,9 +1795,15 @@ function connectWS() {
     // stored. Pass it as the single subprotocol; an empty/absent value means no
     // auth is required and we connect plainly.
     const url = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/${currentSessionId}`;
-    ws = wsPassword ? new WebSocket(url, wsPassword) : new WebSocket(url);
+    const thisWs = wsPassword ? new WebSocket(url, wsPassword) : new WebSocket(url);
+    ws = thisWs;
 
-    ws.onopen = () => {
+    // Ignore frames from a socket that is no longer the live one. When we switch
+    // sessions connectWS() swaps `ws` for a fresh socket; a frame still in flight
+    // on the previous session's socket would otherwise dispatch into the new one
+    // (§9). Guarding on identity -- rather than detaching the handler -- also lets
+    // a stale feed land harmlessly instead of throwing.
+    thisWs.onopen = () => {
         wsConnected = true;
         updateConnectionStatus('connected');
         // (Re)arm the keepalive; clear any stale timer first.
@@ -1805,7 +1815,13 @@ function connectWS() {
         }, PING_INTERVAL_MS);
     };
 
-    ws.onmessage = (event) => {
+    thisWs.onmessage = (event) => {
+        // Drop late frames from a socket we have already swapped out for a newer
+        // one (a session switch or reconnect). `ws` is the live socket; once it
+        // changes this captured `thisWs` is stale and its in-flight frames must
+        // not dispatch into the new session (§9).
+        if (thisWs !== ws) return;
+
         let data;
         try {
             data = JSON.parse(event.data);

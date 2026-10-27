@@ -384,11 +384,15 @@ test('thinking produced after a session switch still lands in the document', asy
   await env.window.switchSession('session-1');
   await new Promise((r) => setTimeout(r, 20));
 
+  // After two switches the live socket is the newest one; env.feed() is bound to
+  // the boot-time socket, which is stale now (a late frame on it must be ignored
+  // -- see ws-late-frame.test.js). Deliver incoming frames to the current socket.
+  const cur = () => env.sockets[env.sockets.length - 1];
   startTurn(env, 'another turn');
-  env.feed({ type: 'reasoning', content: 'Fresh reasoning after switching.' });
-  env.feed({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't9' });
-  env.feed({ type: 'tool_result', id: 't9', output: 'y' });
-  env.feed({ type: 'done' });
+  cur().receive({ type: 'reasoning', content: 'Fresh reasoning after switching.' });
+  cur().receive({ type: 'tool_call', name: 'read', arguments: { file_path: 'b.py' }, id: 't9' });
+  cur().receive({ type: 'tool_result', id: 't9', output: 'y' });
+  cur().receive({ type: 'done' });
 
   assert.ok(
     reasoningInDocument(env.document).includes('Fresh reasoning after switching.'),
