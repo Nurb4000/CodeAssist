@@ -535,7 +535,17 @@ async function deleteSession(id) {
 }
 
 async function loadMessages() {
-    const msgs = await api('GET', `/api/sessions/${currentSessionId}/messages`);
+    let msgs;
+    try {
+        msgs = await api('GET', `/api/sessions/${currentSessionId}/messages`);
+    } catch (e) {
+        // A failed fetch (session deleted mid-load, server 500, network blip) used
+        // to reject here unhandled -- leaving the session blank with no feedback,
+        // and on the boot path (line ~2481) as an unhandled rejection. Surface it
+        // and bail; the sidebar can be re-opened to retry the load.
+        showError(e.message || 'Failed to load messages');
+        return;
+    }
     messagesEl.innerHTML = '';
     // #messages was just wiped, so the Work block, the past-thinking container
     // and the flow anchors went with it. Their handles are cached, so reset them
