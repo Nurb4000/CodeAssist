@@ -2360,7 +2360,10 @@ async function loadTodos() {
 }
 
 inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // During IME composition (CJK / Korean / Russian input), Enter confirms the
+    // candidate reading rather than sending. Without this check a mid-composition
+    // Enter would send the partial preedit and break the input method (§9).
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendMessage();
     }
