@@ -657,6 +657,64 @@ class TestPinning:
         assert assistant["reasoning_content"] == "thinking"
 
     @pytest.mark.asyncio
+    async def test_update_message_does_not_reorder_by_created_at(self):
+        """Editing a non-final message must not move it to the end of the
+        transcript. get_messages() orders by created_at, so created_at is an
+        immutable creation timestamp; update_message() used to rewrite it on every
+        edit, which re-sorted the edited row past all later messages."""
+        await init_db()
+        s = await Session.create(name="Ordering")
+
+        a_id = await s.add_message("user", content="first")
+        b_id = await s.add_message("assistant", content="second")
+        c_id = await s.add_message("user", content="third")
+
+        # Give each message a distinct, ordered created_at so the ordering is
+        # deterministic regardless of clock resolution.
+        from codeassist.session import get_db
+
+        async with get_db() as db:
+            for mid, ts in [(a_id, "2026-01-01T00:00:01"), (b_id, "2026-01-01T00:00:02"), (c_id, "2026-01-01T00:00:03")]:
+                await db.execute(
+                    "UPDATE messages SET created_at = ? WHERE id = ?", (ts, mid)
+                )
+            await db.commit()
+
+        # Edit the *earliest* message's content.
+        await s.update_message(a_id, content="first (edited)")
+
+        msgs = await s.get_messages()
+        order = [m["content"] for m in msgs]
+        assert order == ["first (edited)", "second", "third"], (
+            f"edit re-sorted the transcript: {order}"
+        )
+        # created_at must be unchanged by the edit.
+        a_after = next(m for m in msgs if m["id"] == a_id)
+        assert a_after["created_at"] == "2026-01-01T00:00:01"
+
+    @pytest.mark.asyncio
+    async def test_update_message_still_advances_session_updated_at(self):
+        """The session's updated_at must still advance on an edit even though the
+        message created_at is left immutable."""
+        await init_db()
+        s = await Session.create(name="UpdatedAt")
+        msg_id = await s.add_message("assistant", content="x")
+
+        from codeassist.session import get_db
+
+        async with get_db() as db:
+            cursor = await db.execute("SELECT updated_at FROM sessions WHERE id = ?", (s.id,))
+            before = (await cursor.fetchone())[0]
+
+        await s.update_message(msg_id, content="y")
+
+        async with get_db() as db:
+            cursor = await db.execute("SELECT updated_at FROM sessions WHERE id = ?", (s.id,))
+            after = (await cursor.fetchone())[0]
+
+        assert after != before, "session updated_at should advance on an edit"
+
+    @pytest.mark.asyncio
     async def test_schema_v9_to_v10_migration_adds_reasoning_column(self):
         """Upgrading an existing v9 database adds the nullable reasoning_content
         column to messages and bumps schema_info to v10 (no data loss)."""

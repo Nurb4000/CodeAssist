@@ -1001,8 +1001,11 @@ class Session:
                 sets.append("reasoning_content = ?")
                 params.append(reasoning_content)
             if sets:
-                sets.append("created_at = ?")
-                params.append(now)
+                # NB: created_at is intentionally NOT updated here -- it records when
+                # the message was created, and get_messages() orders by it. Rewriting
+                # it on every edit re-sorted the edited row to the end of the
+                # transcript, so editing any non-final message scrambled turn order.
+                # The session's updated_at still advances below.
                 params.extend([message_id, self.id])
                 await db.execute(
                     f"UPDATE messages SET {', '.join(sets)} WHERE id = ? AND session_id = ?",
