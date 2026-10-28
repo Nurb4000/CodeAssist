@@ -872,6 +872,17 @@ body {
     background: var(--bg-tertiary);
 }
 
+/* Visible focus ring for the collapsible section headers, which are now
+   keyboard-focusable buttons (role=button) -- without this a tab user could not
+   tell which header is active. */
+.work-block-header:focus-visible,
+.work-step-header:focus-visible,
+.thinking-history-header:focus-visible,
+.tool-call-header:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 .work-chevron { color: var(--text-muted); font-size: 10px; }
 
 /* History (completed steps) hidden when collapsed; the active step stays visible. */

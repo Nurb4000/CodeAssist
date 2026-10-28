@@ -736,6 +736,10 @@ function ensurePastThinkingContainer() {
         const hidden = c.classList.toggle('history-hidden');
         c.querySelector('.thinking-history-chevron').textContent = hidden ? '▸' : '▾';
     });
+    makeHeaderKeyboardable(c.querySelector('.thinking-history-header'), () => {
+        const hidden = c.classList.toggle('history-hidden');
+        c.querySelector('.thinking-history-chevron').textContent = hidden ? '▸' : '▾';
+    });
     pastThinkingListEl = c.querySelector('.past-thinking-list');
     // Sits after the work block / active step during a run (like the Work
     // section), so it reads under the prompt and above the response. A prose-only
@@ -934,7 +938,9 @@ function makeToolCall(name, args, output, id) {
     div._args = normalizeArgs(args);
     div._output = output || '';
     applyToolCallRender(div);
-    div.querySelector('.tool-call-header').onclick = () => div.classList.toggle('open');
+    const toolCallHeader = div.querySelector('.tool-call-header');
+    toolCallHeader.onclick = () => div.classList.toggle('open');
+    makeHeaderKeyboardable(toolCallHeader, () => div.classList.toggle('open'));
     return div;
 }
 
@@ -1019,6 +1025,22 @@ function finalizeState() {
 // zone. Prose arriving after tools ran closes the step into collapsed history.
 // Summaries (prose-only turns) flush into the main flow, never the work block.
 
+// A collapsible section header is a <div> with a click listener, so keyboard and
+// screen-reader users could not toggle it: a div is neither focusable nor
+// announced as activatable, and Enter/Space did nothing. makeHeaderKeyboardable
+// exposes the same toggle as a button (role + tabindex + Enter/Space keydown)
+// without switching the element type, so the existing header styling is kept.
+function makeHeaderKeyboardable(header, toggle) {
+    header.setAttribute('role', 'button');
+    header.setAttribute('tabindex', '0');
+    header.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ' || e.code === 'Spacebar') {
+            e.preventDefault();
+            toggle();
+        }
+    });
+}
+
 function ensureWorkBlock() {
     if (workBlockEl) return workBlockEl;
     const block = document.createElement('div');
@@ -1031,13 +1053,16 @@ function ensureWorkBlock() {
     block.innerHTML =
         `<div class="work-block-header">Work (<span class="work-count">0</span>) <span class="work-chevron">▸</span></div>` +
         `<div class="work-history"></div>`;
-    block.querySelector('.work-block-header').addEventListener('click', () => {
+    const toggleWorkBlock = () => {
         const hidden = block.classList.toggle('history-hidden');
         // Respect an explicit manual toggle: neither the mid-run force-show nor
         // endRun() should override a section the user opened or closed on purpose.
         workBlockUserToggled = true;
         block.querySelector('.work-chevron').textContent = hidden ? '▸' : '▾';
-    });
+    };
+    const workBlockHeader = block.querySelector('.work-block-header');
+    workBlockHeader.addEventListener('click', toggleWorkBlock);
+    makeHeaderKeyboardable(workBlockHeader, toggleWorkBlock);
     workHistoryEl = block.querySelector('.work-history');
     // The current (active) step lives OUTSIDE the collapsible work block so it
     // stays visible even when the work section is collapsed by default. Completed
@@ -1081,7 +1106,9 @@ function createWorkStep(n) {
     step.innerHTML =
         `<div class="work-step-header">▸ Step ${n}</div>` +
         `<div class="work-step-content"></div>`;
-    step.querySelector('.work-step-header').addEventListener('click', () => step.classList.toggle('open'));
+    const stepHeader = step.querySelector('.work-step-header');
+    stepHeader.addEventListener('click', () => step.classList.toggle('open'));
+    makeHeaderKeyboardable(stepHeader, () => step.classList.toggle('open'));
     return step;
 }
 
