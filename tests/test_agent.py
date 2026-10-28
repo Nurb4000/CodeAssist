@@ -2135,6 +2135,49 @@ class TestContextWindowErrorDetection:
         # Not retried: one attempt only.
         assert client.client.chat.completions.create.await_count == 1
 
+    def test_nested_error_code_is_detected(self):
+        """A classic OpenAI body ``{"error": {"code": "context_length_exceeded"}}``
+        must be recognized even when the message text is unrelated -- the previous
+        implementation only inspected top-level attributes and missed the nested
+        code, so such a rejection fell through to a raw APIError."""
+        from types import SimpleNamespace
+
+        class _Exc(Exception):
+            pass
+
+        exc = _Exc("something went wrong")
+        exc.error = SimpleNamespace(code="context_length_exceeded")
+        assert is_context_length_error(exc) is True
+
+    def test_nested_error_code_as_dict_is_detected(self):
+        """The nested code may also arrive as a plain dict, not an object."""
+        class _Exc(Exception):
+            pass
+
+        exc = _Exc("something went wrong")
+        exc.error = {"code": "input_size_exceeded"}
+        assert is_context_length_error(exc) is True
+
+    def test_top_level_code_is_detected(self):
+        """A top-level recognized code on an unrelated message classifies as a
+        context error."""
+        class _Exc(Exception):
+            pass
+
+        exc = _Exc("something went wrong")
+        exc.code = "request_too_long"
+        assert is_context_length_error(exc) is True
+
+    def test_unrecognized_code_is_not_a_context_error(self):
+        """Only recognized context codes are treated as such; an unrelated
+        structured code must not be misclassified."""
+        class _Exc(Exception):
+            pass
+
+        exc = _Exc("something went wrong")
+        exc.code = "auth_error"
+        assert is_context_length_error(exc) is False
+
 
 async def _drain(agen):
     """Consume an AgentEvent stream into a list."""

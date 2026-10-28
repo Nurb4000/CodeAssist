@@ -119,15 +119,57 @@ _CONTEXT_ERROR_PHRASES = (
     "exceeds the model's context",           # phrasing variants
 )
 
+# Canonical provider error *codes* for a context-window rejection. Recognizing
+# these structurally -- rather than relying on substring matching of the raw
+# body repr -- makes detection robust to providers that word the message
+# differently, and never misfires on unrelated text. Kept as a strict superset
+# guard: a recognized code is always a context error, so this can only add
+# detections, never produce a false negative against a real rejection.
+_CONTEXT_ERROR_CODES = frozenset({
+    "context_length_exceeded",   # OpenAI
+    "input_size_exceeded",       # Anthropic
+    "request_too_long",          # several OpenAI-compatible backends
+})
+
+
+def _extract_error_codes(exc: BaseException) -> set[str]:
+    """Pull recognized context error codes out of the common shapes without
+    assuming any one library's attribute layout.
+
+    Covers the top-level ``.code`` (modern OpenAI body ``{"code": ...}``) and the
+    nested ``.error.code`` (classic body ``{"error": {"code": ...}}``), where
+    ``.error`` may be either a namespace-like object or a plain dict.
+    """
+    codes: set[str] = set()
+
+    code = getattr(exc, "code", None)
+    if code:
+        codes.add(str(code).lower())
+
+    error = getattr(exc, "error", None)
+    if error is not None:
+        nested = getattr(error, "code", None)
+        if nested:
+            codes.add(str(nested).lower())
+        elif isinstance(error, dict):
+            nested = error.get("code")
+            if nested:
+                codes.add(str(nested).lower())
+
+    return codes
+
 
 def is_context_length_error(exc: BaseException) -> bool:
     """Return True if *exc* is a provider rejecting the prompt for exceeding
     the context window.
 
-    Inspects the exception string, its ``body``/``message`` attributes and the
-    HTTP status, so it works for both prose and JSON error payloads without
-    coupling to one provider's exact envelope.
+    Matches on recognized provider error codes first (a strong, unambiguous
+    signal), then falls back to phrase matching over the exception string and its
+    ``body``/``message``/``code`` attributes, so it works for both prose and JSON
+    error payloads without coupling to one provider's exact envelope.
     """
+    if _extract_error_codes(exc) & _CONTEXT_ERROR_CODES:
+        return True
     parts = [str(exc)]
     for attr in ("body", "message", "code"):
         val = getattr(exc, attr, None)
