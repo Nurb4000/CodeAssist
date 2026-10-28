@@ -1425,6 +1425,22 @@ function showQuestionDialog(questionId, data) {
         `;
     }
 
+    // Inline error surface for required-question validation. Kept out of the
+    // template HTML so it can be shown/hidden without rebuilding the dialog.
+    const errorEl = document.createElement('div');
+    errorEl.className = 'question-error';
+    errorEl.setAttribute('role', 'alert');
+    errorEl.style.display = 'none';
+    div.appendChild(errorEl);
+    const setDialogError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.style.display = msg ? '' : 'none';
+    };
+    // Clear the inline error as soon as the user provides any answer.
+    div.querySelectorAll('input').forEach((inp) =>
+        inp.addEventListener(['input', 'change'], () => setDialogError('')),
+    );
+
     messagesEl.appendChild(div);
     scrollToBottom();
 
@@ -1457,6 +1473,19 @@ function showQuestionDialog(questionId, data) {
             } else {
                 answers = "";
             }
+        }
+
+        // A required question must receive a real answer. Without this an empty
+        // answer was sent to the server, which then errored mid-turn ("No answer
+        // received.") instead of giving clear inline feedback (§9). `data.required`
+        // is request-level per the websocket protocol; structured mode blocks only
+        // when every question is unanswered.
+        const isEmpty = Array.isArray(answers)
+            ? answers.every((a) => !a || (Array.isArray(a) && a.length === 0))
+            : !answers;
+        if (data.required && isEmpty) {
+            setDialogError('This question is required.');
+            return;
         }
 
         div.remove();
