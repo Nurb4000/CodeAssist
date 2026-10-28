@@ -1,4 +1,5 @@
 """Tests for session hook - summary generation, knowledge extraction."""
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -406,6 +407,56 @@ class TestOnSessionEnd:
         summary = await KnowledgeBase.get_session_summary(session.id)
         assert summary is not None
         assert "Implement login" in summary["summary"]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sessions_do_not_serialize_on_slow_summary(self):
+        """Two sessions ending concurrently must not serialize behind one
+        another's summary. The process-wide lock that once guarded
+        on_session_end() made a single slow LLM summary wedge every other
+        session's disconnect until it finished."""
+        await init_db()
+        # A mock llm_client makes on_session_end take the (slow) LLM path.
+        hook = SessionHook(llm_client=MagicMock())
+        session_a = await Session.create("Session A")
+        session_b = await Session.create("Session B")
+        await session_a.add_message("user", "hello A")
+        await session_b.add_message("user", "hello B")
+
+        block = asyncio.Event()
+        completed = []
+
+        async def gated_summary(session_id, messages, stats):
+            completed.append(session_id)
+            if session_id == session_a.id:
+                await block.wait()  # A's summary is slow; hold it open
+            return {"summary": f"summary of {session_id}"}
+
+        hook._generate_llm_summary = gated_summary
+        hook._extract_knowledge = AsyncMock()  # isolate the summary path
+
+        task_a = asyncio.create_task(hook.on_session_end(session_a))
+        await asyncio.sleep(0.05)  # let A enter its blocked summary
+        task_b = asyncio.create_task(hook.on_session_end(session_b))
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 2.0
+        while session_b.id not in completed and loop.time() < deadline:
+            await asyncio.sleep(0.02)
+
+        # B must complete its summary even while A is still blocked -- proving
+        # the hooks no longer serialize on a process-wide lock.
+        assert session_b.id in completed, (
+            "B's summary was blocked behind A's slow summary: hooks serialize"
+        )
+
+        block.set()  # let A finish
+        await asyncio.wait_for(task_a, timeout=2.0)
+        await asyncio.wait_for(task_b, timeout=2.0)
+        assert session_a.id in completed
+        # The per-session dedup set must be released after each hook (no leak).
+        assert not hook._session_content_hashes, (
+            f"dedup sets leaked: {list(hook._session_content_hashes)}"
+        )
 
     @pytest.mark.asyncio
     async def test_extracts_knowledge_from_tool_calls(self, session_hook):

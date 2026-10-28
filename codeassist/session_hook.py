@@ -156,55 +156,67 @@ class SessionHook:
     
     def __init__(self, llm_client=None):
         self.llm_client = llm_client
-        self._session_content_hashes: set[str] = set()
-        self._lock = asyncio.Lock()
-    
+        # Per-session dedup sets, keyed by session id. This used to be a single
+        # process-wide set cleared at the start of every hook; because
+        # on_session_end() held a process-wide lock around the whole hook, one
+        # slow LLM summary blocked every other session's disconnect from
+        # completing. Keying the dedup state per session lets hooks run in
+        # parallel (see below) while still de-duplicating within a session.
+        self._session_content_hashes: dict[str, set[str]] = {}
+
     async def on_session_end(self, session: Session, agent=None):
         """Called when a session ends. Generates summary and extracts knowledge."""
-        async with self._lock:
-            self._session_content_hashes.clear()
-            try:
-                # Get session messages
-                messages = await session.get_messages()
-                if not messages:
-                    return
-                
-                # Calculate session stats
-                stats = self._calculate_stats(messages)
-                
-                # Generate summary using LLM if available, otherwise use simple extraction
-                if self.llm_client:
-                    summary_data = await self._generate_llm_summary(session.id, messages, stats)
-                else:
-                    summary_data = self._generate_simple_summary(messages, stats)
+        # No process-wide lock: each session's end-of-turn work is independent, so
+        # concurrent disconnects run in parallel. A single slow LLM summary must
+        # not wedge every other session's disconnect behind it. The per-session
+        # dedup set is released in the finally below so it does not grow without
+        # bound across a long-lived server.
+        try:
+            # Get session messages
+            messages = await session.get_messages()
+            if not messages:
+                return
+            
+            # Calculate session stats
+            stats = self._calculate_stats(messages)
+            
+            # Generate summary using LLM if available, otherwise use simple extraction
+            if self.llm_client:
+                summary_data = await self._generate_llm_summary(session.id, messages, stats)
+            else:
+                summary_data = self._generate_simple_summary(messages, stats)
 
-                # Guarantee a valid, non-empty summary before storing (F5). The
-                # LLM can return JSON missing required keys or an empty summary.
-                summary_data = self._normalize_summary_data(summary_data)
-                
-                # Store session summary
-                await KnowledgeBase.create_session_summary(
-                    session_id=session.id,
-                    summary=summary_data["summary"],
-                    key_topics=summary_data.get("topics", []),
-                    goals_achieved=summary_data.get("goals", []),
-                    tools_used=summary_data.get("tools_used", []),
-                    files_modified=summary_data.get("files_modified", []),
-                    duration_seconds=stats["duration_seconds"],
-                    message_count=stats["message_count"],
-                    token_usage=stats.get("total_tokens"),
-                    model=stats.get("model"),
-                    quality_score=self._calculate_quality_score(stats),
-                )
-                
-                log.info("Session summary created for %s", session.id)
-                
-                # Extract knowledge entries
-                await self._extract_knowledge(session.id, messages, summary_data)
-                
-            except Exception:
-                log.exception("Error generating session summary for %s", session.id)
-    
+            # Guarantee a valid, non-empty summary before storing (F5). The
+            # LLM can return JSON missing required keys or an empty summary.
+            summary_data = self._normalize_summary_data(summary_data)
+            
+            # Store session summary
+            await KnowledgeBase.create_session_summary(
+                session_id=session.id,
+                summary=summary_data["summary"],
+                key_topics=summary_data.get("topics", []),
+                goals_achieved=summary_data.get("goals", []),
+                tools_used=summary_data.get("tools_used", []),
+                files_modified=summary_data.get("files_modified", []),
+                duration_seconds=stats["duration_seconds"],
+                message_count=stats["message_count"],
+                token_usage=stats.get("total_tokens"),
+                model=stats.get("model"),
+                quality_score=self._calculate_quality_score(stats),
+            )
+            
+            log.info("Session summary created for %s", session.id)
+            
+            # Extract knowledge entries
+            await self._extract_knowledge(session.id, messages, summary_data)
+            
+        except Exception:
+            log.exception("Error generating session summary for %s", session.id)
+        finally:
+            # Release this session's in-memory dedup set so it does not grow
+            # without bound across a long-lived server.
+            self._session_content_hashes.pop(session.id, None)
+
     def _calculate_stats(self, messages: list[dict]) -> dict:
         """Calculate basic statistics from messages."""
         user_msgs = [m for m in messages if m["role"] == "user"]
@@ -1145,11 +1157,15 @@ This workflow is now available as a skill. The agent will use this pattern when 
                 log.debug("Skipping low-substance knowledge entry: %r", content[:80])
                 return
 
-            # In-memory dedup for same session
+            # In-memory dedup for same session. Each session gets its own set
+            # (populated by on_session_end and released when the hook finishes),
+            # so concurrent hooks for different sessions no longer share -- and
+            # clobber -- a single process-wide dedup set.
             content_hash = hashlib.md5(content.lower()[:200].encode()).hexdigest()
-            if content_hash in self._session_content_hashes:
+            hashes = self._session_content_hashes.setdefault(source_session_id, set())
+            if content_hash in hashes:
                 return
-            self._session_content_hashes.add(content_hash)
+            hashes.add(content_hash)
             
             # Check if similar content exists (simple dedup)
             existing = await KnowledgeBase.search_knowledge(
