@@ -9,10 +9,43 @@ from pathlib import Path
 
 import aiosqlite
 
-# The database lives in a data directory that can be overridden via
-# CODEASSIST_DATA_DIR (used by Docker to point at the mounted persistence
-# volume). Defaults to <package>/data for plain local runs.
-DB_PATH = Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
+
+def _resolve_db_path() -> Path:
+    """Resolve the data-dir path fresh on each call.
+
+    The database lives in a directory that can be overridden via
+    ``CODEASSIST_DATA_DIR`` (used by Docker to point at the mounted persistence
+    volume); it defaults to <package>/data for plain local runs. Resolving lazily
+    -- rather than freezing the value at import time -- means an override set
+    *after* import still takes effect. See :func:`_db_path` and :func:`__getattr__`.
+    """
+    return Path(os.environ.get("CODEASSIST_DATA_DIR", Path(__file__).parent / "data")) / "codeassist.db"
+
+
+def _db_path() -> Path:
+    """The database path, resolved fresh on every call.
+
+    A caller may pin the path by setting the ``DB_PATH`` module attribute (the
+    test fixture does this to redirect all DB access); a pinned value takes
+    precedence. Otherwise the runtime ``CODEASSIST_DATA_DIR`` override is honoured
+    (falling back to the package data dir). Resolving here -- instead of reading
+    the ``DB_PATH`` global directly -- matters because a bare global lookup inside
+    a function never triggers the module's lazy :func:`__getattr__`.
+    """
+    pinned = globals().get("DB_PATH")
+    if pinned is not None:
+        return pinned
+    return _resolve_db_path()
+
+
+def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
+    """Resolve ``DB_PATH`` lazily for external ``from session import DB_PATH`` and
+    attribute access, so a runtime ``CODEASSIST_DATA_DIR`` override is honoured.
+    Callers that pin the path by setting it as a real module attribute (the test
+    fixture does this) take precedence over this fallback."""
+    if name == "DB_PATH":
+        return _resolve_db_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 SCHEMA_VERSION = 14
 
@@ -63,7 +96,7 @@ _ALL_CONNS: set[aiosqlite.Connection] = set()
 def _get_pool() -> _DBPool:
     global _db_pool
     if _db_pool is None:
-        _db_pool = _DBPool(DB_PATH)
+        _db_pool = _DBPool(_db_path())
     return _db_pool
 
 
@@ -132,7 +165,7 @@ async def get_db():
 
 
 async def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _db_path().parent.mkdir(parents=True, exist_ok=True)
     async with get_db() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS schema_info (

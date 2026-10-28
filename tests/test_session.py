@@ -768,3 +768,57 @@ class TestPinning:
         legacy = next(m for m in msgs if m["id"] == legacy_id)
         assert legacy["content"] == "old answer without reasoning"
         assert legacy["reasoning_content"] is None
+
+
+@pytest.mark.asyncio
+async def test_db_path_honours_runtime_data_dir_override(tmp_path, monkeypatch):
+    """A CODEASSIST_DATA_DIR override applied *after* import still moves the DB.
+
+    Before the fix DB_PATH was frozen at import time, so an override set later
+    (as a Docker entrypoint or a test might do) was ignored and the database
+    landed in the default package data dir. The module now resolves it lazily via
+    __getattr__.
+
+    The autouse clean_database fixture pins DB_PATH to the test DB; drop that pin
+    so the lazy resolver takes over, point the env var at a fresh temp dir, and
+    confirm init_db() actually creates the database there rather than at the
+    import-time/default location.
+    """
+    import codeassist.session as smod
+
+    override = tmp_path / "runtime-data"
+    override.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CODEASSIST_DATA_DIR", str(override))
+
+    pinned = smod.__dict__.pop("DB_PATH", None)
+    try:
+        smod.reset_pool()
+        await smod.init_db()
+    finally:
+        if pinned is not None:
+            smod.__dict__["DB_PATH"] = pinned
+
+    assert (override / "codeassist.db").exists(), (
+        "init_db must create the database under the runtime CODEASSIST_DATA_DIR override"
+    )
+
+
+def test_db_path_explicit_pin_beats_lazy_resolver():
+    """An explicitly-set DB_PATH module attribute takes precedence over the lazy
+    __getattr__ fallback, so callers -- and the test fixture that pins the path --
+    can still force a specific database."""
+    from pathlib import Path
+
+    import codeassist.session as smod
+
+    pinned = Path("/tmp/pinned/codeassist.db")
+    old = smod.__dict__.pop("DB_PATH", None)
+    try:
+        smod.__dict__["DB_PATH"] = pinned
+        assert smod.DB_PATH == pinned  # real attribute wins; __getattr__ not consulted
+        assert smod._resolve_db_path() != pinned  # the resolver itself stays pure
+    finally:
+        if old is not None:
+            smod.__dict__["DB_PATH"] = old
+        else:
+            smod.__dict__.pop("DB_PATH", None)
