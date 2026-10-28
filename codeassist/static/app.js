@@ -197,6 +197,11 @@ function wireModeSelector() {
     const open = () => {
         listEl.hidden = false;
         trigger.setAttribute('aria-expanded', 'true');
+        // Re-highlight the current selection so arrow keys and aria-activedescendant
+        // start from where the user is, not from a stale/blank active option.
+        const current = listOptions().find((o) => o.classList.contains('active'));
+        if (current) setActiveOption(current.dataset.id);
+        else if (listOptions().length) setActiveOption(listOptions()[0].dataset.id);
         positionList();
     };
     // Re-anchor on resize so the list stays on-screen at any viewport height.
@@ -227,6 +232,38 @@ function wireModeSelector() {
     });
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') close();
+    });
+
+    // Arrow-key navigation for the listbox. The trigger is a <button>, so it
+    // already takes focus; ArrowUp/Down/Home/End move the highlighted option and
+    // Enter/Space selects it. aria-activedescendant points the screen reader at
+    // the highlighted option so it is announced as the active listbox item
+    // (§9 a11y). Clicking an option still works via its own onclick.
+    let activeOptionId = null;
+    const listOptions = () => Array.from(listEl.querySelectorAll('.mode-option'));
+    const setActiveOption = (id) => {
+        activeOptionId = id;
+        if (id) trigger.setAttribute('aria-activedescendant', id);
+        else trigger.removeAttribute('aria-activedescendant');
+        listOptions().forEach((o) => o.classList.toggle('active', o.dataset.id === id));
+    };
+    const moveActive = (delta) => {
+        const opts = listOptions();
+        if (!opts.length) return;
+        const i = activeOptionId ? opts.findIndex((o) => o.dataset.id === activeOptionId) : -1;
+        setActiveOption(opts[(i + delta + opts.length) % opts.length].dataset.id);
+    };
+    trigger.addEventListener('keydown', (e) => {
+        if (listEl.hidden) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1); }
+        else if (e.key === 'Home') { e.preventDefault(); setActiveOption(listOptions()[0].dataset.id); }
+        else if (e.key === 'End') { e.preventDefault(); setActiveOption(listOptions()[listOptions().length - 1].dataset.id); }
+        else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            const opt = listOptions().find((o) => o.dataset.id === activeOptionId);
+            if (opt) switchAgent(opt.dataset.id);
+        }
     });
 }
 
