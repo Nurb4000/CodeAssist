@@ -1359,6 +1359,12 @@ function showQuestionDialog(questionId, data) {
     const div = document.createElement('div');
     div.className = 'question-dialog';
     div.id = `question-${questionId}`;
+    // Semantics for assistive tech: a modal dialog. aria-modal traps focus and
+    // announces a dialog context; aria-labelledby points AT the title so a screen
+    // reader names the dialog instead of reading its raw contents first (§9 a11y).
+    div.setAttribute('role', 'dialog');
+    div.setAttribute('aria-modal', 'true');
+    div.setAttribute('aria-labelledby', `question-dialog-title-${questionId}`);
 
     const structured = data.questions && data.questions.length > 0;
 
@@ -1390,7 +1396,7 @@ function showQuestionDialog(questionId, data) {
         });
 
         div.innerHTML = `
-            <div class="question-title">Agent has a question</div>
+            <div class="question-title" id="question-dialog-title-${questionId}">Agent has a question</div>
             ${questionsHtml}
             <div class="question-actions">
                 <button class="question-btn submit">Submit</button>
@@ -1412,7 +1418,7 @@ function showQuestionDialog(questionId, data) {
         }
 
         div.innerHTML = `
-            <div class="question-title">Agent has a question</div>
+            <div class="question-title" id="question-dialog-title-${questionId}">Agent has a question</div>
             <div class="question-item">
                 <div class="question-text">${escapeHtml(question)}</div>
                 <div class="question-options">${optionsHtml}</div>
@@ -1514,6 +1520,9 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     const div = document.createElement('div');
     div.className = 'confirm-dialog';
     div.id = `confirm-${confirmId}`;
+    div.setAttribute('role', 'dialog');
+    div.setAttribute('aria-modal', 'true');
+    div.setAttribute('aria-labelledby', `confirm-dialog-title-${confirmId}`);
 
     let argsStr = args;
     if (typeof args === 'object') {
@@ -1564,7 +1573,7 @@ function showConfirmDialog(confirmId, toolName, args, inWorkspace) {
     }
 
     div.innerHTML = `
-        <div class="confirm-title">Agent wants to use ${escapeHtml(toolName)}</div>
+        <div class="confirm-title" id="confirm-dialog-title-${confirmId}">Agent wants to use ${escapeHtml(toolName)}</div>
         <div class="confirm-details">${escapeHtml(argsStr)}</div>
         ${trustHtml ? `<div class="trust-options">${trustHtml}</div>` : ''}
         <div class="confirm-actions">
