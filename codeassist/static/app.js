@@ -94,13 +94,11 @@ let pastThinkingEl = null, pastThinkingListEl = null, pastThinkingCount = 0;
 let lastUserEl = null;     // anchor the work block under the current user message
 let lastMainMsgEl = null;  // last main-flow (non-work) assistant/user message
 
+// NOTE: marked v12 no longer invokes the `highlight` option (it was dropped as a
+// client-side XSS vector), so fenced-code highlighting is done by post-processing
+// in highlightCodeBlocks() instead. `breaks` is still honoured: soft line breaks
+// render as <br>.
 marked.setOptions({
-    highlight: (code, lang) => {
-        if (lang && hljs.getLanguage(lang)) {
-            return hljs.highlight(code, { language: lang }).value;
-        }
-        return hljs.highlightAuto(code).value;
-    },
     breaks: true,
 });
 
@@ -713,7 +711,7 @@ function workStepMessageEl(step) {
 }
 
 function appendStepProse(step, prose) {
-    if (prose) workStepMessageEl(step).innerHTML = sanitizeHtml(marked.parse(prose));
+    if (prose) workStepMessageEl(step).innerHTML = renderMarkdown(prose);
 }
 
 function appendStepReasoning(step, reasoning) {
@@ -913,7 +911,7 @@ function appendAssistantMessage(text) {
         `<div class="message-content"></div>`;
     messagesEl.appendChild(div);
     lastMainMsgEl = div;
-    div.querySelector('.message-content').innerHTML = sanitizeHtml(marked.parse(text));
+    div.querySelector('.message-content').innerHTML = renderMarkdown(text);
     applyThinkingVisibility(div.querySelector('.thinking-block'));
     return div;
 }
@@ -1243,7 +1241,7 @@ function handleProse(content) {
     if (isNewTurn) closeActiveStep();   // previous turn used tools → new step
     const unit = startPendingUnit();
     pendingProseBuf += content;
-    unit.querySelector('.message-content').innerHTML = sanitizeHtml(marked.parse(pendingProseBuf));
+    unit.querySelector('.message-content').innerHTML = renderMarkdown(pendingProseBuf);
     maybeScrollToBottom();
 }
 
@@ -1423,6 +1421,34 @@ function sanitizeHtml(input) {
         }
     });
     return doc.body ? doc.body.innerHTML : input;
+}
+
+// marked v12 dropped client-side syntax highlighting: its `highlight` option is
+// ignored, so fenced code in assistant prose came through as plain <code> while
+// tool outputs were highlighted via highlightToolOutput() -- an inconsistent look
+// and dead config at the top of this file. Post-process the parsed HTML to run
+// highlight.js over each <pre><code> block, then sanitize. hljs output is already
+// escaped, and sanitizeHtml still strips anything dangerous as a backstop.
+function highlightCodeBlocks(html) {
+    if (!html) return '';
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('pre > code').forEach((code) => {
+        const m = /(language-[\w+-]+)/.exec(code.getAttribute('class') || '');
+        const text = code.textContent;
+        try {
+            code.innerHTML = m && hljs.getLanguage(m[1])
+                ? hljs.highlight(text, { language: m[1] }).value
+                : hljs.highlightAuto(text).value;
+        } catch (e) {
+            // Leave the block as plain text if highlighting fails for any reason.
+        }
+    });
+    return doc.body ? doc.body.innerHTML : html;
+}
+
+// Full render pipeline for model prose: mark -> highlight fenced code -> sanitize.
+function renderMarkdown(text) {
+    return sanitizeHtml(highlightCodeBlocks(marked.parse(text || '')));
 }
 
 function showQuestionDialog(questionId, data) {
