@@ -389,12 +389,16 @@ async function loadSessions() {
         pinBtn.className = 'pin-btn' + (s.is_pinned ? ' pinned' : '');
         pinBtn.innerHTML = ICONS.pin;
         pinBtn.title = s.is_pinned ? 'Unpin session' : 'Pin session';
+        // title tooltips are not reliably announced by assistive tech; aria-label
+        // gives each icon button an accessible name (§9 a11y).
+        pinBtn.setAttribute('aria-label', pinBtn.title);
         pinBtn.onclick = (e) => { e.stopPropagation(); togglePin(s.id, s.is_pinned, pinBtn); };
 
         const renameBtn = document.createElement('button');
         renameBtn.className = 'rename-btn';
         renameBtn.innerHTML = ICONS.rename;
         renameBtn.title = 'Rename session';
+        renameBtn.setAttribute('aria-label', 'Rename session');
         renameBtn.onclick = (e) => {
             e.stopPropagation();
             startRename(s.id, nameSpan);
@@ -404,6 +408,7 @@ async function loadSessions() {
         exportBtn.className = 'export-btn';
         exportBtn.innerHTML = ICONS.export;
         exportBtn.title = 'Export session';
+        exportBtn.setAttribute('aria-label', 'Export session');
         exportBtn.onclick = (e) => { e.stopPropagation(); openExportDialog(s.id); };
 
         const delBtn = document.createElement('button');
@@ -411,6 +416,7 @@ async function loadSessions() {
         delBtn.dataset.id = s.id;
         delBtn.innerHTML = ICONS.trash;
         delBtn.title = 'Delete session';
+        delBtn.setAttribute('aria-label', 'Delete session');
         delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
 
         row.appendChild(nameSpan);
