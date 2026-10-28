@@ -1984,7 +1984,12 @@ function connectWS() {
         if (data.type === 'active_agent') {
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
         } else if (data.type === 'agent_switched') {
-            setAgentSelection((data.agent && (data.agent.id || data.agent.name)) || data.agent);
+            // Guard like active_agent above: a malformed event with no `agent`
+            // used to fall through to setAgentSelection(undefined) -- the trailing
+            // `|| data.agent` passed the missing value straight in -- which wiped
+            // the current selection (currentAgentName = undefined, every option
+            // un-highlighted). Ignore such events instead.
+            if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
         } else if (data.type === 'text_delta') {
             hideProgress();
             handleProse(data.content);
