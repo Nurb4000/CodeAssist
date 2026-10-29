@@ -730,10 +730,20 @@ function bindSettingsActions() {
     }
 }
 
-async function bindCreate(idPrefix, buildBody) {
+async function bindCreate(idPrefix, buildBody, requiredFields = []) {
     const btn = document.getElementById(`${idPrefix}-create`);
     btn.onclick = async () => {
         try {
+            // Validate required fields client-side so an empty submit is rejected
+            // instantly with a clear message instead of round-tripping to the
+            // server and failing there (agent-create already did this; the generic
+            // bindCreate paths did not).
+            for (const { id, label } of requiredFields) {
+                const el = document.getElementById(id);
+                if (!el || !el.value.trim()) {
+                    throw new Error(`${label} is required`);
+                }
+            }
             const body = buildBody();
             await api('POST', `/api/${idPrefix === 'skill' ? 'skills' : idPrefix + '/servers'}`, body);
             setStatus('Created');
@@ -802,21 +812,24 @@ bindCreate('skill', () => ({
     description: document.getElementById('skill-desc').value.trim(),
     content: document.getElementById('skill-content').value,
     slash_command: document.getElementById('skill-slash').value.trim() || null,
-}));
+}), [{ id: 'skill-name', label: 'Name' }]);
 
 bindCreate('mcp', () => {
     const configText = document.getElementById('mcp-config').value.trim();
     let config;
     try { config = configText ? JSON.parse(configText) : {}; } catch (e) { throw new Error(`Config must be valid JSON`); }
     return { name: document.getElementById('mcp-name').value.trim(), config };
-});
+}, [{ id: 'mcp-name', label: 'Name' }]);
 
 bindCreate('lsp', () => ({
     name: document.getElementById('lsp-name').value.trim(),
     command: document.getElementById('lsp-command').value.trim(),
     args: parseJsonField(document.getElementById('lsp-args'), 'args'),
     languages: parseJsonField(document.getElementById('lsp-langs'), 'languages'),
-}));
+}), [
+    { id: 'lsp-name', label: 'Name' },
+    { id: 'lsp-command', label: 'Command' },
+]);
 
 document.getElementById('agent-create').onclick = async () => {
     const name = document.getElementById('agent-name').value.trim();
