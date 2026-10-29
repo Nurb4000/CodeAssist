@@ -24,6 +24,7 @@ from .skills import SkillRegistry
 from .tools import ToolRegistry, create_registry
 from .tools.security import WorkspaceViolationError, validate_path
 from .trust_registry import TrustRegistry
+from .turn_state import end_turn, start_turn
 
 if TYPE_CHECKING:
     from .lsp_client import (
@@ -877,6 +878,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         nonlocal agent_task, slot_busy
         ended = False  # a `done` event already closed the run out
         try:
+            # Register the turn up front so undo/rollback (which mutate the
+            # session's message history) are rejected with 409 while it runs --
+            # deleting rows mid-turn would strand tool calls and leave this agent
+            # operating on a stale snapshot. Cleared in finally below even on
+            # cancel/error, so a crashed turn never leaves the session stuck.
+            start_turn(session_id)
             async for event in runner.run(message, attachments or None):
                 if event.type == "done":
                     ended = True
@@ -903,6 +910,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         finally:
             agent_task = None
             slot_busy = False
+            end_turn(session_id)
 
     try:
         while True:

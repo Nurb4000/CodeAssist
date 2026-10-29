@@ -67,7 +67,17 @@ async def fork_session(session_id: str, body: dict):
 @router.post("/{session_id}/rollback/{message_id}")
 async def rollback_session(session_id: str, message_id: str):
     """Delete all messages after the given message ID (rollback to that point)."""
+    from codeassist import turn_state
+
+    if turn_state.is_session_running(session_id):
+        # Deleting rows mid-turn strands tool calls and leaves the in-flight
+        # agent on a stale snapshot; reject until the turn finishes.
+        raise HTTPException(
+            status_code=409,
+            detail="A turn is already running for this session; wait for it to finish.",
+        )
     from codeassist.session import Session
+
     session = Session(session_id)
     deleted = await session.delete_messages_after(message_id)
     return {"deleted": deleted}
@@ -76,7 +86,15 @@ async def rollback_session(session_id: str, message_id: str):
 @router.post("/{session_id}/undo")
 async def undo_session(session_id: str):
     """Undo the last agent turn (removes assistant message and its tool results)."""
+    from codeassist import turn_state
+
+    if turn_state.is_session_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A turn is already running for this session; wait for it to finish.",
+        )
     from codeassist.session import Session
+
     session = Session(session_id)
     deleted = await session.undo_last_turn()
     return {"deleted": deleted}
