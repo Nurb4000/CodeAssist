@@ -274,3 +274,17 @@
 .trust-toggle input:checked + .trust-slider:before {
     transform: translateX(26px);
 }
+
+/* Inline error banner for tool-manager failures. The tools page loads only
+   tools.js (not app.js), so it has no showError(); this gives every failed
+   load/action a single, visible, consistent place to report back instead of
+   failing silently or popping an alert. */
+.tool-error-banner {
+    background: #b71c1c;
+    color: #fff;
+    padding: 0.75rem 1rem;
+    margin: 0 0 1rem 0;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}

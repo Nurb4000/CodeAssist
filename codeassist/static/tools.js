@@ -13,6 +13,24 @@ const API = {
 let currentPage = 'all';
 let allTools = [];
 
+// Tool-manager error surfacing. The tools page loads only tools.js (not
+// app.js), so it has no showError(); this banner is its single, visible place
+// to report failures instead of silently logging them or popping an alert.
+// clearToolError() runs at the start of every load/action so a stale error does
+// not linger once the next operation succeeds.
+function showToolError(message) {
+    const banner = document.getElementById('tool-error');
+    if (banner) {
+        banner.textContent = message;
+        banner.style.display = 'block';
+    }
+}
+
+function clearToolError() {
+    const banner = document.getElementById('tool-error');
+    if (banner) banner.style.display = 'none';
+}
+
 /* Alphabetical by name, case-insensitively. Named rather than an inline arrow so
  * it can be reused by both list views. */
 function byName(a, b) {
@@ -76,15 +94,20 @@ async function loadPage(page) {
 
 // Load all tools
 async function loadAllTools() {
+    clearToolError();
     try {
         const res = await fetch(API.list);
+        if (!res.ok) {
+            showToolError(`Failed to load tools (HTTP ${res.status}).`);
+            return;
+        }
         const data = await res.json();
         allTools = (data.tools || []).sort(byName);
-        
+
         renderToolsList(allTools);
-        
+
     } catch (err) {
-        console.error('Failed to load tools:', err);
+        showToolError(`Failed to load tools: ${err.message || err}`);
     }
 }
 
@@ -128,8 +151,13 @@ function renderToolsList(tools) {
 
 // Load custom tools only
 async function loadCustomTools() {
+    clearToolError();
     try {
         const res = await fetch(API.list);
+        if (!res.ok) {
+            showToolError(`Failed to load custom tools (HTTP ${res.status}).`);
+            return;
+        }
         const data = await res.json();
         const customTools = (data.tools || []).filter(t => t.type === 'custom').sort(byName);
         
@@ -169,14 +197,19 @@ async function loadCustomTools() {
         `).join('');
         
     } catch (err) {
-        console.error('Failed to load custom tools:', err);
+        showToolError(`Failed to load custom tools: ${err.message || err}`);
     }
 }
 
 // View tool details
 async function viewTool(name) {
+    clearToolError();
     try {
         const res = await fetch(API.details(name));
+        if (!res.ok) {
+            showToolError(`Failed to load tool details (HTTP ${res.status}).`);
+            return;
+        }
         const tool = await res.json();
         
         const content = document.getElementById('modal-tool-content');
@@ -204,7 +237,7 @@ async function viewTool(name) {
         document.getElementById('tool-modal').style.display = 'flex';
         
     } catch (err) {
-        alert('Failed to load tool details');
+        showToolError(`Failed to load tool details: ${err.message || err}`);
     }
 }
 
@@ -214,18 +247,23 @@ async function toggleTrust(name, currentTrusted) {
 }
 
 async function setTrust(name, trusted) {
+    clearToolError();
     try {
-        await fetch(API.trust(name), {
+        const res = await fetch(API.trust(name), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ trusted }),
         });
-        
+        if (!res.ok) {
+            showToolError(`Failed to update trust level (HTTP ${res.status}).`);
+            return;
+        }
+
         // Reload current page
         loadPage(currentPage);
-        
+
     } catch (err) {
-        alert('Failed to update trust level');
+        showToolError(`Failed to update trust level: ${err.message || err}`);
     }
 }
 
@@ -233,12 +271,17 @@ async function setTrust(name, trusted) {
 async function deleteTool(name) {
     if (!confirm(`Delete tool "${name}"? This cannot be undone.`)) return;
     
+    clearToolError();
     try {
-        await fetch(API.delete(name), { method: 'DELETE' });
+        const res = await fetch(API.delete(name), { method: 'DELETE' });
+        if (!res.ok) {
+            showToolError(`Failed to delete tool (HTTP ${res.status}).`);
+            return;
+        }
         loadPage(currentPage);
-        
+
     } catch (err) {
-        alert('Failed to delete tool');
+        showToolError(`Failed to delete tool: ${err.message || err}`);
     }
 }
 
@@ -246,9 +289,15 @@ async function deleteTool(name) {
 document.getElementById('btn-scan')?.addEventListener('click', async () => {
     const container = document.getElementById('scan-results');
     container.innerHTML = '<p>Scanning...</p>';
-    
+    clearToolError();
+
     try {
         const res = await fetch(API.scan);
+        if (!res.ok) {
+            container.innerHTML = `<p class="error">Scan failed (HTTP ${res.status}).</p>`;
+            showToolError(`Scan failed (HTTP ${res.status}).`);
+            return;
+        }
         const data = await res.json();
         
         if (!data.results || data.results.length === 0) {
@@ -280,14 +329,20 @@ document.getElementById('btn-scan')?.addEventListener('click', async () => {
         `).join('');
         
     } catch (err) {
-        container.innerHTML = '<p class="error">Scan failed</p>';
+        container.innerHTML = `<p class="error">Scan failed: ${escapeHtml(err.message || err)}</p>`;
+        showToolError(`Scan failed: ${err.message || err}`);
     }
 });
 
 // Usage stats
 async function loadUsageStats() {
+    clearToolError();
     try {
         const res = await fetch(API.usage);
+        if (!res.ok) {
+            showToolError(`Failed to load usage stats (HTTP ${res.status}).`);
+            return;
+        }
         const data = await res.json();
         
         const container = document.getElementById('usage-stats');
@@ -325,7 +380,7 @@ async function loadUsageStats() {
         `;
         
     } catch (err) {
-        console.error('Failed to load usage stats:', err);
+        showToolError(`Failed to load usage stats: ${err.message || err}`);
     }
 }
 
