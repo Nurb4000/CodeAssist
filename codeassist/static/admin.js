@@ -84,9 +84,18 @@ function editButton(label, onEdit) {
 }
 
 let editModalEl = null;
+// The keydown handler that closes the edit modal on Escape. Held at module
+// scope so closeEditModal() can remove exactly the listener openEditModal()
+// added -- otherwise each open would stack another listener and none would ever
+// be cleaned up.
+let editModalEscapeHandler = null;
 
 function closeEditModal() {
     if (editModalEl && editModalEl.parentNode) editModalEl.remove();
+    if (editModalEscapeHandler) {
+        window.removeEventListener('keydown', editModalEscapeHandler);
+        editModalEscapeHandler = null;
+    }
     editModalEl = null;
 }
 
@@ -196,6 +205,18 @@ function openEditModal(title, fields, onSubmit) {
     document.body.appendChild(backdrop);
     const first = card.querySelector('.modal-input, .modal-textarea');
     if (first) first.focus();
+
+    // Escape closes the modal. Without this the only ways out were Cancel or
+    // clicking the backdrop -- keyboard users (and habit) expect Esc to dismiss
+    // an overlay. Listened on window so it fires regardless of where focus is,
+    // and removed in closeEditModal() so handlers do not stack across opens.
+    editModalEscapeHandler = (e) => {
+        if (e.key === 'Escape' && editModalEl === backdrop) {
+            e.preventDefault();
+            closeEditModal();
+        }
+    };
+    window.addEventListener('keydown', editModalEscapeHandler);
 }
 
 async function loadSkills() {
