@@ -64,6 +64,24 @@ let reconnectTimer = null;
 // connection warm so the UI doesn't flash "Disconnected - reconnecting".
 let pingTimer = null;
 const PING_INTERVAL_MS = 20000;
+
+// Reconnect timing. A down server used to trigger a fixed 1s/3s retry that
+// looped forever with no backoff -- every client hammering the endpoint at the
+// same instant, which floods it the moment it recovers (thundering herd). Now
+// retries use exponential backoff capped at MAX_RECONNECT_DELAY_MS with full
+// jitter (a random delay in [capped/2, capped]) so clients spread out.
+const DEFAULT_RECONNECT_BASE_MS = 3000;
+const INITIAL_RECONNECT_MS = 1000; // snappier on the very first load
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const MAX_BACKOFF_ATTEMPTS = 10;
+let reconnectAttempt = 0;
+
+// Pure: given the zero-based attempt number and the base delay for this
+// connection, return the (jittered, capped) wait before the next reconnect.
+function computeReconnectDelay(attempt, baseMs) {
+    const capped = Math.min(baseMs * 2 ** Math.min(attempt, MAX_BACKOFF_ATTEMPTS), MAX_RECONNECT_DELAY_MS);
+    return capped / 2 + Math.random() * capped / 2;
+}
 // Server password for WebSocket auth (sent as the Sec-WebSocket-Protocol
 // subprotocol). The server never exposes it to the browser, so this holds the
 // value the user typed once and we retry connecting with. Empty until set.
@@ -1953,6 +1971,7 @@ function connectWS() {
     // a stale feed land harmlessly instead of throwing.
     thisWs.onopen = () => {
         wsConnected = true;
+        reconnectAttempt = 0; // connection succeeded: start the next backoff sequence fresh
         updateConnectionStatus('connected');
         // (Re)arm the keepalive; clear any stale timer first.
         if (pingTimer) clearInterval(pingTimer);
@@ -2128,11 +2147,13 @@ function connectWS() {
         }
         // Faster reconnect on initial load. Reconnect regardless of isStreaming:
         // the run above has already been torn down, and without a reconnect the
-        // user would be stuck disconnected until a manual reload.
-        const delay = document.querySelector('.welcome') ? 1000 : 3000;
+        // user would be stuck disconnected until a manual reload. Backoff grows
+        // with each consecutive failure so a persistently down server stops
+        // flooding us with retries; a successful connect resets the counter.
+        const base = document.querySelector('.welcome') ? INITIAL_RECONNECT_MS : DEFAULT_RECONNECT_BASE_MS;
         reconnectTimer = setTimeout(() => {
             if (currentSessionId) connectWS();
-        }, delay);
+        }, computeReconnectDelay(reconnectAttempt++, base));
     };
 
     ws.onerror = () => {
