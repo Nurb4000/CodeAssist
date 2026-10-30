@@ -13,7 +13,8 @@ const inputAreaEl = document.getElementById('input-area');
 // Short display labels for built-in agents (shown when the selector is collapsed).
 const AGENT_SHORT = {
     default: 'Full', research: 'Research', review: 'Review',
-    build: 'Build', general: 'General', explore: 'Explore',
+    deep_review: 'Deep Review', build: 'Build', general: 'General',
+    explore: 'Explore',
 };
 
 function agentShortLabel(id) {
