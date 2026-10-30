@@ -1,11 +1,18 @@
 """Tests for token counting, context compaction, and truncation."""
+import asyncio
+import warnings
+
+from codeassist.config import LLMConfig
+from codeassist.llm import Finish, TextDelta
 from codeassist.tokens import (
     _extract_conversation_text,
     _fit_text_to_tokens,
     check_context_limit,
     compact_messages,
     count_tokens,
+    llm_compact_messages,
     strip_media_from_messages,
+    summary_is_filled,
     truncate_tool_result,
 )
 
@@ -425,3 +432,178 @@ class TestExtractMultipart:
         msgs = [{"role": "user", "content": [{"type": "text", "text": "Only text here"}]}]
         text = _extract_conversation_text(msgs)
         assert "Only text here" in text
+
+
+class _ScriptedClient:
+    """Stand-in for ``LLMClient`` that yields scripted text per ``stream()`` call.
+
+    Each call to ``stream`` pops the next scripted response and records the
+    messages it was sent, so tests can assert on both output and prompt content.
+    """
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    async def stream(self, messages, tools=None):
+        self.calls.append(messages)
+        chunks = self._responses.pop(0) if self._responses else ""
+        yield TextDelta(content=chunks)
+        yield Finish()
+
+
+def _install_client(monkeypatch, responses):
+    fake = _ScriptedClient(responses)
+    monkeypatch.setattr("codeassist.tokens.LLMClient", lambda config: fake)
+    return fake
+
+
+def _run_compaction(*args, **kwargs):
+    """Run the async compaction coroutine to completion (it streams via a fake)."""
+    return asyncio.run(llm_compact_messages(*args, **kwargs))
+
+
+def _turn_messages(n_turns):
+    """OpenAI-format history with a system message at index 0."""
+    msgs = [{"role": "system", "content": "You are helpful."}]
+    for i in range(n_turns):
+        msgs.append({"role": "user", "content": f"User turn {i}"})
+        msgs.append({"role": "assistant", "content": f"Assistant turn {i}"})
+    return msgs
+
+
+FULL_SUMMARY = (
+    "## Objective\n- Build feature X.\n\n"
+    "## Requirements\n- Must support YAML.\n\n"
+    "## Decisions\n- Used parser Y.\n\n"
+    "## Work State\n### Completed\n- Designed API.\n\n"
+    "### Active\n- Implementing.\n\n"
+    "### Blocked\n- (none).\n\n"
+    "## Next Move\n1. Finish implementation.\n\n"
+    "## Relevant Files\n- (none).\n\n"
+    "## Important Context\n- Exact command: `make test`."
+)
+
+PROSE_SUMMARY = (
+    "The user asked us to build feature X and we have been working on it, "
+    "discussing requirements and decisions along the way in prose form."
+)
+
+
+class TestSummaryIsFilled:
+    def test_filled_structured_summary_passes(self):
+        assert summary_is_filled(FULL_SUMMARY) is True
+
+    def test_prose_without_headings_fails(self):
+        assert summary_is_filled(PROSE_SUMMARY) is False
+
+    def test_few_headings_fails(self):
+        sparse = "## Objective\n- Build X.\n## Next Move\n1. Do it."
+        assert summary_is_filled(sparse) is False
+
+    def test_empty_text_fails(self):
+        assert summary_is_filled("") is False
+
+
+class TestLlmCompaction:
+    def test_short_history_returns_unchanged_without_client(self, monkeypatch):
+        # Fewer than tail_turns + 2 messages short-circuits before any LLM call.
+        def _boom(config):
+            raise AssertionError("LLMClient must not be constructed for short history")
+
+        monkeypatch.setattr("codeassist.tokens.LLMClient", _boom)
+        msgs = _turn_messages(1)  # system + 1 turn = 3 messages
+        out_msgs, summary = _run_compaction(msgs, tail_turns=2)
+        assert out_msgs is msgs
+        assert summary == ""
+
+    def test_produces_structured_summary_and_compacted_messages(self, monkeypatch):
+        fake = _install_client(monkeypatch, [FULL_SUMMARY])
+        msgs = _turn_messages(6)
+        prev = "## Objective\n- old objective."
+
+        out_msgs, summary = _run_compaction(
+            msgs, tail_turns=2, previous_summary=prev,
+            main_llm_config=LLMConfig(model="gpt-4", api_key="test"),
+        )
+
+        assert summary == FULL_SUMMARY
+        # System message preserved at the head.
+        assert out_msgs[0] == msgs[0]
+        # The summary is exposed as a single user message with the marker prefix.
+        summary_msg = out_msgs[1]
+        assert summary_msg["role"] == "user"
+        assert summary_msg["content"].startswith("[Previous conversation summary]\n")
+        assert FULL_SUMMARY in summary_msg["content"]
+        # The preserved tail (last 2 turns) is appended after the summary.
+        assert out_msgs[-1]["content"] == "Assistant turn 5"
+        # Exactly one request was made.
+        assert len(fake.calls) == 1
+
+    def test_previous_summary_is_passed_for_merging(self, monkeypatch):
+        fake = _install_client(monkeypatch, [FULL_SUMMARY])
+        msgs = _turn_messages(6)
+        prev = "## Objective\n- carried forward objective."
+
+        _, _ = _run_compaction(
+            msgs, tail_turns=2, previous_summary=prev,
+            main_llm_config=LLMConfig(model="gpt-4", api_key="test"),
+        )
+
+        user_content = fake.calls[0][-1]["content"]
+        assert prev in user_content
+        assert "New conversation turns" in user_content
+
+    def test_nudge_retry_when_first_summary_unfilled(self, monkeypatch):
+        # First response ignores the template; the nudge produces a filled one.
+        fake = _install_client(monkeypatch, [PROSE_SUMMARY, FULL_SUMMARY])
+        msgs = _turn_messages(6)
+
+        out_msgs, summary = _run_compaction(
+            msgs, tail_turns=2,
+            main_llm_config=LLMConfig(model="gpt-4", api_key="test"),
+        )
+
+        assert summary == FULL_SUMMARY
+        assert len(fake.calls) == 2  # initial + one nudge
+        # The second request carries the NUDGE instruction.
+        assert any("did not fill" in c["content"] for c in fake.calls[1])
+
+    def test_fallback_to_previous_when_still_unfilled(self, monkeypatch):
+        # Both the initial and nudged responses are non-compliant.
+        fake = _install_client(monkeypatch, [PROSE_SUMMARY, PROSE_SUMMARY])
+        msgs = _turn_messages(6)
+        prev = "## Objective\n- previous summary kept."
+
+        out_msgs, summary = _run_compaction(
+            msgs, tail_turns=2, previous_summary=prev,
+            main_llm_config=LLMConfig(model="gpt-4", api_key="test"),
+        )
+
+        assert summary == prev  # falls back to the previous summary
+        assert out_msgs is msgs  # and leaves the history untouched
+
+    def test_fallback_on_stream_exception(self, monkeypatch):
+        class _ExplodingClient:
+            def __init__(self, config):
+                self.config = config
+
+            async def stream(self, messages, tools=None):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr("codeassist.tokens.LLMClient", lambda config: _ExplodingClient(config))
+        msgs = _turn_messages(6)
+        prev = "## Objective\n- resilient previous summary."
+
+        # The fake's stream() raises inside the async generator; CPython emits a
+        # dangling-generator RuntimeWarning on GC during asyncio.run cleanup, so
+        # suppress that test-only artifact here.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out_msgs, summary = _run_compaction(
+                msgs, tail_turns=2, previous_summary=prev,
+                main_llm_config=LLMConfig(model="gpt-4", api_key="test"),
+            )
+
+        assert summary == prev
+        assert out_msgs is msgs

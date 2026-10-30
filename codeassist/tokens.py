@@ -9,9 +9,49 @@ import tiktoken
 
 from .config import LLMConfig
 from .llm import LLMClient
-from .prompts import COMPACTION_USER_PROMPT, SUMMARY_TEMPLATE
+from .prompts import COMPACTION_USER_PROMPT, SUMMARY_NUDGE, SUMMARY_TEMPLATE
 
 log = logging.getLogger(__name__)
+
+# Top-level section headings in SUMMARY_TEMPLATE (the "## X" lines). Used to
+# check that an LLM-produced summary actually filled the template before we trust
+# it; a summary that ignores the structure is worse than none, so we nudge once
+# and then fall back to the previous summary.
+_SUMMARY_TEMPLATE_HEADINGS = [
+    line.strip()
+    for line in SUMMARY_TEMPLATE.splitlines()
+    if line.startswith("## ")
+]
+# A summary is "filled" when it contains at least this many of the template's
+# top-level headings. Mirrors OpenCode's approach of re-summarizing into a
+# structured checkpoint rather than a flat paragraph.
+_SUMMARY_MIN_HEADINGS = 3
+
+
+def summary_is_filled(text: str) -> bool:
+    """Return True if ``text`` fills enough of the summary template to trust.
+
+    Checks for the presence of top-level ``## Heading`` lines from
+    ``SUMMARY_TEMPLATE``; at least ``_SUMMARY_MIN_HEADINGS`` of them must appear.
+    """
+    if not _SUMMARY_TEMPLATE_HEADINGS:
+        return True
+    present = sum(1 for heading in _SUMMARY_TEMPLATE_HEADINGS if heading in text)
+    return present >= _SUMMARY_MIN_HEADINGS
+
+
+async def _stream_summary(compaction_client: LLMClient, compaction_msgs: list[dict]) -> str:
+    """Stream a compaction request and accumulate the assistant's text reply."""
+    from .llm import Finish as F
+    from .llm import TextDelta as TD
+
+    summary_text = ""
+    async for event in compaction_client.stream(compaction_msgs):
+        if isinstance(event, TD):
+            summary_text += event.content
+        elif isinstance(event, F):
+            break
+    return summary_text
 
 # LRU cache for tiktoken encodings to avoid repeated lookups and unbounded
 # growth when models change. Max 16 entries covers all common models.
@@ -491,17 +531,16 @@ async def llm_compact_messages(
     ]
 
     try:
-        summary_text = ""
-        async for event in compaction_client.stream(compaction_msgs):
-            from .llm import Finish as F
-            from .llm import TextDelta as TD
-            if isinstance(event, TD):
-                summary_text += event.content
-            elif isinstance(event, F):
-                break
+        # Stream the initial summary. If it did not fill the template, nudge once
+        # and retry -- a summary that ignores the structure is worse than none.
+        summary_text = await _stream_summary(compaction_client, compaction_msgs)
+        if not summary_text.strip() or not summary_is_filled(summary_text):
+            nudged_msgs = list(compaction_msgs)
+            nudged_msgs[-1] = {"role": "user", "content": SUMMARY_NUDGE}
+            summary_text = await _stream_summary(compaction_client, nudged_msgs)
 
-        if not summary_text.strip():
-            log.warning("LLM compaction returned empty summary")
+        if not summary_text.strip() or not summary_is_filled(summary_text):
+            log.warning("LLM compaction summary did not fill template; using previous summary")
             return messages, previous_summary
 
         # Build compacted message list

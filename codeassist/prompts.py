@@ -73,41 +73,61 @@ TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Write tool automatically backs up existing files to .bak before overwriting
 - Grep supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
 
-SUMMARY_TEMPLATE = """You are summarizing a conversation so the NEXT turn of this same assistant can continue without losing track. The reader only sees this summary plus recent context, so anything you do not state here is lost. Keep it progress-anchored and terse (bullets, not prose).
+SUMMARY_TEMPLATE = """You are summarizing a conversation so the NEXT turn of this same assistant can continue without losing track. The reader sees only this summary plus recent context, so anything you omit is lost forever. Mimic OpenCode's checkpoint: progress-anchored, terse single-line bullets (not prose), and every section filled or explicitly "(none)".
 
 ## Objective
 - One or two sentences on what the user is trying to accomplish.
 
+## Requirements
+- User-stated constraints, preferences, and scope boundaries, or "(none)".
+
+## Decisions
+- Decisions already made and why, or "(none)".
+
 ## Work State
+Break the objective into smaller goals and report which are completed, being worked on, or blocked.
 ### Completed
-- Finished work, verified facts, or changes made; use "(none)" if nothing is done yet.
+- Goals finished or verified facts; use "(none)" if nothing is done yet.
 
 ### Active
-- Current in-progress work, partial changes, or investigation state; use "(none)".
+- Goals currently in progress, partial changes, or investigation state; use "(none)".
 
 ### Blocked
-- Blockers, failing commands, or unknowns that must be resolved before continuing; use "(none)".
-
-## Key Findings & Decisions
-- Important discoveries, design decisions, constraints, and rationale. Preserve exact file paths, symbols, commands, and error strings.
+- Anything blocking progress and why; use "(none)".
 
 ## Next Move
 1. The immediate concrete action to take next (or "(none)").
 2. The follow-up action if the first is known (or "(none)").
 
-Carry forward objectives, constraints, and decisions even when the recent context does not mention them. Where the summary and recent context conflict, the recent context wins: state the corrected fact and drop the old claim."""
+## Relevant Files
+Files and directories, beyond the current working directory, that another agent needs to open to continue (at most 15, most important first); "(none)" if none.
 
-COMPACTION_USER_PROMPT = """Summarize the following conversation history. Previous summary (if any):
+## Important Context
+Facts the next agent cannot continue without and cannot easily find on its own -- exact commands run, error strings, URLs, identifiers, and whether changes are uncommitted, committed, pushed, or under review; "(none)".
 
+Rules:
+- Preserve exact file paths, symbols, commands, error strings, and URLs.
+- Carry forward only user questions or requests that remain unanswered or need further action; drop ones newer history has answered or resolved. Preserve exact wording when carrying one forward.
+- When the summary and recent context conflict, the recent context wins: state the corrected fact and drop the old claim.
+- Do not mention this summarization process or that context was compacted."""
+
+COMPACTION_USER_PROMPT = """Update the existing checkpoint below into one consolidated summary. Do not continue the task or call tools.
+
+Existing checkpoint (previous summary):
 {previous_summary}
 
 --- New conversation turns to summarize ---
-
 {conversation}
-
 --- End of new turns ---
 
-Produce an updated summary that merges the previous context with the new turns."""
+Rules for merging:
+- Newer history always takes precedence over the existing checkpoint. Preserve prior information unless newer history clearly contradicts, supersedes, resolves, or makes it stale; if it is no longer relevant to continuing the work, drop it.
+- Incorporate the new requirements, decisions, and progress. Reconcile Work State and Next Move: move completed work out of Active, remove resolved blockers and answered questions, and keep only unresolved or pending items.
+- Carry forward only user questions or requests that remain unanswered or need further action; do not repeat ones newer history has resolved. Preserve exact wording when carrying one forward.
+- Return the updated summary as Markdown sections using the exact headings from SUMMARY_TEMPLATE (fill each section, or "(none)"). Do not include the <conversation-checkpoint>, <summary>, or <recent-context> wrapper tags.
+- Do not mention this summarization process or that context was compacted."""
+
+SUMMARY_NUDGE = """The previous response did not fill in the required summary template sections. Do not call tools or continue the task. Return the updated summary as Markdown using the exact section headings from the template, filling each section (or "(none)")."""
 
 
 def build_system_prompt(workspace: Path, model_id: str, features: dict | None = None, instructions: str | None = None) -> str:
