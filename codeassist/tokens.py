@@ -53,6 +53,77 @@ async def _stream_summary(compaction_client: LLMClient, compaction_msgs: list[di
             break
     return summary_text
 
+
+async def _summarize_head(
+    head_text: str,
+    *,
+    previous_summary: str = "",
+    compaction_model: str = "",
+    main_llm_config: LLMConfig | None = None,
+    tool_result_max_tokens: int | None = None,
+    max_input_tokens: int | None = None,
+) -> str:
+    """Summarize ``head_text`` into a structured checkpoint with the compaction
+    model. Returns the summary text ("" when it could not be produced).
+
+    ``max_input_tokens`` bounds the head sent to the compaction model; when set
+    the head is trimmed to fit rather than overflowing the model and silently
+    skipping compaction. A reply that does not fill the template gets one NUDGE
+    retry; if it still does not, "" is returned so the caller can fall back.
+    """
+    if not head_text.strip():
+        return ""
+
+    # Leave room for the summary template, the previous summary and the
+    # chat-format envelope when budgeting the head to the compaction window.
+    if max_input_tokens:
+        budget_model = compaction_model or (
+            main_llm_config.model if main_llm_config else "gpt-4"
+        )
+        budget_encoding = _get_encoding(budget_model)
+        previous_tokens = len(budget_encoding.encode(previous_summary or ""))
+        scaffold_tokens = len(budget_encoding.encode(SUMMARY_TEMPLATE)) + 800
+        head_budget = max(256, int(max_input_tokens) - previous_tokens - scaffold_tokens)
+        head_text = _fit_text_to_tokens(head_text, head_budget, model=budget_model)
+
+    if compaction_model:
+        compaction_llm_cfg = LLMConfig(
+            provider=main_llm_config.provider if main_llm_config else "openai",
+            model=compaction_model,
+            api_key=main_llm_config.api_key if main_llm_config else "",
+            base_url=main_llm_config.base_url if main_llm_config else "",
+            temperature=0.0,
+            max_tokens=4096,
+        )
+    elif main_llm_config:
+        compaction_llm_cfg = LLMConfig(
+            provider=main_llm_config.provider,
+            model=main_llm_config.model,
+            api_key=main_llm_config.api_key,
+            base_url=main_llm_config.base_url,
+            temperature=0.0,
+            max_tokens=4096,
+        )
+    else:
+        log.warning("No LLM config available for compaction")
+        return ""
+
+    compaction_client = LLMClient(compaction_llm_cfg)
+    user_prompt = COMPACTION_USER_PROMPT.format(
+        previous_summary=previous_summary or "(No previous summary)",
+        conversation=head_text,
+    )
+    compaction_msgs = [
+        {"role": "system", "content": SUMMARY_TEMPLATE},
+        {"role": "user", "content": user_prompt},
+    ]
+    summary_text = await _stream_summary(compaction_client, compaction_msgs)
+    if not summary_text.strip() or not summary_is_filled(summary_text):
+        nudged = list(compaction_msgs)
+        nudged[-1] = {"role": "user", "content": SUMMARY_NUDGE}
+        summary_text = await _stream_summary(compaction_client, nudged)
+    return summary_text
+
 # LRU cache for tiktoken encodings to avoid repeated lookups and unbounded
 # growth when models change. Max 16 entries covers all common models.
 _ENCODING_CACHE_MAX = 16
@@ -481,64 +552,15 @@ async def llm_compact_messages(
     if not head_text.strip():
         return messages, previous_summary
 
-    if max_input_tokens:
-        # Leave room for the summary template, the previous summary and the
-        # chat-format envelope. Without this a long first compaction could
-        # itself overflow the compaction model and silently leave the history
-        # uncompacted.
-        budget_model = compaction_model or (
-            main_llm_config.model if main_llm_config else "gpt-4"
-        )
-        budget_encoding = _get_encoding(budget_model)
-        previous_tokens = len(budget_encoding.encode(previous_summary or ""))
-        scaffold_tokens = len(budget_encoding.encode(SUMMARY_TEMPLATE)) + 800
-        head_budget = max(256, int(max_input_tokens) - previous_tokens - scaffold_tokens)
-        head_text = _fit_text_to_tokens(head_text, head_budget, model=budget_model)
-
-    # Build compaction prompt
-    user_prompt = COMPACTION_USER_PROMPT.format(
-        previous_summary=previous_summary or "(No previous summary)",
-        conversation=head_text,
-    )
-
-    # Create LLM client for compaction
-    if compaction_model:
-        compaction_llm_cfg = LLMConfig(
-            provider=main_llm_config.provider if main_llm_config else "openai",
-            model=compaction_model,
-            api_key=main_llm_config.api_key if main_llm_config else "",
-            base_url=main_llm_config.base_url if main_llm_config else "",
-            temperature=0.0,
-            max_tokens=4096,
-        )
-    elif main_llm_config:
-        compaction_llm_cfg = LLMConfig(
-            provider=main_llm_config.provider,
-            model=main_llm_config.model,
-            api_key=main_llm_config.api_key,
-            base_url=main_llm_config.base_url,
-            temperature=0.0,
-            max_tokens=4096,
-        )
-    else:
-        log.warning("No LLM config available for compaction, falling back to text mode")
-        return messages, previous_summary
-
-    compaction_client = LLMClient(compaction_llm_cfg)
-    compaction_msgs = [
-        {"role": "system", "content": SUMMARY_TEMPLATE},
-        {"role": "user", "content": user_prompt},
-    ]
-
     try:
-        # Stream the initial summary. If it did not fill the template, nudge once
-        # and retry -- a summary that ignores the structure is worse than none.
-        summary_text = await _stream_summary(compaction_client, compaction_msgs)
-        if not summary_text.strip() or not summary_is_filled(summary_text):
-            nudged_msgs = list(compaction_msgs)
-            nudged_msgs[-1] = {"role": "user", "content": SUMMARY_NUDGE}
-            summary_text = await _stream_summary(compaction_client, nudged_msgs)
-
+        summary_text = await _summarize_head(
+            head_text,
+            previous_summary=previous_summary,
+            compaction_model=compaction_model,
+            main_llm_config=main_llm_config,
+            tool_result_max_tokens=tool_result_max_tokens,
+            max_input_tokens=max_input_tokens,
+        )
         if not summary_text.strip() or not summary_is_filled(summary_text):
             log.warning("LLM compaction summary did not fill template; using previous summary")
             return messages, previous_summary

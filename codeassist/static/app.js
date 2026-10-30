@@ -2024,6 +2024,18 @@ function connectWS() {
             updateContextUsage(data.tokens, data.usage_pct, data.severity);
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
+        } else if (data.type === 'session_collapse') {
+            // Budget rollover in progress: tell the user we are summarizing so the
+            // pause for the summary request does not look like the run hung.
+            showStatus(data.message || 'Reaching the session budget, summarizing to keep going...', 'info');
+        } else if (data.type === 'session_rolled') {
+            // Budget rollover complete: confirm the fresh context and how much was
+            // summarized, then let the continued turn render normally.
+            const suffix = data.summary_chars ? ` (${data.summary_chars} chars summarized).` : '';
+            showStatus(
+                (data.message || 'Rolled into a fresh context at the budget limit, continuing.') + suffix,
+                'success',
+            );
         } else if (data.type === 'plan_update') {
             updatePlanDisplay(data.tasks);
         } else if (data.type === 'question_request') {

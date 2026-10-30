@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -1175,6 +1175,63 @@ class Session:
             )
             await db.commit()
             return deleted
+
+    async def rollover_from_summary(
+        self, summary_text: str, tail_start_id: str,
+    ) -> str | None:
+        """Collapse everything before the row ``tail_start_id`` into a single
+        checkpoint message, preserving the preserved tail rows (and their
+        attachments) verbatim.
+
+        The session orders messages by ``created_at``, so the checkpoint is
+        written one second before the oldest preserved tail row to sort *before*
+        it; the tail keeps its original rows and timestamps. Returns the
+        checkpoint message id, or None when the anchor row is missing from this
+        session.
+        """
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT created_at FROM messages WHERE id = ? AND session_id = ?",
+                (tail_start_id, self.id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            try:
+                anchor_dt = datetime.fromisoformat(row["created_at"])
+            except ValueError:
+                return None
+            checkpoint_ts = (anchor_dt - timedelta(seconds=1)).isoformat()
+
+            # Drop the head the summary now stands in for, plus any attachments
+            # that would otherwise be orphaned.
+            await db.execute(
+                "DELETE FROM message_attachments WHERE message_id IN "
+                "(SELECT id FROM messages WHERE session_id = ? AND created_at < ?)",
+                (self.id, row["created_at"]),
+            )
+            await db.execute(
+                "DELETE FROM messages WHERE session_id = ? AND created_at < ?",
+                (self.id, row["created_at"]),
+            )
+            mid = str(uuid.uuid4())
+            await db.execute(
+                "INSERT INTO messages "
+                "(id, session_id, role, content, tool_call_id, tool_calls, name, reasoning_content, created_at) "
+                "VALUES (?, ?, 'user', ?, NULL, NULL, NULL, NULL, ?)",
+                (
+                    mid,
+                    self.id,
+                    f"[Conversation checkpoint]\n{summary_text}",
+                    checkpoint_ts,
+                ),
+            )
+            await db.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (datetime.now(UTC).isoformat(), self.id),
+            )
+            await db.commit()
+            return mid
 
     async def undo_last_turn(self) -> int:
         """Remove the last assistant message and associated tool messages.

@@ -127,6 +127,17 @@ class CostTracker:
         self._total_cost += cost
         return record
 
+    def budget_percent(self) -> float | None:
+        """Return token usage as a percentage of ``max_tokens_per_session``.
+
+        Returns ``None`` when token budgeting is disabled or uncapped, so callers
+        can treat that as "no rollover / no limit" uniformly.
+        """
+        if not self.config.enabled or self.config.max_tokens_per_session <= 0:
+            return None
+        total_tokens = self._total_prompt_tokens + self._total_completion_tokens
+        return (total_tokens / self.config.max_tokens_per_session) * 100
+
     def check_budget(self) -> tuple[bool, str]:
         """Check if budget is exceeded. Returns (ok, message).
 
@@ -142,8 +153,8 @@ class CostTracker:
         exceeded: str | None = None
 
         # Check token limits
-        if self.config.max_tokens_per_session > 0:
-            pct = (total_tokens / self.config.max_tokens_per_session) * 100
+        pct = self.budget_percent()
+        if pct is not None:
             if pct >= 100:
                 exceeded = f"Token budget exceeded: {total_tokens:,} / {self.config.max_tokens_per_session:,} tokens"
             elif pct >= self.config.warning_threshold_pct:

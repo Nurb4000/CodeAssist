@@ -27,11 +27,14 @@ from .permissions import PermissionRuleset, permission_manager
 from .prompts import build_openai_messages, build_system_prompt
 from .session import Session
 from .tokens import (
+    _extract_conversation_text,
+    _summarize_head,
     check_context_limit,
     compact_messages,
     count_tokens,
     llm_compact_messages,
     strip_media_from_messages,
+    summary_is_filled,
     truncate_tool_result,
 )
 from .tool_output_store import get_tool_output_store
@@ -730,6 +733,26 @@ def _loop_event(reason: str) -> AgentEvent:
     })
 
 
+def _recent_tail_start(history: list[dict], tail_turns: int) -> int:
+    """Index into ``history`` (ordered by created_at) of the first row to keep
+    verbatim as recent context: the start of the last ``tail_turns`` user turns.
+
+    Falls back to the final ``tail_turns`` rows when fewer user turns are present,
+    so recent context is never lost to summarization.
+    """
+    tail_start = len(history)
+    turns_found = 0
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            turns_found += 1
+            if turns_found == tail_turns:
+                tail_start = i
+                break
+    if turns_found < tail_turns:
+        tail_start = max(1, len(history) - tail_turns)
+    return tail_start
+
+
 class Agent:
     """Core agent loop: prompt -> tool calls -> execute -> repeat.
 
@@ -802,6 +825,9 @@ class Agent:
         # Compaction state tracking
         self._compaction_summary: str = ""
         self._compaction_count: int = 0
+        # Set to True once a budget rollover is attempted this turn so a failed
+        # summarization cannot spin every iteration (reset per run in _run).
+        self._budget_rollover_attempted: bool = False
         # Continuation guard: nudges the model when it stops after using tools
         # instead of finishing (reset per run in run()).
         self._run_used_tools: bool = False
@@ -1346,6 +1372,9 @@ class Agent:
         # context persists, so re-summarizing from scratch would discard the
         # state we already compressed. Only the per-turn telemetry resets.
         self._compaction_count = 0
+        # A budget rollover is attempted at most once per turn: if summarization
+        # fails we keep going rather than spinning every iteration trying again.
+        self._budget_rollover_attempted = False
         # Reset continuation guard state for new user turn
         self._run_used_tools = False
         self._since_nudge_tools = False
@@ -1451,6 +1480,55 @@ class Agent:
         except Exception as e:  # noqa: BLE001 — tool-output cleanup is best-effort, must never break the run
             log.debug("Tool output cleanup failed: %s", e)
 
+    async def _perform_rollover(self) -> str:
+        """Summarize current history into a checkpoint, truncate the session to
+        [checkpoint + recent tail], reset the budget, and invalidate working
+        caches so the loop rebuilds from the reduced history.
+
+        Returns the checkpoint summary text ("" if nothing was rolled over -- the
+        caller then keeps going on the existing context rather than hard-stopping).
+        """
+        cfg = self.config.compaction
+        history = await self.session.get_messages()
+        tail_start = _recent_tail_start(history, cfg.tail_turns)
+        # Need at least one head row to summarize and at least one tail row to
+        # keep; otherwise there is nothing to roll over.
+        if tail_start <= 0 or tail_start >= len(history):
+            return ""
+        tail_start_id = history[tail_start]["id"]
+        head_text = _extract_conversation_text(
+            history[:tail_start], tool_result_max_tokens=cfg.tool_result_max_tokens,
+        )
+        if not head_text.strip():
+            return ""
+        # Budget the head against the compaction model's window so a long first
+        # rollover does not itself overflow the model and skip silently.
+        try:
+            context_window = await effective_context_window(self.config)
+        except Exception:  # noqa: BLE001
+            context_window = self.config.llm.context_window
+        summary_text = await _summarize_head(
+            head_text,
+            previous_summary=self._compaction_summary,
+            compaction_model=cfg.model or self.config.llm.model,
+            main_llm_config=self.config.llm,
+            tool_result_max_tokens=cfg.tool_result_max_tokens,
+            max_input_tokens=max(1024, context_window - 4096 - 512),
+        )
+        if not summary_text.strip() or not summary_is_filled(summary_text):
+            return ""
+        checkpoint_id = await self.session.rollover_from_summary(summary_text, tail_start_id)
+        if not checkpoint_id:
+            return ""
+        # Persisted; refresh in-memory state so the loop rebuilds from the
+        # reduced history and the budget starts fresh for the continued work.
+        self._compaction_summary = summary_text
+        self.cost_tracker.reset()
+        self._messages = None
+        self._working_messages = None
+        self._working_history_len = 0
+        return summary_text
+
     async def _loop(self, user_message: str) -> AsyncIterator[AgentEvent]:
         """Main agent loop: build messages → stream LLM → execute tools → repeat.
 
@@ -1500,6 +1578,29 @@ class Agent:
                 yield AgentEvent("error", {"message": f"Budget exceeded: {budget_msg}"})
                 yield AgentEvent("done")
                 return
+
+            # Budget rollover band: at/above the warning threshold (but below the
+            # hard stop) summarize into a checkpoint and continue on a fresh
+            # budget instead of crawling to the 100% wall. Guarded per turn so a
+            # failed summarization cannot spin every iteration.
+            if not self._budget_rollover_attempted:
+                pct = self.cost_tracker.budget_percent()
+                if pct is not None and pct >= self.config.cost.warning_threshold_pct:
+                    self._budget_rollover_attempted = True
+                    yield AgentEvent("session_collapse", {
+                        "message": "Reaching the session budget -- summarizing to keep going.",
+                    })
+                    rolled = await self._perform_rollover()
+                    if rolled:
+                        yield AgentEvent("session_rolled", {
+                            "message": "Rolled into a fresh context at the budget limit -- continuing.",
+                            "summary_chars": len(rolled),
+                        })
+                    else:
+                        log.warning(
+                            "Budget rollover produced no summary at %.0f%%; "
+                            "continuing to the hard stop", pct,
+                        )
 
             # ── Phase 0: Build messages (with compaction if needed) ──────
             # Fetch messages once, then track incrementally
