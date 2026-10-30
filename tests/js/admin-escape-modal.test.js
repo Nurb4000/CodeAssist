@@ -70,9 +70,10 @@ test('repeated open/close cycles do not stack keydown listeners', async () => {
       escape(env);
       assert.strictEqual(backdrop(env), null, `modal closed on cycle ${i + 1}`);
     }
-    // One listener added per open, one removed per close -- balanced, no leak.
-    assert.strictEqual(adds, 3, 'a keydown listener is added for each open');
-    assert.strictEqual(removes, 3, 'that listener is removed on each close');
+    // Two listeners added per open (Escape-close + Tab focus-trap), one of each
+    // removed per close -- balanced, no leak.
+    assert.strictEqual(adds, 6, 'a keydown listener is added for each open');
+    assert.strictEqual(removes, 6, 'that listener is removed on each close');
   } finally {
     win.addEventListener = realAdd;
     win.removeEventListener = realRemove;

@@ -89,12 +89,21 @@ let editModalEl = null;
 // added -- otherwise each open would stack another listener and none would ever
 // be cleaned up.
 let editModalEscapeHandler = null;
+// The keydown handler that traps Tab focus inside the edit modal. Held at module
+// scope so closeEditModal() can remove exactly the listener openEditModal()
+// added -- otherwise each open would stack another listener and none would ever
+// be cleaned up.
+let editModalFocusHandler = null;
 
 function closeEditModal() {
     if (editModalEl && editModalEl.parentNode) editModalEl.remove();
     if (editModalEscapeHandler) {
         window.removeEventListener('keydown', editModalEscapeHandler);
         editModalEscapeHandler = null;
+    }
+    if (editModalFocusHandler) {
+        window.removeEventListener('keydown', editModalFocusHandler);
+        editModalFocusHandler = null;
     }
     editModalEl = null;
 }
@@ -217,6 +226,33 @@ function openEditModal(title, fields, onSubmit) {
         }
     };
     window.addEventListener('keydown', editModalEscapeHandler);
+
+    // Focus trap: keep Tab / Shift+Tab focus inside the modal so keyboard users
+    // cannot tab behind the backdrop to the page controls (nav, section toggles)
+    // it covers. On Tab at the last focusable element, wrap to the first; on
+    // Shift+Tab at the first, wrap to the last. Listened on window (like Escape)
+    // and guarded by editModalEl === backdrop so a stale handler cannot move
+    // focus for a newer modal. Focusables are collected live each Tab so a field
+    // added/removed between opens is still trapped.
+    const focusables = () => Array.from(
+        backdrop.querySelectorAll(
+            'input:not([type="hidden"]), textarea, select, button, [tabindex]:not([tabindex="-1"])',
+        ),
+    ).filter((el) => !el.disabled);
+    editModalFocusHandler = (e) => {
+        if (e.key !== 'Tab' || editModalEl !== backdrop) return;
+        const list = focusables();
+        if (!list.length) return;
+        const idx = list.indexOf(document.activeElement);
+        if (e.shiftKey && idx === 0) {
+            e.preventDefault();
+            list[list.length - 1].focus();
+        } else if (!e.shiftKey && idx === list.length - 1) {
+            e.preventDefault();
+            list[0].focus();
+        }
+    };
+    window.addEventListener('keydown', editModalFocusHandler);
 }
 
 async function loadSkills() {
