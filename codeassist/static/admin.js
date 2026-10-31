@@ -2,11 +2,8 @@
  * Backed entirely by the existing /api/* registry endpoints. */
 const statusEl = document.getElementById('admin-status');
 
-function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
-}
+// escapeHtml is the shared helper loaded from /static/shared/escapeHtml.js
+// before this script; kept here as a one-line pointer so a re-add is obvious.
 
 /* Alphabetical by name, case-insensitively. Declared as a named function and
  * called from the loop head rather than written as a multi-line arrow inside

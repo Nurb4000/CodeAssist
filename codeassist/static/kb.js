@@ -900,11 +900,10 @@ document.querySelectorAll('.close').forEach(btn => {
 });
 
 // Helpers
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
+
+// escapeHtml is the shared helper loaded from /static/shared/escapeHtml.js before
+// this script. It escapes & < > " ' (the old DOM-based textContent -> innerHTML
+// variant left quotes untouched, which was unsafe in attribute context).
 
 function formatDate(isoStr) {
     if (!isoStr) return '-';

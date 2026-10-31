@@ -1406,17 +1406,10 @@ function maybeScrollToBottom() {
     }
 }
 
-function escapeHtml(s) {
-    // Escapes quotes as well as & < >. The previous DOM-based helper (textContent
-    // -> innerHTML) left " and ' untouched, so it was unsafe in attribute context:
-    // escapeHtml is interpolated into double-quoted attributes (e.g. value="..." in
-    // the question dialog) and into single-quoted inline onclick strings, where a
-    // quote in agent/LLM-controlled data broke out and injected markup. Matches the
-    // quote-escaping helper already used by admin.js.
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
-}
+// escapeHtml is the shared helper loaded from /static/shared/escapeHtml.js
+// before this script. It escapes & < > " ' so values interpolated into
+// double-quoted attributes (e.g. value="..." in the question dialog) or
+// single-quoted inline onclick strings cannot break out and inject markup.
 
 // marked v12 has no built-in sanitizer and passes raw HTML through parse(), so
 // prose streamed from the model (prompt-injectable) would otherwise land live in

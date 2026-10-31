@@ -413,15 +413,10 @@ document.querySelectorAll('.close').forEach(btn => {
 });
 
 // Helpers
-function escapeHtml(s) {
-    // Escapes quotes as well as & < >. The previous DOM-based helper (textContent
-    // -> innerHTML) left " and ' untouched, so it was unsafe in attribute and
-    // inline-handler context: this helper is interpolated into single-quoted
-    // onclick="viewTool('...')" strings built from tool names.
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
-}
+
+// escapeHtml is the shared helper loaded from /static/shared/escapeHtml.js before
+// this script. It escapes quotes too, so a tool name interpolated into the
+// single-quoted onclick="viewTool('...')" strings built here cannot break out.
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {

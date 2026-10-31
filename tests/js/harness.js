@@ -99,6 +99,8 @@ async function boot({ fixtures = {}, preload = null } = {}) {
   const context = dom.getInternalVMContext();
   vm.runInContext(readStatic('vendor', 'marked.min.js'), context, { filename: 'marked.min.js' });
   vm.runInContext(readStatic('vendor', 'highlight.min.js'), context, { filename: 'highlight.min.js' });
+  // The shared escapeHtml helper the page scripts expect as a global.
+  vm.runInContext(readStatic('shared', 'escapeHtml.js'), context, { filename: 'shared/escapeHtml.js' });
 
   window.addEventListener('error', (e) => errors.push(String(e.error || e.message)));
 
@@ -205,6 +207,8 @@ async function bootAdmin({ fixtures = {}, preload = null } = {}) {
   };
 
   const context = dom.getInternalVMContext();
+  // The shared escapeHtml helper admin.js expects as a global.
+  vm.runInContext(readStatic('shared', 'escapeHtml.js'), context, { filename: 'shared/escapeHtml.js' });
   try {
     vm.runInContext(readStatic('admin.js'), context, { filename: 'admin.js' });
   } catch (e) {
@@ -244,6 +248,8 @@ async function bootTools({ fixtures = {} } = {}) {
   };
 
   const context = dom.getInternalVMContext();
+  // The shared escapeHtml helper tools.js expects as a global.
+  vm.runInContext(readStatic('shared', 'escapeHtml.js'), context, { filename: 'shared/escapeHtml.js' });
   try {
     vm.runInContext(readStatic('tools.js'), context, { filename: 'tools.js' });
   } catch (e) {
