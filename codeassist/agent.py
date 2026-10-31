@@ -1480,6 +1480,24 @@ class Agent:
         except Exception as e:  # noqa: BLE001 — tool-output cleanup is best-effort, must never break the run
             log.debug("Tool output cleanup failed: %s", e)
 
+    def _budget_display(self) -> dict:
+        """Budget state for the chat gauge, so the UI can show how close the
+        session is to its reset point -- distinct from the per-request *window*
+        gauge that `usage_pct`/`severity` already report.
+
+        ``budget_enabled`` reuses ``budget_percent()``'s None sentinel (None when
+        budgeting is off or uncapped) so an unlimited session never shows a
+        phantom budget line.
+        """
+        cfg = self.config.cost
+        pct = self.cost_tracker.budget_percent()
+        return {
+            "budget_enabled": pct is not None,
+            "budget_pct": round(pct, 1) if pct is not None else None,
+            "budget_max_tokens": cfg.max_tokens_per_session,
+            "budget_threshold_pct": cfg.warning_threshold_pct,
+        }
+
     async def _perform_rollover(self) -> str:
         """Summarize current history into a checkpoint, truncate the session to
         [checkpoint + recent tail], reset the budget, and invalidate working
@@ -1661,6 +1679,7 @@ class Agent:
                     "tokens": ctx["total_tokens"],
                     "usage_pct": ctx["usage_pct"],
                     "severity": ctx["severity"],
+                    **self._budget_display(),
                 })
 
                 if ctx["needs_compaction"] and compaction_cfg.enabled:
@@ -1786,6 +1805,7 @@ class Agent:
                                 "tokens": ctx_after["total_tokens"],
                                 "usage_pct": ctx_after["usage_pct"],
                                 "severity": ctx_after["severity"],
+                                **self._budget_display(),
                             })
                         else:
                             log.info(
@@ -2005,6 +2025,7 @@ class Agent:
                         "tokens": ctx_after["total_tokens"],
                         "usage_pct": ctx_after["usage_pct"],
                         "severity": ctx_after["severity"],
+                        **self._budget_display(),
                     })
                 finally:
                     # Always release the provider stream when this step's try/except

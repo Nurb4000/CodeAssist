@@ -276,6 +276,50 @@ def test_put_settings_validates_types(live_client):
     assert res.status_code == 422
 
 
+def test_cost_budget_settings_are_listed(live_client):
+    # §13 #16a: the reset point (max_tokens_per_session) and its threshold are
+    # visible in admin, not just the compaction threshold.
+    items = live_client.get("/api/settings").json()["settings"]
+    cost = {s["key"]: s for s in items if s["group"] == "Cost"}
+    assert set(cost) == {
+        "cost.enabled",
+        "cost.max_tokens_per_session",
+        "cost.warning_threshold_pct",
+    }
+    assert cost["cost.max_tokens_per_session"]["label"] == "Session token budget (reset point)"
+    # Defaults mirror BudgetConfig: unlimited / disabled / 80%.
+    assert cost["cost.max_tokens_per_session"]["value"] == 0
+    assert cost["cost.enabled"]["value"] is False
+    assert cost["cost.warning_threshold_pct"]["value"] == 80.0
+
+
+def test_put_cost_budget_applies_live_and_validates(live_client):
+    from codeassist import server
+
+    res = live_client.put(
+        "/api/settings",
+        json={
+            "cost.enabled": True,
+            "cost.max_tokens_per_session": 200000,
+            "cost.warning_threshold_pct": 75,
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert sorted(res.json()["applied"]) == [
+        "cost.enabled",
+        "cost.max_tokens_per_session",
+        "cost.warning_threshold_pct",
+    ]
+    cfg = server.get_config().cost
+    assert cfg.enabled is True
+    assert cfg.max_tokens_per_session == 200000
+    assert cfg.warning_threshold_pct == 75.0
+
+    # Out-of-range threshold and non-integer budget are rejected.
+    assert live_client.put("/api/settings", json={"cost.warning_threshold_pct": 150}).status_code == 422
+    assert live_client.put("/api/settings", json={"cost.max_tokens_per_session": "lots"}).status_code == 422
+
+
 def test_put_settings_secret_placeholder_ignored(live_client):
     from codeassist import server
 

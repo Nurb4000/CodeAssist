@@ -2021,7 +2021,7 @@ function connectWS() {
             hideProgress();
             onToolResult(data.id, data.output);
         } else if (data.type === 'context') {
-            updateContextUsage(data.tokens, data.usage_pct, data.severity);
+            updateContextUsage(data.tokens, data.usage_pct, data.severity, data);
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
         } else if (data.type === 'session_collapse') {
@@ -2384,17 +2384,49 @@ function hideContinueButton() {
     }
 }
 
-function updateContextUsage(tokens, usagePct, severity) {
+function updateContextUsage(tokens, usagePct, severity, ctx) {
     let el = document.getElementById('context-usage');
     if (!el) {
         el = document.createElement('div');
         el.id = 'context-usage';
-        document.querySelector('.sidebar-footer').appendChild(el);
+        const footer = document.querySelector('.sidebar-footer');
+        if (footer) footer.appendChild(el);
     }
     const color = severity === 'critical' ? 'var(--red)' : severity === 'warning' ? 'var(--yellow)' : 'var(--text-muted)';
     el.innerHTML = `<span style="color:${color}">${usagePct}% context used</span> (${tokens.toLocaleString()} tokens)`;
     el.style.fontSize = '11px';
     el.style.marginTop = '4px';
+
+    // Only the full `context` event carries budget state (the finish-path call
+    // below passes no ctx). Drive the budget line from it so a window-only
+    // update never toggles it, and hide it when budgeting is off.
+    if (ctx == null) return;
+    const budget = document.getElementById('budget-usage');
+    if (ctx.budget_enabled) {
+        renderBudgetLine(ctx);
+    } else if (budget) {
+        budget.remove();
+    }
+}
+
+function renderBudgetLine(ctx) {
+    let el = document.getElementById('budget-usage');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'budget-usage';
+        const footer = document.querySelector('.sidebar-footer');
+        if (footer) footer.appendChild(el);
+    }
+    const pct = typeof ctx.budget_pct === 'number' ? ctx.budget_pct : 0;
+    const threshold = ctx.budget_threshold_pct || 80;
+    const maxTokens = ctx.budget_max_tokens;
+    // At/over the rollover threshold the turn is about to (or just did) roll, so
+    // flag it; below that it is comfortable.
+    const color = pct >= threshold ? 'var(--yellow)' : 'var(--text-muted)';
+    const ofTokens = maxTokens ? ` of ${maxTokens.toLocaleString()} tokens` : '';
+    el.innerHTML = `<span style="color:${color}">Session budget${ofTokens}: ${pct}%</span> · resets at ${threshold}%`;
+    el.style.fontSize = '11px';
+    el.style.marginTop = '2px';
 }
 
 function updateContextUsageFromPrompt(promptTokens) {

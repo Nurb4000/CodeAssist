@@ -176,6 +176,36 @@ keep_recent = 20        # Number of recent messages to preserve unchanged
 tool_result_max_tokens = 4000  # Per-tool-result cap in the summarizer input
 ```
 
+### Session budget and rollover
+
+Beyond the per-request context window, CodeAssist can track cumulative token
+usage for a session and roll it over instead of stopping hard:
+
+- **Budget tracking**: when `enabled` with `max_tokens_per_session > 0`, tokens
+  are counted across the whole session (the counter resets per session, not per
+  request).
+- **Rollover at the threshold**: at `warning_threshold_pct` (default **80%**) of
+  the budget, the current turn summarizes what happened into a structured
+  checkpoint, truncates the session to that checkpoint plus the most recent
+  turns, and resets the counter -- so work continues on fresh headroom rather
+  than crawling to the wall.
+- **Hard stop at 100%**: if the budget is reached another way (e.g. a single
+  oversized step overshoots), the turn stops with a "Budget exceeded" message,
+  unless `hard_limit = false`, which only warns and lets the turn finish.
+
+The rollover threshold is *separate* from the per-request compaction trigger
+above (`threshold_pct`, default 75%): compaction keeps one request within the
+context window; the budget rollover resets the cumulative session counter.
+
+Configuration in `config.toml`:
+```toml
+[cost]
+enabled = true
+max_tokens_per_session = 200000   # Tokens per session before rollover (0 = unlimited)
+warning_threshold_pct = 80        # Roll the summary over at this % of the budget
+hard_limit = true                 # Stop the turn (true) or only warn (false) at 100%
+```
+
 ### Tuning & reliability
 
 CodeAssist includes several quality-of-life improvements:
@@ -196,7 +226,7 @@ CodeAssist includes several quality-of-life improvements:
 - **Streaming timeout**: LLM streams time out after 120 seconds with a graceful error
 - **Max-iteration limit**: When the agent reaches the maximum iteration count, it notifies the user rather than silently stopping
 - **Confirmation prompts**: Destructive operations (file writes, shell commands) require user confirmation unless workspace is trusted
-- **Cost tracking**: Real-time token usage tracking with configurable budget limits (tokens and cost per session)
+- **Cost tracking**: Real-time token usage tracking with configurable per-session budget limits (tokens and cost); at the rollover threshold the session summarizes and resets instead of stopping (§Session budget and rollover)
 - **Question flow**: The agent can pause and ask the user questions mid-task via the `question` tool
 
 ## Usage

@@ -405,3 +405,46 @@ class TestRolloverHookInLoop:
                     async for _ in agent.run("second"):
                         pass
                 assert rolls.await_count == 2
+
+    async def test_context_event_carries_budget_state(self):
+        """The per-step `context` event carries budget state so the chat gauge can
+        show reset-point progress (§13 #16b), independent of the window gauge."""
+        from codeassist.config import Config
+        cfg = Config()
+        cfg.cost.enabled = True
+        cfg.cost.max_tokens_per_session = 1000
+        cfg.compaction.enabled = True
+        cfg.compaction.tail_turns = 2
+        cfg.llm.model = "gpt-4o"
+        cfg.llm.context_window = 128000
+        await init_db()
+        session = await Session.create(name="budget-event")
+        for i in range(4):
+            await session.add_message("user", f"user {i}")
+            await session.add_message("assistant", f"assistant {i}")
+        with patch("codeassist.agent.LLMClient"):
+            agent = Agent(cfg, session, MagicMock())
+            configure_tools(agent)
+        # 12% of the budget used -- below the rollover threshold, so no rollover.
+        agent.cost_tracker.record_usage("gpt-4o", 120, 0)
+
+        async def one_stream(messages, openai_tools=None):
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = one_stream
+        agent.config.agent.max_iterations = 1
+
+        events = []
+        with patch("codeassist.agent.effective_context_window", return_value=128000):
+            async for ev in agent.run("hi"):
+                events.append(ev)
+
+        context_events = [e for e in events if e.type == "context"]
+        assert context_events, "the loop emits a context event each step"
+        # The first context event fires before the step records usage, so it sees
+        # exactly the 120 tokens recorded above.
+        budget = context_events[0].data
+        assert budget["budget_enabled"] is True
+        assert budget["budget_max_tokens"] == 1000
+        assert budget["budget_threshold_pct"] == 80.0
+        assert budget["budget_pct"] == pytest.approx(12.0)

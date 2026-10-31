@@ -95,6 +95,24 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
      "label": "Tool output tokens in context", "description": "Max tokens of each tool result kept in the conversation. Lower keeps the model focused (less wandering); raise for large outputs you need to see fully.",
      "group": "Tools", "restart_required": False},
 
+    # --- Cost / session budget ---
+    # Governs the §15.100 budget rollover: at warning_threshold_pct of
+    # max_tokens_per_session the turn rolls into a summarized checkpoint with a
+    # reset counter instead of hard-stopping at 100%. max_tokens_per_session = 0
+    # means unlimited (no rollover).
+    {"key": "cost.enabled", "section": "cost", "field": "enabled", "type": "bool",
+     "label": "Session budget enabled",
+     "description": "Track tokens per session and roll the summary over when the budget is reached.",
+     "group": "Cost", "restart_required": False},
+    {"key": "cost.max_tokens_per_session", "section": "cost", "field": "max_tokens_per_session", "type": "int",
+     "label": "Session token budget (reset point)",
+     "description": "Tokens used per session before the summary rolls over and the counter resets (0 = unlimited).",
+     "group": "Cost", "min": 0, "restart_required": False},
+    {"key": "cost.warning_threshold_pct", "section": "cost", "field": "warning_threshold_pct", "type": "float",
+     "label": "Rollover threshold (%)",
+     "description": "Usage of the session budget at which the turn rolls into a summarized checkpoint and continues instead of stopping (default 80%).",
+     "group": "Cost", "min": 0, "max": 100, "restart_required": False},
+
     # --- Features (subsystems init at boot; toggles need a restart) ---
     {"key": "mcp.enabled", "section": "mcp", "field": "enabled", "type": "bool",
      "label": "MCP servers", "description": "Restart required.",
