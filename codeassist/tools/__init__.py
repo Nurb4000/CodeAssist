@@ -1,3 +1,5 @@
+import contextlib
+import contextvars
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -5,6 +7,41 @@ from datetime import UTC
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Attachments of the message the *current turn* is processing. Bound as a
+# task-local ContextVar around tool execution (see Agent._run Phase 2) so tools
+# can inspect the images/text the user attached -- which live in the message
+# store, never on disk. Tool instances live in a process-global registry and
+# turns on different connections run concurrently, so a plain attribute would
+# race; the ContextVar gives each turn its own copy, exactly like the
+# session/todo binding in todo.py.
+_current_attachments: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "tool_current_attachments", default=None
+)
+
+
+def current_attachments() -> list[dict]:
+    """Attachments bound to the turn currently executing tools (``[]`` if none)."""
+    return _current_attachments.get() or []
+
+
+def bind_attachments(attachments: list[dict] | None):
+    """Return a context manager binding ``attachments`` for tool execution.
+
+    Used by the agent around the parallel tool-execution gather so every tool in
+    the turn -- including ones running concurrently -- sees the same attachments,
+    and the binding is always cleared afterwards (even on cancel/exception).
+    """
+    token = _current_attachments.set(attachments or [])
+
+    @contextlib.contextmanager
+    def _bound():
+        try:
+            yield
+        finally:
+            _current_attachments.reset(token)
+
+    return _bound()
 
 
 @dataclass
@@ -99,6 +136,17 @@ class Tool(ABC):
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResult:
         ...
+
+    def attachments(self) -> list[dict]:
+        """Attachments of the message this turn is processing.
+
+        Attachments (images, text files) are stored in the message store and
+        inlined into the model's context -- they are not written to disk. Tools
+        that need to operate on them (e.g. ``image_analyze``) read these here
+        instead of looking for a ``file_path``. Returns ``[]`` when no turn is
+        bound (e.g. outside the agent loop).
+        """
+        return current_attachments()
 
     def schema(self) -> dict:
         return {

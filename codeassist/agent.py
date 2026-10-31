@@ -38,7 +38,7 @@ from .tokens import (
     truncate_tool_result,
 )
 from .tool_output_store import get_tool_output_store
-from .tools import ToolRegistry
+from .tools import ToolRegistry, bind_attachments
 
 log = logging.getLogger(__name__)
 
@@ -1341,6 +1341,11 @@ class Agent:
             # connection's.
             if session_tool is not None and hasattr(session_tool, "active"):
                 scope.enter_context(session_tool.active(self.session.id))
+            # Bind this turn's attachments so tools can operate on images/text the
+            # user attached (they live in the message store, not on disk). A
+            # ContextVar, like the session/todo binding above, because tool
+            # instances are process-global and concurrent turns must not share it.
+            scope.enter_context(bind_attachments(attachments))
             if not todo_ready:
                 async for event in self._run(user_message, attachments):
                     yield event
