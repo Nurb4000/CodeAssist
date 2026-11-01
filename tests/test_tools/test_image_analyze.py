@@ -155,6 +155,45 @@ class TestImageAnalyzeAttachments:
         assert img["image_url"]["url"].startswith("data:image/png;base64,")
         assert img["image_url"]["url"].endswith(raw)
 
+    @pytest.mark.asyncio
+    async def test_empty_api_key_still_constructs_client(self, monkeypatch):
+        """No-auth local backends (e.g. llama.cpp) ship an empty api_key; the SDK
+        rejects a bare empty key at construction. This regression pins the
+        fallback sentinel so image analysis works on unauthenticated servers."""
+        seen = {}
+
+        class _Message:
+            content = "A red car."
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+
+        class _Completions:
+            async def create(self, **kwargs):
+                return _Response()
+
+        class _Client:
+            def __init__(self, *args, **kwargs):
+                seen["api_key"] = kwargs.get("api_key")
+                self.chat = types.SimpleNamespace(completions=_Completions())
+
+        monkeypatch.setattr("openai.AsyncOpenAI", lambda *a, **k: _Client(**k))
+        monkeypatch.setattr(
+            "codeassist.tools.image_analyze.live_config",
+            lambda: types.SimpleNamespace(
+                llm=types.SimpleNamespace(api_key="", base_url="http://localhost:8080/v1", model="llama"),
+            ),
+        )
+
+        with bind_attachments([_image_attachment()]):
+            result = await ImageAnalyzeTool().execute()
+
+        assert not result.error, result.output
+        assert seen["api_key"], "an empty api_key must be normalized to a non-empty sentinel"
+
 
 class TestImageBase64Encoding:
     """Streaming the base64 encode must produce exactly what encoding the whole

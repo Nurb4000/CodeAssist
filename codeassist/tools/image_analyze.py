@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import os
 from pathlib import Path
 
 from . import Tool, ToolResult, live_config
@@ -75,8 +76,13 @@ class ImageAnalyzeTool(Tool):
                 import openai
 
                 config = live_config()
+                # Mirror LLMClient: the SDK requires a non-empty key even for
+                # no-auth backends (e.g. a local llama.cpp), so fall back to the
+                # env var then a placeholder sentinel instead of raising
+                # "Missing credentials" on an empty api_key.
+                api_key = config.llm.api_key or os.environ.get("OPENAI_API_KEY") or "sk-no-auth"
                 client = openai.AsyncOpenAI(
-                    api_key=config.llm.api_key,
+                    api_key=api_key,
                     base_url=config.llm.base_url or None,
                 )
 
