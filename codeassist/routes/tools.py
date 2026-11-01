@@ -173,7 +173,7 @@ async def set_tool_trust(tool_name: str, body: dict):
     if not custom_tool:
         return JSONResponse(status_code=404, content={"error": "Custom tool not found"})
 
-    trusted = body.get("trusted", False)
+    trusted = bool(body.get("trusted", False))
     custom_tool.trusted = trusted
 
     return {"message": f"Tool '{tool_name}' trust level set to {trusted}", "trusted": trusted}

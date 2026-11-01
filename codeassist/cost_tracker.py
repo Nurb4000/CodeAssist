@@ -127,6 +127,15 @@ class CostTracker:
         self._total_cost += cost
         return record
 
+    def _total_tokens(self) -> int:
+        """Combined prompt + completion tokens.
+
+        Single source of truth for the running total, so callers that need the
+        figure (``budget_percent``, ``check_budget``'s message, ``get_summary``)
+        all read it from one expression instead of recomputing it independently.
+        """
+        return self._total_prompt_tokens + self._total_completion_tokens
+
     def budget_percent(self) -> float | None:
         """Return token usage as a percentage of ``max_tokens_per_session``.
 
@@ -135,8 +144,7 @@ class CostTracker:
         """
         if not self.config.enabled or self.config.max_tokens_per_session <= 0:
             return None
-        total_tokens = self._total_prompt_tokens + self._total_completion_tokens
-        return (total_tokens / self.config.max_tokens_per_session) * 100
+        return (self._total_tokens() / self.config.max_tokens_per_session) * 100
 
     def check_budget(self) -> tuple[bool, str]:
         """Check if budget is exceeded. Returns (ok, message).
@@ -149,7 +157,7 @@ class CostTracker:
         if not self.config.enabled:
             return True, ""
 
-        total_tokens = self._total_prompt_tokens + self._total_completion_tokens
+        total_tokens = self._total_tokens()
         exceeded: str | None = None
 
         # Check token limits
@@ -189,7 +197,7 @@ class CostTracker:
         return {
             "total_prompt_tokens": self._total_prompt_tokens,
             "total_completion_tokens": self._total_completion_tokens,
-            "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
+            "total_tokens": self._total_tokens(),
             "total_cost_usd": round(self._total_cost, 6),
             "num_completions": self._num_completions,
             "budget_enabled": self.config.enabled,

@@ -122,7 +122,7 @@ async def export_session(body: dict):
     """Export a session's data. Body must contain 'session_id' and optional 'redact' (boolean)."""
     from codeassist.session_manager import SessionManager
     session_id = body.get("session_id")
-    redact = body.get("redact", False)
+    redact = bool(body.get("redact", False))
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
     data = await SessionManager.export_session(session_id, redact)

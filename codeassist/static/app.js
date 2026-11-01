@@ -2619,14 +2619,21 @@ sendBtn.addEventListener('click', sendMessage);
 
 attachBtn.addEventListener('click', () => fileInputEl.click());
 fileInputEl.addEventListener('change', async () => {
-    for (const file of Array.from(fileInputEl.files)) {
-        if (file.type.startsWith('image/')) {
-            await addPendingImage(file);
-        } else if (isTextFile(file)) {
-            await addPendingFile(file);
-        } else {
-            showError(`Unsupported file type '${file.type || 'unknown'}' for '${file.name}'. Only images and text files are supported.`);
+    try {
+        for (const file of Array.from(fileInputEl.files)) {
+            if (file.type.startsWith('image/')) {
+                await addPendingImage(file);
+            } else if (isTextFile(file)) {
+                await addPendingFile(file);
+            } else {
+                showError(`Unsupported file type '${file.type || 'unknown'}' for '${file.name}'. Only images and text files are supported.`);
+            }
         }
+    } catch (err) {
+        // A FileReader rejection (read error, cancelled) used to surface as an
+        // unhandled promise rejection and leave partial pending state; report
+        // it and stop so the UI stays consistent.
+        showError(`Failed to read attached file: ${err?.message || err}`);
     }
     fileInputEl.value = '';
 });
@@ -2635,7 +2642,11 @@ inputEl.addEventListener('paste', (e) => {
     for (const item of items) {
         if (item.type.startsWith('image/')) {
             const file = item.getAsFile();
-            if (file) addPendingImage(file);
+            if (file) {
+                addPendingImage(file).catch((err) => {
+                    showError(`Failed to read pasted image: ${err?.message || err}`);
+                });
+            }
         }
     }
 });

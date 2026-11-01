@@ -53,7 +53,9 @@ class GrepTool(Tool):
         cmd = ["rg", "-n", "--max-count", "1000"]
         if context > 0:
             cmd.extend(["-C", str(context)])
-        cmd.extend([pattern, str(directory)])
+        # `--` guards against a pattern that begins with `-` (e.g. "-foo") being
+        # parsed as an rg flag rather than a literal search pattern.
+        cmd.extend(["--", pattern, str(directory)])
         if include:
             cmd.extend(["-g", include])
         if exclude:

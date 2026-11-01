@@ -130,7 +130,7 @@ async function loadDashboard() {
             } else {
                 list.innerHTML = '<ul class="high-usage-items">' + data.entries.map(e =>
                     `<li>
-                        <span class="type-badge ${e.entry_type}">${e.entry_type}</span>
+                        <span class="type-badge ${e.entry_type}">${escapeHtml(e.entry_type)}</span>
                         <span class="high-usage-uses">${e.usage_count} uses</span>
                         <span class="high-usage-content">${escapeHtml(e.content || '').substring(0, 80)}</span>
                     </li>`).join('') + '</ul>';
@@ -182,10 +182,10 @@ async function loadEntries() {
             return `
             <tr>
                 <td><input type="checkbox" class="entry-checkbox" data-id="${entry.id}"></td>
-                <td><span class="type-badge ${entry.entry_type}">${entry.entry_type}</span></td>
+                <td><span class="type-badge ${entry.entry_type}">${escapeHtml(entry.entry_type)}</span></td>
                 <td><span class="status-badge status-${status}">${status}</span></td>
                 <td class="entry-preview">${escapeHtml(entry.content || '').substring(0, 100)}</td>
-                <td>${entry.scope || '-'}</td>
+                <td>${entry.scope ? escapeHtml(entry.scope) : '-'}</td>
                 <td>${(entry.confidence || 0).toFixed(2)}</td>
                 <td>${formatDate(entry.created_at)}</td>
                 <td>
