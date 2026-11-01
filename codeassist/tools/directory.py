@@ -52,6 +52,13 @@ class DirectoryTool(Tool):
         "required": [],
     }
 
+    # Hard ceiling on entries collected during a (possibly unlimited,
+    # max_depth=0) recursive listing. Prevents a pathological tree from
+    # materializing the entire filesystem in memory (re-scan M5). Set high
+    # enough that ordinary listings are never affected; hitting it returns a
+    # truncated list with a notice rather than OOMing.
+    MAX_ENTRIES = 100_000
+
     def __init__(self):
         self.workspace = Path.cwd()
 
@@ -62,7 +69,9 @@ class DirectoryTool(Tool):
             dir_path = Path(path or str(self.workspace)).resolve()
             validate_directory(dir_path, self.workspace)
 
-            entries = await self._list_directory(dir_path, recursive, max_depth, include_hidden, sort_by)
+            counter = [0]
+            entries = await self._list_directory(dir_path, recursive, max_depth, include_hidden, sort_by, counter)
+            capped = counter[0] >= self.MAX_ENTRIES
 
             if limit and len(entries) > limit:
                 entries = entries[:limit]
@@ -71,6 +80,11 @@ class DirectoryTool(Tool):
                 return ToolResult(output=f"Directory is empty: {dir_path}")
 
             output = self._format_entries(entries, dir_path)
+            if capped:
+                output += (
+                    f"\n\n[truncated: listing stopped after {self.MAX_ENTRIES} entries; "
+                    f"use --max-depth or --limit to narrow it]"
+                )
             return ToolResult(output=output)
 
         except WorkspaceViolationError as e:
@@ -80,15 +94,26 @@ class DirectoryTool(Tool):
             return ToolResult(output=f"Directory listing error: {e}", error=True)
 
     async def _list_directory(self, dir_path: Path, recursive: bool, max_depth: int,
-                             include_hidden: bool, sort_by: str) -> list[dict]:
-        """List directory contents asynchronously."""
+                             include_hidden: bool, sort_by: str,
+                             counter: list[int] | None = None) -> list[dict]:
+        """List directory contents asynchronously.
+
+        ``counter`` is a shared mutable holding the running entry count across
+        recursion levels; once it reaches ``MAX_ENTRIES`` traversal stops, so an
+        unlimited (max_depth=0) recursive listing cannot exhaust memory
+        (re-scan M5).
+        """
+        if counter is None:
+            counter = [0]
         entries = []
 
         try:
             for entry in await asyncio.to_thread(os.scandir, str(dir_path)):
+                if counter[0] >= self.MAX_ENTRIES:
+                    break
                 try:
                     stat = await asyncio.to_thread(entry.stat)
-                    
+
                     # Skip hidden files unless requested
                     if not include_hidden and entry.name.startswith('.'):
                         continue
@@ -103,6 +128,7 @@ class DirectoryTool(Tool):
                     }
 
                     entries.append(entry_data)
+                    counter[0] += 1
 
                     # Recurse into subdirectories if requested. `max_depth` is
                     # the total number of levels to list (0 = unlimited), so the
@@ -112,9 +138,12 @@ class DirectoryTool(Tool):
                     if recursive and entry.is_dir() and (max_depth == 0 or max_depth > 1):
                         new_max_depth = max_depth - 1 if max_depth > 0 else 0
                         sub_entries = await self._list_directory(
-                            Path(entry.path), True, new_max_depth, include_hidden, sort_by
+                            Path(entry.path), True, new_max_depth, include_hidden, sort_by, counter
                         )
                         entries.extend(sub_entries)
+                        counter[0] += len(sub_entries)
+                        if counter[0] >= self.MAX_ENTRIES:
+                            break
 
                 except (PermissionError, OSError):
                     continue

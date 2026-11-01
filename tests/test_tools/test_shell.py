@@ -79,3 +79,56 @@ async def test_completed_shell_still_returns_output(tmp_path):
 
     assert not result.error
     assert "hello" in result.output
+
+
+class _FakeStream:
+    """Async pipe stand-in: yields fixed chunks, then EOF."""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self._i = 0
+
+    async def read(self, n):
+        if self._i >= len(self._chunks):
+            return b""
+        chunk = self._chunks[self._i]
+        self._i += 1
+        return chunk
+
+
+class TestMemoryBudget:
+    @pytest.mark.asyncio
+    async def test_under_budget_returns_all_data(self, tmp_path):
+        tool = _tool(tmp_path)
+        tool.MAX_OUTPUT_BUFFER_BYTES = 10_000_000
+        data, truncated = await tool._read_budgeted(
+            _FakeStream([b"x" * 1000, b"y" * 1000])
+        )
+        assert data == b"x" * 1000 + b"y" * 1000
+        assert not truncated
+
+    @pytest.mark.asyncio
+    async def test_over_budget_truncates_and_keeps_near_ceiling(self, tmp_path):
+        tool = _tool(tmp_path)
+        tool.MAX_OUTPUT_BUFFER_BYTES = 10
+        data, truncated = await tool._read_budgeted(_FakeStream([b"A" * 100]))
+        assert truncated
+        assert len(data) <= 10
+
+    @pytest.mark.asyncio
+    async def test_runaway_command_is_truncated_not_buffered_whole(self, tmp_path):
+        # `yes` streams forever; with a tiny budget it must be cut off and the
+        # process killed, not buffered until OOM.
+        tool = _tool(tmp_path)
+        tool.MAX_OUTPUT_BUFFER_BYTES = 4096
+        result = await tool.execute(command="yes", timeout=10)
+        assert result.error
+        assert "truncated" in result.output.lower()
+
+    @pytest.mark.asyncio
+    async def test_normal_command_still_reports_exit_code(self, tmp_path):
+        tool = _tool(tmp_path)
+        tool.MAX_OUTPUT_BUFFER_BYTES = 4096
+        result = await tool.execute(command="echo ok; exit 3", timeout=10)
+        assert "Exit code: 3" in result.output
+        assert result.error

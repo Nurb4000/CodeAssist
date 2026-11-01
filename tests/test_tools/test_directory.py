@@ -156,3 +156,23 @@ class TestDirectoryToolMaxDepth:
 
         assert [e["name"] for e in entries] == ["a"]
 
+
+class TestDirectoryToolCap:
+    """An unlimited recursive listing must not materialize the whole tree
+    (re-scan M5): hitting MAX_ENTRIES stops traversal and reports a notice."""
+
+    @pytest.mark.asyncio
+    async def test_cap_truncates_listing_with_notice(self, tmp_path, monkeypatch):
+        import codeassist.tools.directory as dir_mod
+
+        monkeypatch.setattr(dir_mod.DirectoryTool, "MAX_ENTRIES", 5)
+        for i in range(8):
+            (tmp_path / f"f{i:02d}.txt").write_text("x")
+
+        tool = DirectoryTool()
+        tool.workspace = tmp_path
+        result = await tool.execute(path=str(tmp_path))
+
+        assert "truncated" in result.output.lower()
+        assert "after 5 entries" in result.output
+

@@ -9,6 +9,12 @@ from .security import WorkspaceViolationError, validate_directory
 
 log = logging.getLogger(__name__)
 
+# Hard cap on files the Python regex fallback will traverse before bailing. The
+# ripgrep path bounds results with --max-count; the pure-Python fallback had no
+# such ceiling, so searching a large tree (e.g. one with node_modules/) with few
+# matches read every file unbounded -- a memory/IO DoS (re-scan M5).
+MAX_FILES_SCANNED = 10_000
+
 
 class GrepTool(Tool):
     name = "grep"
@@ -84,8 +90,22 @@ class GrepTool(Tool):
 
         matches = []
         search_pattern = include or "*.*"
+        scanned = 0
 
         for path_obj in directory.rglob(search_pattern):
+            scanned += 1
+            if scanned > MAX_FILES_SCANNED:
+                # Stop traversing before reading the whole tree; surface a clear
+                # notice rather than silently returning a partial match set.
+                return ToolResult(
+                    output=(
+                        f"Search stopped after scanning {MAX_FILES_SCANNED} files "
+                        f"({len(matches)} match(es) found so far). Narrow your "
+                        f"--include/--exclude, raise --max-depth, or use ripgrep "
+                        f"for larger trees."
+                    ),
+                    error=True,
+                )
             if not path_obj.is_file():
                 continue
             if exclude:

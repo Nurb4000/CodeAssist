@@ -52,3 +52,27 @@ class TestRipgrepPatternGuard:
 
         assert "hello" in captured["cmd"]
         assert "--" in captured["cmd"]
+
+
+class TestPythonGrepScanCap:
+    """The pure-Python fallback must not traverse an unbounded tree (re-scan M5)."""
+
+    def test_under_cap_finds_matches(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hello world")
+        (tmp_path / "b.txt").write_text("hello again")
+        tool = GrepTool()
+        result = tool._python_grep("hello", tmp_path, None, None, 0)
+        assert not result.error
+        assert "hello" in result.output
+
+    def test_over_cap_stops_with_notice(self, monkeypatch, tmp_path):
+        import codeassist.tools.grep as grep_mod
+
+        monkeypatch.setattr(grep_mod, "MAX_FILES_SCANNED", 5)
+        for i in range(8):
+            (tmp_path / f"f{i}.txt").write_text("no match anywhere")
+
+        tool = GrepTool()
+        result = tool._python_grep("nomatch", tmp_path, None, None, 0)
+        assert result.error
+        assert "stopped after scanning 5 files" in result.output
