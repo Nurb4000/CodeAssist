@@ -34,17 +34,27 @@ def detect_managers(workspace: Path) -> list[str]:
 
 
 def get_manager_commands(manager: str) -> dict:
-    """Get install/update/add/remove commands for a manager."""
+    """Get install/update/add/remove commands for a manager as argv lists.
+
+    Commands are stored as argument *lists*, never shell strings, and any
+    value supplied by the caller (a package name or requirement file) is
+    appended as its own argv element at execution time. Combined with
+    ``create_subprocess_exec`` this means no shell is ever involved, so a
+    package name such as ``"foo && rm -rf ."`` is installed as a single literal
+    argument instead of being interpreted by the shell -- closing the
+    command-injection hole that the old ``.format()`` + ``create_subprocess_shell``
+    approach had.
+    """
     commands = {
-        "pip": {"install": "pip install -r {file}", "add": "pip install {package}", "list": "pip list --format=columns"},
-        "poetry": {"install": "poetry install", "add": "poetry add {package}", "remove": "poetry remove {package}", "list": "poetry show"},
-        "npm": {"install": "npm install", "add": "npm install {package}", "remove": "npm uninstall {package}", "list": "npm ls --depth=0"},
-        "yarn": {"install": "yarn install", "add": "yarn add {package}", "remove": "yarn remove {package}", "list": "yarn list --depth=0"},
-        "pnpm": {"install": "pnpm install", "add": "pnpm add {package}", "remove": "pnpm remove {package}", "list": "pnpm list --depth=0"},
-        "go_modules": {"install": "go mod download", "add": "go get {package}", "list": "go list -m all"},
-        "cargo": {"install": "cargo build", "add": "cargo add {package}", "remove": "cargo rm {package}", "list": "cargo tree --depth=1"},
-        "bundler": {"install": "bundle install", "add": "bundle add {package}", "list": "bundle list"},
-        "composer": {"install": "composer install", "add": "composer require {package}", "list": "composer show"},
+        "pip": {"install": ["pip", "install"], "add": ["pip", "install"], "list": ["pip", "list", "--format=columns"]},
+        "poetry": {"install": ["poetry", "install"], "add": ["poetry", "add"], "remove": ["poetry", "remove"], "list": ["poetry", "show"]},
+        "npm": {"install": ["npm", "install"], "add": ["npm", "install"], "remove": ["npm", "uninstall"], "list": ["npm", "ls", "--depth=0"]},
+        "yarn": {"install": ["yarn", "install"], "add": ["yarn", "add"], "remove": ["yarn", "remove"], "list": ["yarn", "list", "--depth=0"]},
+        "pnpm": {"install": ["pnpm", "install"], "add": ["pnpm", "add"], "remove": ["pnpm", "remove"], "list": ["pnpm", "list", "--depth=0"]},
+        "go_modules": {"install": ["go", "mod", "download"], "add": ["go", "get"], "list": ["go", "list", "-m", "all"]},
+        "cargo": {"install": ["cargo", "build"], "add": ["cargo", "add"], "remove": ["cargo", "rm"], "list": ["cargo", "tree", "--depth=1"]},
+        "bundler": {"install": ["bundle", "install"], "add": ["bundle", "add"], "list": ["bundle", "list"]},
+        "composer": {"install": ["composer", "install"], "add": ["composer", "require"], "list": ["composer", "show"]},
     }
     return commands.get(manager, {})
 
@@ -109,35 +119,37 @@ class PackageManagerTool(Tool):
             if not cmds:
                 return ToolResult(output=f"Unknown package manager: {manager}", error=True)
 
-            if action == "list":
-                cmd = cmds.get("list")
-                if not cmd:
-                    return ToolResult(output=f"List not supported for {manager}")
-            elif action == "install":
-                cmd = cmds.get("install")
-                if not cmd:
-                    return ToolResult(output=f"Install not supported for {manager}")
-                if manager == "pip":
-                    req_file = "requirements.txt"
-                    for f in ["requirements.txt", "requirements.in"]:
-                        if (workspace / f).exists():
-                            req_file = f
-                            break
-                    cmd = cmd.format(file=req_file)
-            elif action == "add":
-                if not package:
-                    return ToolResult(output="Error: package name required for add action", error=True)
-                cmd = cmds.get("add", "").format(package=package)
-            elif action == "remove":
-                if not package:
-                    return ToolResult(output="Error: package name required for remove action", error=True)
-                cmd = cmds.get("remove", "").format(package=package)
-            else:
+            base = cmds.get(action)
+            if action == "list" and not base:
+                return ToolResult(output=f"List not supported for {manager}")
+            if action == "install" and not base:
+                return ToolResult(output=f"Install not supported for {manager}")
+            if not base:
+                # Unknown action (a value outside the schema enum).
                 return ToolResult(output=f"Error: unknown action '{action}'", error=True)
 
-            log.info("Running: %s (manager=%s)", cmd, manager)
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            # Build the argv. User/runtime-supplied values are appended as their
+            # own elements so create_subprocess_exec never interprets them as
+            # shell syntax -- this is the command-injection fix.
+            argv = list(base)
+            if action == "install" and manager == "pip":
+                req_file = "requirements.txt"
+                for f in ["requirements.txt", "requirements.in"]:
+                    if (workspace / f).exists():
+                        req_file = f
+                        break
+                argv += ["-r", req_file]
+            elif action in ("add", "remove"):
+                if not package:
+                    return ToolResult(
+                        output=f"Error: package name required for {action} action", error=True
+                    )
+                argv.append(package)
+
+            log.info("Running: %s (manager=%s)", argv, manager)
+            proc = await asyncio.create_subprocess_exec(
+                argv[0],
+                *argv[1:],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(workspace),
