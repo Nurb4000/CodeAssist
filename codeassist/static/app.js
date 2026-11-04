@@ -323,7 +323,10 @@ function readFileAsDataURL(file) {
 const TEXT_FILE_EXTS = new Set(['txt','md','markdown','py','js','jsx','ts','tsx','json','toml','yaml','yml','csv','html','css','scss','sql','sh','bash','go','rs','java','c','cpp','h','hpp','rb','php','lua','xml']);
 
 function isTextFile(file) {
-    return file.type.startsWith('text/') || (file.name.split('.').pop() || '').toLowerCase() in TEXT_FILE_EXTS;
+    // NOTE: use Set.has(), not `in` -- the `in` operator checks for own
+    // properties and never matches a Set member, so every non-`text/*` file
+    // (e.g. application/json) was being rejected as "unsupported".
+    return file.type.startsWith('text/') || TEXT_FILE_EXTS.has((file.name.split('.').pop() || '').toLowerCase());
 }
 
 function readFileAsText(file) {
