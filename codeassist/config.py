@@ -29,6 +29,9 @@ class LLMConfig:
     presence_penalty: float = 0.0
     embedding_model: str = ""
     vision: bool = False
+    # Audio input capability override. Mirrors `vision`: a manual override always
+    # wins; otherwise it is auto-detected by probing the backend's /v1/models.
+    audio: bool = False
     # Seconds without LLM output before the request/stream is declared timed
     # out. Generous for slower local hardware (900s = 7.5x the historical 120s).
     timeout: int = 900
@@ -265,6 +268,7 @@ class Config:
                 # [llm.parameters], README.md under [llm]); accept either.
                 embedding_model=llm_raw.get("embedding_model") or params.get("embedding_model", ""),
                 vision=llm_raw.get("vision", False),
+                audio=llm_raw.get("audio", False),
                 timeout=llm_raw.get("timeout", 900),
             ),
             server=ServerConfig(

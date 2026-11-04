@@ -21,6 +21,12 @@ import httpx
 log = logging.getLogger(__name__)
 
 VISION_KEYS = ("vision", "multimodal", "image")
+# Audio models are always mtmd/multimodal in llama.cpp, but an image-only model
+# is also multimodal -- so "multimodal" alone is a proxy, not definitive. The
+# explicit "audio" flag (llama.cpp's has_inp_audio) or an "audio" capability tag
+# is the real signal; "multimodal" is used only when no explicit audio signal
+# exists.
+AUDIO_KEYS = ("audio", "multimodal")
 
 CACHE_TTL = 60.0
 # Short window used when a backend *couldn't* be probed (base_url not yet
@@ -31,7 +37,7 @@ PROBE_TIMEOUT = 3.0
 
 
 def _default_info() -> dict:
-    return {"model": None, "vision": False, "context_window": None, "source": None}
+    return {"model": None, "vision": False, "audio": False, "context_window": None, "source": None}
 
 
 # Hostnames that always mean "this machine / my network".
@@ -137,6 +143,40 @@ def _parse_vision(model_data: dict) -> bool:
     return False
 
 
+def _parse_audio(model_data: dict) -> bool:
+    """Return True if the model advertises audio input support.
+
+    llama.cpp exposes an explicit "audio" flag (has_inp_audio) and a
+    "multimodal"/"audio" capability tag; OpenAI-style backends may put these
+    under capabilities/meta. The explicit "audio" field/tag is the definitive
+    signal; "multimodal" alone is a proxy -- an image-only model is also
+    multimodal, so it counts only when no explicit audio signal exists.
+    """
+
+    def _has_audio(src) -> bool:
+        if isinstance(src, dict):
+            if src.get("audio"):  # explicit boolean flag wins
+                return True
+            if any(str(v).lower() == "audio" for v in src.values()):
+                return True
+        if isinstance(src, list):
+            lowered = [str(c).lower() for c in src]
+            return "audio" in lowered
+        return False
+
+    for src in (model_data.get("capabilities"), model_data.get("meta"), model_data):
+        if _has_audio(src):
+            return True
+    # Proxy: llama.cpp audio models are all mtmd/multimodal; treat "multimodal"
+    # as a proxy when no explicit audio signal exists.
+    for src in (model_data.get("capabilities"), model_data.get("meta"), model_data):
+        if isinstance(src, dict) and src.get("multimodal"):
+            return True
+        if isinstance(src, list) and any(str(c).lower() == "multimodal" for c in src):
+            return True
+    return False
+
+
 def _parse_ctx_len(model_data: dict, top_level: dict) -> int | None:
     """Best-effort context window from model metadata or top-level response.
 
@@ -228,6 +268,7 @@ async def _probe_backend(cfg) -> dict | None:
         return None
     # Vision: any model with vision → whole endpoint is vision-capable.
     result["vision"] = any(_parse_vision(m) for m in candidate_models)
+    result["audio"] = any(_parse_audio(m) for m in candidate_models)
     # Model name: prefer the OpenAI-style ``data`` id, fall back to the native
     # ``models`` name/model field; use it only when a single model is served.
     primary = data_models or native_models
@@ -265,6 +306,24 @@ async def model_vision_capable(cfg) -> bool:
     if _cache_key(cfg) != _cache.get("base_url") or now > _cache["expires"]:
         await _refresh(cfg)
     return _cache["info"]["vision"]
+
+
+async def model_audio_capable(cfg) -> bool:
+    """Whether the configured model can accept audio input (override OR auto-detect).
+
+    Mirrors ``model_vision_capable``. The manual override always wins; otherwise
+    the backend is probed once per minute for an explicit "audio" flag or a
+    "multimodal" capability tag (llama.cpp audio models are all mtmd/multimodal,
+    but so are image-only ones -- hence the proxy). Unreachable/unknown backends
+    fail closed (no audio) and are retried on the short window rather than cached
+    for a full minute.
+    """
+    if cfg.llm.audio:
+        return True
+    now = time.monotonic()
+    if _cache_key(cfg) != _cache.get("base_url") or now > _cache["expires"]:
+        await _refresh(cfg)
+    return _cache["info"]["audio"]
 
 
 async def get_backend_info(cfg) -> dict:

@@ -593,6 +593,16 @@ ALLOWED_IMAGE_MIME = ("image/png", "image/jpeg", "image/webp", "image/gif")
 MAX_FILES_PER_MESSAGE = 5
 MAX_FILE_BYTES = 256 * 1024
 
+# Audio attachments (mp3/wav/ogg/flac/m4a) are large by nature -- songs are many
+# MB. A dedicated cap keeps a single upload bounded without over-stretching the
+# text/image limits. Stored as raw base64 (no data URL header) so it round-trips
+# through message_attachments, which already carries an open-ended mime_type.
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+ALLOWED_AUDIO_MIME = (
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav",
+    "audio/ogg", "audio/flac", "audio/m4a", "audio/mp4",
+)
+
 
 # Structured-text mimes the parse_json tool keys off to recognise JSON-ish
 # attachments. Kept here (rather than duplicated in the tool) so the classification
@@ -696,6 +706,65 @@ def _parse_image_attachments(images: list) -> tuple[list[dict], str | None]:
             "mime_type": mime,
             "file_name": f"image-{len(attachments) + 1}.img",
             "data": img,
+        })
+    return attachments, None
+
+
+def _parse_audio_attachments(audio) -> tuple[list[dict], str | None]:
+    """Validate incoming audio attachments (base64 data URL or raw base64).
+
+    Audio arrives either as a ``data:audio/...;base64,...`` data URL (like an
+    image) or as raw base64 (like a text file). Returns (attachments,
+    error_message). Each attachment is {attachment_type, mime_type, file_name,
+    data} where data is the original base64 string -- stored verbatim so it
+    round-trips through message_attachments, which already carries an open-ended
+    mime_type. The mime is validated against ALLOWED_AUDIO_MIME so a stray or
+    forged type still cannot be accepted as audio.
+    """
+    if not isinstance(audio, list):
+        audio = [audio] if audio else []
+    if len(audio) > MAX_FILES_PER_MESSAGE:
+        return [], f"Too many files. Maximum is {MAX_FILES_PER_MESSAGE} per message."
+
+    attachments = []
+    for i, item in enumerate(audio):
+        if not isinstance(item, str):
+            return [], "Invalid audio attachment."
+        # Accept both a data URL header and a raw base64 blob. When there is no
+        # header (raw b64), default to the most common audio mime -- the model
+        # consumes the base64 directly, so the type is informational rather than
+        # decisive.
+        if item.startswith("data:"):
+            header, _, b64 = item.partition(",")
+            mime = header[len("data:"):].split(";")[0].lower()
+        else:
+            b64 = item.split(";", 1)[0]
+            mime = "audio/mpeg"
+        if mime not in ALLOWED_AUDIO_MIME:
+            label = mime or "unknown"
+            return [], (
+                f"Unsupported audio type '{label}'. "
+                f"Supported: {', '.join(ALLOWED_AUDIO_MIME)}"
+            )
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception:  # noqa: BLE001
+            return [], "Invalid audio base64."
+        if not raw:
+            return [], "Invalid audio attachment."
+        if len(raw) > MAX_AUDIO_BYTES:
+            size_mb = len(raw) / (1024 * 1024)
+            return [], (
+                f"Audio too large ({size_mb:.1f}MB). Maximum is {MAX_AUDIO_BYTES // (1024 * 1024)}MB."
+            )
+        attachments.append({
+            "attachment_type": "audio",
+            "mime_type": mime,
+            "file_name": f"audio-{len(attachments) + 1}.mp3",
+            # Store the original base64 (with its data URL header if present) so a
+            # native audio model can consume it directly; raw b64 is re-wrapped by
+            # the caller when needed.
+            "data": item,
         })
     return attachments, None
 
@@ -952,17 +1021,21 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             data = await websocket.receive_json()
 
             if data.get("type") == "user_message":
-                from codeassist.capabilities import model_vision_capable
+                from codeassist.capabilities import model_audio_capable, model_vision_capable
                 content = data.get("content", "")
                 images, img_error = _parse_image_attachments(data.get("images") or [])
                 files, file_error = _parse_text_files(data.get("files") or [])
+                audio, audio_error = _parse_audio_attachments(data.get("audio") or [])
                 if img_error:
                     await websocket.send_json({"type": "error", "message": img_error})
                     continue
                 if file_error:
                     await websocket.send_json({"type": "error", "message": file_error})
                     continue
-                if not (content.strip() or images or files):
+                if audio_error:
+                    await websocket.send_json({"type": "error", "message": audio_error})
+                    continue
+                if not (content.strip() or images or files or audio):
                     continue
                 if len(content) > MAX_MESSAGE_LEN:
                     await websocket.send_json({"type": "error", "message": f"Message too long. Maximum is {MAX_MESSAGE_LEN} characters."})
@@ -972,7 +1045,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     # order once it finishes instead of dropping it. A full queue
                     # gets a polite rejection rather than blocking the sender.
                     try:
-                        pending.put_nowait((content, images, files))
+                        pending.put_nowait((content, images, files, audio))
                     except asyncio.QueueFull:
                         await websocket.send_json({
                             "type": "error",
@@ -985,7 +1058,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 # two turns at once.
                 if slot_busy:
                     try:
-                        pending.put_nowait((content, images, files))
+                        pending.put_nowait((content, images, files, audio))
                     except asyncio.QueueFull:
                         await websocket.send_json({
                             "type": "error",
@@ -1001,8 +1074,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "message": "This model/server does not support images. You can still attach text files.",
                     })
                     continue
+                # Audio is only sent to a native-audio model; otherwise it is
+                # transcribed (see the LLM call path) so the turn still proceeds.
+                if audio and not await model_audio_capable(cfg):
+                    slot_busy = False
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "This model/server does not take audio natively. It will be transcribed instead.",
+                    })
+                    continue
 
-                attachments = images + files
+                attachments = images + files + audio
                 # Re-resolve the agent every turn so a `switch_agent` issued
                 # earlier in this same connection takes effect now.
                 active_name = await resolve_agent_name()

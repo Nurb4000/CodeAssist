@@ -4,8 +4,10 @@ import uuid
 import pytest
 
 from codeassist.server import (
+    MAX_AUDIO_BYTES,
     MAX_FILE_BYTES,
     MAX_FILES_PER_MESSAGE,
+    _parse_audio_attachments,
     _parse_text_files,
     _resolve_text_mime,
 )
@@ -78,6 +80,66 @@ class TestParseTextFiles:
         # A client lying about its mime to look like something else is not trusted
         # for a non-text type; extension inference wins.
         assert _resolve_text_mime("photo.png", "application/json") == "text/plain"
+
+
+class TestParseAudioAttachments:
+    """Audio attachments arrive as base64 data URLs or raw b64 blobs.
+
+    The mime is validated against ALLOWED_AUDIO_MIME so a stray or forged type
+    (e.g. an image reclassified as audio) is rejected, and a single upload is
+    bounded by MAX_AUDIO_BYTES.
+    """
+
+    def _mp3(self, raw=b"audio bytes"):
+        import base64
+
+        return base64.b64encode(raw).decode()
+
+    def test_empty_returns_no_attachments(self):
+        assert _parse_audio_attachments([]) == ([], None)
+        assert _parse_audio_attachments(None) == ([], None)
+
+    def test_valid_data_url_audio(self):
+        b64 = self._mp3()
+        files, err = _parse_audio_attachments([f"data:audio/mpeg;base64,{b64}"])
+        assert err is None
+        att = files[0]
+        assert att["attachment_type"] == "audio"
+        assert att["mime_type"] == "audio/mpeg"
+        # data round-trips verbatim so a native audio model can consume it.
+        assert att["data"].startswith("data:audio/mpeg;base64,")
+
+    def test_valid_raw_b64_audio_defaults_mime(self):
+        b64 = self._mp3()
+        files, err = _parse_audio_attachments([b64])  # no data URL header
+        assert err is None
+        att = files[0]
+        assert att["attachment_type"] == "audio"
+        assert att["mime_type"] == "audio/mpeg"
+
+    def test_forged_mime_rejected(self):
+        # An image reclassified as audio must be rejected, not silently accepted.
+        b64 = self._mp3()
+        files, err = _parse_audio_attachments([f"data:image/png;base64,{b64}"])
+        assert files == []
+        assert err and "Unsupported audio" in err
+
+    def test_too_many_audio(self):
+        b64 = self._mp3()
+        files, err = _parse_audio_attachments([f"data:audio/mpeg;base64,{b64}"] * (MAX_FILES_PER_MESSAGE + 1))
+        assert files == []
+        assert "Too many files" in err
+
+    def test_too_large_audio(self):
+        b64 = self._mp3(b"a" * (MAX_AUDIO_BYTES + 1))
+        files, err = _parse_audio_attachments([f"data:audio/mpeg;base64,{b64}"])
+        assert files == []
+        assert "too large" in err
+
+    def test_non_string_rejected(self):
+        files, err = _parse_audio_attachments([123])
+        assert files == []
+        assert err and "Invalid audio" in err
 
 
 class TestResolveTextMime:

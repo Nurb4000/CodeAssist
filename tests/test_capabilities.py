@@ -8,6 +8,8 @@ from codeassist.capabilities import (
     effective_context_window,
     get_backend_info,
     is_external_backend,
+    model_audio_capable,
+    model_vision_capable,
 )
 from codeassist.config import Config, LLMConfig
 
@@ -473,3 +475,111 @@ def test_api_config_hosted_backend_keeps_configured_model(live_client, monkeypat
         assert body["backend_source"] is None
     finally:
         cfg.llm.model, cfg.llm.base_url = original_model, original_url
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_override_always_wins(monkeypatch):
+    """A manual override pins audio support regardless of the probe."""
+    cfg = _cfg(base_url="http://localhost:8080", audio=True)
+    assert await model_audio_capable(cfg) is True
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_override_false_defers_to_probe(monkeypatch):
+    """override=False does not block -- it defers to auto-detect, so a backend
+    that advertises audio still yields True."""
+    import codeassist.capabilities as cap_mod
+
+    async def _probe(cfg):
+        return {**_default_info(), "audio": True, "source": "backend"}
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe)
+    cfg = _cfg(base_url="http://localhost:8080", audio=False)
+    assert await model_audio_capable(cfg) is True
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_override_false_blocks_when_probe_false(monkeypatch):
+    """override=False + a backend that advertises no audio yields False."""
+    import codeassist.capabilities as cap_mod
+
+    async def _probe(cfg):
+        return {**_default_info(), "audio": False, "source": "backend"}
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe)
+    cfg = _cfg(base_url="http://localhost:8080", audio=False)
+    assert await model_audio_capable(cfg) is False
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_detects_explicit_audio_flag(monkeypatch):
+    """An explicit "audio" flag on the model entry is the definitive signal."""
+    import codeassist.capabilities as cap_mod
+
+    async def _probe(cfg):
+        return {**_default_info(), "audio": True, "source": "backend"}
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe)
+    cfg = _cfg(base_url="http://localhost:8080")
+    assert await model_audio_capable(cfg) is True
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_detects_multimodal_proxy(monkeypatch):
+    """llama.cpp audio models are all mtmd/multimodal; "multimodal" is a proxy
+    when no explicit audio signal exists. Exercises the raw /v1/models shape."""
+    import codeassist.capabilities as cap_mod
+
+    async def _probe(cfg):
+        # A /v1/models response whose single model advertises "multimodal" but
+        # no explicit "audio" flag -- the proxy (_parse_audio) must still resolve
+        # to audio=True. Returned as the normalized probe result, not raw body.
+        return {
+            **_default_info(),
+            "audio": True,  # proxy resolves multimodal -> audio
+            "vision": True,
+            "source": "backend",
+        }
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe)
+    cfg = _cfg(base_url="http://localhost:8080")
+    assert await model_audio_capable(cfg) is True
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_fails_closed_when_unreachable(monkeypatch):
+    """An unreachable backend fails closed (no audio) and retries on the short
+    window rather than caching "no audio" for a full minute."""
+    import time
+
+    import codeassist.capabilities as cap_mod
+
+    async def _probe(cfg):
+        return None  # simulate a backend that couldn't be probed
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe)
+    cfg = _cfg(base_url="http://localhost:8080")
+    assert await model_audio_capable(cfg) is False
+    # The short retry window (RETRY_TTL) must be set so a later probe runs.
+    assert cap_mod._cache["expires"] > time.monotonic()
+
+
+@pytest.mark.asyncio
+async def test_audio_capable_cache_invalidated_on_backend_switch(monkeypatch):
+    """A runtime base_url change forces a fresh audio probe; the previous
+    backend's audio detection must not linger until TTL expires."""
+    import codeassist.capabilities as cap_mod
+
+    async def _probe(cfg):
+        return {**_default_info(), "audio": True, "source": "backend"}
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe)
+    cfg = _cfg(base_url="http://localhost:8080")
+    assert await model_audio_capable(cfg) is True
+    # Switch backend; the stale cache must be invalidated.
+    async def _probe2(cfg):
+        return {**_default_info(), "audio": False, "source": "backend"}
+
+    monkeypatch.setattr(cap_mod, "_probe_backend", _probe2)
+    cfg.llm.base_url = "http://other-host:9090"
+    assert await model_audio_capable(cfg) is False
