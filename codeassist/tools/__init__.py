@@ -236,6 +236,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from .http import HTTPTool
     from .image_analyze import ImageAnalyzeTool
     from .package_manager import PackageManagerTool
+    from .parse_json import ParseJsonTool
     from .process import ProcessTool
     from .read import ReadTool
     from .screenshot import ScreenshotTool
@@ -332,6 +333,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
         GitSnapshotTool,
         DockerTool,
         ImageAnalyzeTool,
+        ParseJsonTool,
     ]:
         tool = tool_cls()
         tool.workspace = workspace

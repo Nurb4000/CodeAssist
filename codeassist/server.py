@@ -5,6 +5,8 @@ import hmac
 import json
 import logging
 import logging.config
+import mimetypes
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -592,6 +594,39 @@ MAX_FILES_PER_MESSAGE = 5
 MAX_FILE_BYTES = 256 * 1024
 
 
+# Structured-text mimes the parse_json tool keys off to recognise JSON-ish
+# attachments. Kept here (rather than duplicated in the tool) so the classification
+# lives in one place.
+_JSON_MIMES = frozenset({
+    "application/json", "application/xml", "application/yaml", "application/toml",
+})
+
+
+def _resolve_text_mime(file_name: str, client_type: str | None) -> str:
+    """Resolve the mime type stored for a text attachment.
+
+    The browser-reported ``client_type`` is an untrusted hint and is accepted
+    only when it is a ``text/*`` document or one of the structured-text types
+    above; otherwise the file extension is trusted more. Always returns a sane
+    default (``text/plain``) so attachments carry a usable type -- the parse_json
+    tool keys off ``application/json``.
+    """
+    def _is_text_like(mime: str) -> bool:
+        return mime.startswith("text/") or mime in _JSON_MIMES
+
+    inferred = mimetypes.guess_type(file_name)[0]
+    if inferred and not _is_text_like(inferred):
+        # The extension clearly marks this as a non-text type (e.g. image/png).
+        # Ignore any client hint that tries to reclassify it as text/JSON -- a
+        # forged attachment payload cannot masquerade a png as json this way.
+        return "text/plain"
+
+    hint = (client_type or "").split(";", 1)[0].strip().lower()
+    if hint and _is_text_like(hint):
+        return hint
+    return inferred or "text/plain"
+
+
 def _parse_text_files(files) -> tuple[list[dict], str | None]:
     """Validate incoming text-file attachments.
 
@@ -620,7 +655,7 @@ def _parse_text_files(files) -> tuple[list[dict], str | None]:
             )
         attachments.append({
             "attachment_type": "text",
-            "mime_type": "text/plain",
+            "mime_type": _resolve_text_mime(name, file.get("type")),
             "file_name": name,
             "data": content,
         })

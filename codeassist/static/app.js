@@ -348,7 +348,10 @@ async function addPendingFile(file) {
         return;
     }
     const content = await readFileAsText(file);
-    pendingFiles.push({ name: file.name, content });
+    // Carry the browser-reported mime so the backend can store the real type
+    // (e.g. application/json) instead of defaulting every text attachment to
+    // text/plain -- that is what lets a JSON attachment be classified correctly.
+    pendingFiles.push({ name: file.name, content, type: file.type });
     renderPendingImages();
 }
 
@@ -2228,7 +2231,7 @@ function sendMessage() {
     inputEl.style.height = 'auto';
 
     const images = pendingImages.slice();
-    const files = pendingFiles.slice().map(f => ({ name: f.name, content: f.content }));
+    const files = pendingFiles.slice().map(f => ({ name: f.name, content: f.content, type: f.type }));
     appendUserMessage(text, [...files.map(f => ({ attachment_type: 'text', file_name: f.name })), ...images]);
     clearPendingImages();
     hideContinueButton();

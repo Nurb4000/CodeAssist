@@ -1,7 +1,14 @@
 """Tests for chat file/image attachments (server-side validation + WS wiring)."""
 import uuid
 
-from codeassist.server import MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, _parse_text_files
+import pytest
+
+from codeassist.server import (
+    MAX_FILE_BYTES,
+    MAX_FILES_PER_MESSAGE,
+    _parse_text_files,
+    _resolve_text_mime,
+)
 
 
 class TestParseTextFiles:
@@ -52,6 +59,42 @@ class TestParseTextFiles:
         files, err = _parse_text_files([{"content": "hi"}])
         assert err is None
         assert files[0]["file_name"] == "file-1"
+
+    def test_json_attachment_preserves_mime(self):
+        # A client-supplied application/json must be stored as-is (not forced to
+        # text/plain) so the parse_json tool can classify it.
+        files, err = _parse_text_files([
+            {"name": "data.json", "content": "{}", "type": "application/json"},
+        ])
+        assert err is None
+        assert files[0]["mime_type"] == "application/json"
+
+    def test_mime_falls_back_to_extension_hint(self):
+        # No client mime at all -> infer from the extension.
+        files, _ = _parse_text_files([{"name": "config.toml", "content": "a=1"}])
+        assert files[0]["mime_type"] in ("application/toml", "text/plain")
+
+    def test_ignores_hostile_client_mime(self):
+        # A client lying about its mime to look like something else is not trusted
+        # for a non-text type; extension inference wins.
+        assert _resolve_text_mime("photo.png", "application/json") == "text/plain"
+
+
+class TestResolveTextMime:
+    @pytest.mark.parametrize("client_type,expected", [
+        ("application/json", "application/json"),
+        ("TEXT/PLAIN; charset=utf-8", "text/plain"),  # params stripped, lowercased
+        ("application/yaml", "application/yaml"),
+    ])
+    def test_accepts_text_and_structured_hints(self, client_type, expected):
+        assert _resolve_text_mime("f.x", client_type) == expected
+
+    def test_known_extension_is_inferred(self):
+        # .txt is universally known -> text/plain even with no client hint.
+        assert _resolve_text_mime("a.txt", None) == "text/plain"
+
+    def test_uninferable_extension_defaults(self):
+        assert _resolve_text_mime("noext", None) == "text/plain"
 
 
 def _stub_stream_error(monkeypatch):
