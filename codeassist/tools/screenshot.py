@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import Tool, ToolResult, live_config
-from .security import validate_path
+from .security import validate_path, validate_url
 
 log = logging.getLogger(__name__)
 
@@ -170,6 +170,24 @@ class ScreenshotTool(Tool):
             scheme = "http"
             return f"{scheme}://{host}:{config.server.port}/"
         if url:
+            # The URL is attacker/model-controlled. Chrome runs with
+            # --no-sandbox here, so an unvalidated target can reach local files
+            # (file://) and private/internal services (SSRF). Constrain external
+            # captures to public http(s) just like webfetch/http. The explicit
+            # capture_local_app branch above stays allowed for the local UI.
+            if not url.startswith(("http://", "https://")):
+                return ToolResult(
+                    output="Error: URL must start with http:// or https://",
+                    error=True,
+                )
+            if not validate_url(url):
+                return ToolResult(
+                    output=(
+                        f"Error: URL '{url}' targets a private or internal "
+                        "network and is not allowed"
+                    ),
+                    error=True,
+                )
             return url
         return ToolResult(
             output="Error: provide either 'url' or capture_local_app=true.",

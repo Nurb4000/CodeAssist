@@ -181,6 +181,100 @@ class TestSession:
             assert await _count(db, "questions", "message_id", during) == 0
 
     @pytest.mark.asyncio
+    async def test_undo_last_turn_removes_completed_turn(self):
+        """A completed turn ends in an assistant text reply, so anchoring on the
+        last assistant row and deleting strictly after it was a no-op."""
+        await init_db()
+        session = await Session.create()
+
+        u1 = await session.add_message("user", "first")
+        a1 = await session.add_message("assistant", "first answer")
+        u2 = await session.add_message("user", "second")
+        await session.add_message("assistant", "second answer")
+
+        deleted = await session.undo_last_turn()
+
+        assert deleted == 2
+        assert [m["id"] for m in await session.get_messages()] == [u1, a1]
+        assert u2 not in [m["id"] for m in await session.get_messages()]
+
+    @pytest.mark.asyncio
+    async def test_undo_last_turn_removes_tool_only_ending_atomically(self):
+        """Deleting only the tool result used to leave the assistant tool_calls
+        row with no following tool message, an invalid transcript."""
+        await init_db()
+        session = await Session.create()
+
+        u1 = await session.add_message("user", "first")
+        a1 = await session.add_message("assistant", "first answer")
+        u2 = await session.add_message("user", "use a tool")
+        await session.add_message(
+            "assistant",
+            None,
+            tool_calls=[{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{}"},
+            }],
+        )
+        await session.add_message("tool", "tool output", tool_call_id="call_1")
+
+        deleted = await session.undo_last_turn()
+
+        assert deleted == 3
+        assert [m["id"] for m in await session.get_messages()] == [u1, a1]
+
+    @pytest.mark.asyncio
+    async def test_undo_last_turn_handles_interrupted_assistant_call(self):
+        """An assistant tool_calls row with no tool result was also stranded by
+        the old strict-after deletion."""
+        await init_db()
+        session = await Session.create()
+
+        u1 = await session.add_message("user", "first")
+        a1 = await session.add_message("assistant", "first answer")
+        await session.add_message("user", "interrupted")
+        await session.add_message(
+            "assistant",
+            None,
+            tool_calls=[{
+                "id": "call_2",
+                "type": "function",
+                "function": {"name": "shell", "arguments": "{}"},
+            }],
+        )
+
+        deleted = await session.undo_last_turn()
+
+        assert deleted == 2
+        assert [m["id"] for m in await session.get_messages()] == [u1, a1]
+
+    @pytest.mark.asyncio
+    async def test_delete_messages_after_ties_on_timestamp_use_rowid(self):
+        """Same-timestamp rows must be ordered by insertion (rowid), not left
+        behind by a strict created_at comparison (F3)."""
+        from codeassist.session import get_db
+
+        await init_db()
+        session = await Session.create()
+
+        before = await session.add_message("user", "before")
+        after = await session.add_message("assistant", "same timestamp")
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE messages SET created_at = ? WHERE session_id = ?",
+                ("2026-01-01T00:00:00+00:00", session.id),
+            )
+            await db.commit()
+
+        deleted = await session.delete_messages_after(before)
+
+        assert deleted == 1
+        remaining = [m["id"] for m in await session.get_messages()]
+        assert remaining == [before]
+        assert after not in remaining
+
+    @pytest.mark.asyncio
     async def test_add_multiple_messages(self):
         """Test adding multiple messages."""
         await init_db()

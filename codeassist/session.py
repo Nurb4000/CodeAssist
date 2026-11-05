@@ -976,7 +976,7 @@ class Session:
     async def get_messages(self) -> list[dict]:
         async with get_db() as db:
             cursor = await db.execute(
-                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at",
+                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at, rowid",
                 (self.id,),
             )
             rows = await cursor.fetchall()
@@ -1137,37 +1137,57 @@ class Session:
         SESSION_TRUST.pop(self.id, None)
         SESSION_TOOL_TRUST.pop(self.id, None)
 
-    async def delete_messages_after(self, message_id: str) -> int:
-        """Delete all messages after a given message ID. Returns count of deleted messages."""
+    async def _delete_messages_where(
+        self, db, condition: str, params: tuple,
+    ) -> int:
+        """Delete messages matching ``condition`` plus their child rows.
+
+        ``condition`` is assembled from trusted SQL literals only; every value
+        is bound via ``params``. Shared by after/from rollback so attachments
+        and question rows are cleaned up identically.
+        """
+        await db.execute(
+            "DELETE FROM message_attachments WHERE message_id IN "
+            f"(SELECT id FROM messages WHERE session_id = ? AND {condition})",
+            (self.id, *params),
+        )
+        # questions.message_id has no FK, so cascade never fires: drop any
+        # question raised against a message in the deleted range or it is
+        # orphaned (the same cleanup delete_message does for a single row).
+        await db.execute(
+            "DELETE FROM questions WHERE session_id = ? AND message_id IN "
+            f"(SELECT id FROM messages WHERE session_id = ? AND {condition})",
+            (self.id, self.id, *params),
+        )
+        cursor = await db.execute(
+            f"DELETE FROM messages WHERE session_id = ? AND {condition}",
+            (self.id, *params),
+        )
+        return cursor.rowcount
+
+    async def _delete_since(self, message_id: str, *, inclusive: bool) -> int:
+        """Delete rows after (or at) ``message_id`` in this session.
+
+        Ordering uses ``(created_at, rowid)``: ``created_at`` is an ISO string
+        that can tie at coarse clock resolution, and rowid is the insertion
+        order, so a same-timestamp row after the reference is not stranded by a
+        strict ``created_at >`` comparison.
+        """
         async with get_db() as db:
-            # Get timestamp of the reference message
             cursor = await db.execute(
-                "SELECT created_at FROM messages WHERE id = ? AND session_id = ?",
+                "SELECT rowid AS seq, created_at FROM messages "
+                "WHERE id = ? AND session_id = ?",
                 (message_id, self.id),
             )
             row = await cursor.fetchone()
             if not row:
                 return 0
-            ref_ts = row["created_at"]
-            await db.execute(
-                "DELETE FROM message_attachments WHERE message_id IN "
-                "(SELECT id FROM messages WHERE session_id = ? AND created_at > ?)",
-                (self.id, ref_ts),
-            )
-            # questions.message_id has no FK, so cascade never fires: drop any
-            # question raised against a message in the deleted range or it is
-            # orphaned (the same cleanup delete_message does for a single row).
-            await db.execute(
-                "DELETE FROM questions WHERE message_id IN "
-                "(SELECT id FROM messages WHERE session_id = ? AND created_at > ?) "
-                "AND session_id = ?",
-                (self.id, ref_ts, self.id),
-            )
-            cursor = await db.execute(
-                "DELETE FROM messages WHERE session_id = ? AND created_at > ?",
-                (self.id, ref_ts),
-            )
-            deleted = cursor.rowcount
+            if inclusive:
+                condition = "(created_at > ? OR (created_at = ? AND rowid >= ?))"
+            else:
+                condition = "(created_at > ? OR (created_at = ? AND rowid > ?))"
+            params = (row["created_at"], row["created_at"], row["seq"])
+            deleted = await self._delete_messages_where(db, condition, params)
             now = datetime.now(UTC).isoformat()
             await db.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -1175,6 +1195,14 @@ class Session:
             )
             await db.commit()
             return deleted
+
+    async def delete_messages_after(self, message_id: str) -> int:
+        """Delete all messages after a given message ID. Returns count of deleted messages."""
+        return await self._delete_since(message_id, inclusive=False)
+
+    async def delete_messages_from(self, message_id: str) -> int:
+        """Delete a message and all messages after it. Returns count deleted."""
+        return await self._delete_since(message_id, inclusive=True)
 
     async def rollover_from_summary(
         self, summary_text: str, tail_start_id: str,
@@ -1234,19 +1262,37 @@ class Session:
             return mid
 
     async def undo_last_turn(self) -> int:
-        """Remove the last assistant message and associated tool messages.
-        Returns the number of deleted messages, or 0 if there's nothing to undo."""
+        """Remove the last turn, including the user message that started it.
+
+        A completed turn ends with a final assistant text reply, so anchoring on
+        the *last* assistant row and deleting strictly after it was a no-op. A
+        tool-only ending instead stranded an assistant row carrying tool_calls
+        without its tool result, producing an invalid transcript. Deleting from
+        the last user row (inclusive) removes the whole turn atomically.
+        Returns the number of deleted messages, or 0 if there's nothing to undo.
+        """
         msgs = await self.get_messages()
-        # Find the last assistant message
-        last_assistant_idx = None
-        for i in range(len(msgs) - 1, -1, -1):
-            if msgs[i]["role"] == "assistant":
-                last_assistant_idx = i
-                break
-        if last_assistant_idx is None:
+        if not msgs:
             return 0
-        # Delete from that point onward (assistant + any subsequent tool messages)
-        return await self.delete_messages_after(msgs[last_assistant_idx]["id"])
+
+        start_idx = None
+        for i in range(len(msgs) - 1, -1, -1):
+            if msgs[i]["role"] == "user":
+                start_idx = i
+                break
+
+        if start_idx is None:
+            # No user row (interrupted/legacy transcript): fall back to the last
+            # assistant row, then the final row, rather than silently doing
+            # nothing.
+            for i in range(len(msgs) - 1, -1, -1):
+                if msgs[i]["role"] == "assistant":
+                    start_idx = i
+                    break
+        if start_idx is None:
+            start_idx = len(msgs) - 1
+
+        return await self.delete_messages_from(msgs[start_idx]["id"])
 
     async def fork(self, name: str | None = None) -> "Session":
         """Create a fork of this session."""

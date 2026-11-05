@@ -9,6 +9,14 @@ import pytest
 from codeassist.tools.screenshot import ScreenshotTool, _CdpConnection
 
 
+class _Cfg:
+    class _Server:
+        host = "127.0.0.1"
+        port = 8090
+
+    server = _Server()
+
+
 class _FakeWs:
     """Minimal stand-in for a websockets CDP connection.
 
@@ -152,16 +160,61 @@ def test_missing_url_and_app_is_error():
 
 @pytest.mark.asyncio
 async def test_capture_local_app_builds_server_url(monkeypatch):
-    class _Cfg:
-        class _Server:
-            host = "127.0.0.1"
-            port = 8090
-
-        server = _Server()
-
     tool = ScreenshotTool()
     url = await tool._resolve_target_url(None, True, _Cfg())
     assert url == "http://127.0.0.1:8090/"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8090/",
+        "http://localhost:3000/",
+        "http://169.254.169.254/latest/meta-data/",
+    ],
+)
+@pytest.mark.asyncio
+async def test_private_or_internal_url_rejected(url):
+    """Chrome is unsandboxed, so the target URL must go through the SSRF guard."""
+    tool = ScreenshotTool()
+    result = await tool._resolve_target_url(url, False, _Cfg())
+    assert getattr(result, "error", False) is True
+    assert "private or internal" in result.output
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/x", "javascript:alert(1)"])
+@pytest.mark.asyncio
+async def test_non_http_scheme_rejected(url):
+    tool = ScreenshotTool()
+    result = await tool._resolve_target_url(url, False, _Cfg())
+    assert getattr(result, "error", False) is True
+    assert "http:// or https://" in result.output
+
+
+@pytest.mark.asyncio
+async def test_public_http_url_allowed(monkeypatch):
+    monkeypatch.setattr(
+        "codeassist.tools.screenshot.validate_url", lambda url: True
+    )
+    tool = ScreenshotTool()
+    result = await tool._resolve_target_url("https://example.com/", False, _Cfg())
+    assert result == "https://example.com/"
+
+
+@pytest.mark.asyncio
+async def test_capture_local_app_bypasses_ssrf_guard(monkeypatch):
+    """The explicit local-app capture is trusted; only arbitrary URLs are gated."""
+    seen = []
+
+    def _reject(url):
+        seen.append(url)
+        return False
+
+    monkeypatch.setattr("codeassist.tools.screenshot.validate_url", _reject)
+    tool = ScreenshotTool()
+    result = await tool._resolve_target_url(None, True, _Cfg())
+    assert result == "http://127.0.0.1:8090/"
+    assert seen == []  # guard is not consulted for the local-app path
 
 
 def test_find_browser_returns_string_or_none():
@@ -245,6 +298,18 @@ async def test_e2e_captures_real_page(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEASSIST_WORKSPACE", str(tmp_path))
     with socketserver.TCPServer(("127.0.0.1", 0), Handler) as srv:
         port = srv.server_address[1]
+
+        class _LiveCfg:
+            class _Server:
+                host = "127.0.0.1"
+
+            server = _Server()
+
+        _LiveCfg.server.port = port
+        monkeypatch.setattr(
+            "codeassist.tools.screenshot.live_config", lambda: _LiveCfg()
+        )
+
         thread = threading.Thread(target=srv.serve_forever, daemon=True)
         thread.start()
         try:
@@ -253,8 +318,10 @@ async def test_e2e_captures_real_page(tmp_path, monkeypatch):
             # create_registry does), not a private config reload.
             tool.workspace = tmp_path
             out = tmp_path / "cap.png"
+            # Use the explicit local-app path: an arbitrary loopback URL is now
+            # rejected by the SSRF guard (and tested as such above).
             result = await tool.execute(
-                url=f"http://127.0.0.1:{port}/",
+                capture_local_app=True,
                 output_path=str(out),
                 wait_seconds=1.0,
             )

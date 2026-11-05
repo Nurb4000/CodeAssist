@@ -169,6 +169,20 @@ class TestPermissionManager:
         assert action == "deny"
 
     @pytest.mark.asyncio
+    async def test_agent_confirm_survives_global_fallback(self):
+        """A per-agent 'confirm' action must reach the confirmation gate.
+
+        Regression: check_permission dropped 'confirm' and fell through to the
+        global ruleset, so a dangerous tool outside CONFIRM_TOOLS could run
+        without a prompt despite the agent explicitly requiring one.
+        """
+        pm = PermissionManager()
+        rs = PermissionRuleset()
+        rs.add_default("docker", "confirm")
+        await pm.initialize()
+        assert await pm.check_permission("docker", "", rs) == "confirm"
+
+    @pytest.mark.asyncio
     async def test_saved_allows_override(self):
         pm = PermissionManager()
         pm.saved._cache["write:*"] = "allow"

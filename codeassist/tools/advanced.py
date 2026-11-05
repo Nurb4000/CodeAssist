@@ -6,6 +6,7 @@ from datetime import UTC
 import httpx
 
 from . import Tool, ToolResult
+from .security import validate_url
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +78,14 @@ class WebSearchTool(Tool):
 
         deep_results = []
         for url in urls:
+            # Search results are attacker-influenced. Validate the initial hop
+            # too: the shared client only re-validates redirects, so without
+            # this a poisoned result could fetch internal/metadata addresses.
+            if not validate_url(url):
+                deep_results.append(
+                    f"## {url}\n\n_Skipped: URL targets a private or internal network._"
+                )
+                continue
             try:
                 client = _get_fetch_client()
                 resp = await client.get(url, headers={"User-Agent": "CodeAssist/1.0"})

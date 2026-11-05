@@ -293,6 +293,11 @@ class PermissionManager:
             # beats an agent-level allow.
             if agent_action == "allow" and saved_action is None:
                 return "allow"
+            # "confirm" is an explicit per-agent requirement to prompt. It must
+            # survive the fall-through to the global ruleset, otherwise a tool
+            # outside CONFIRM_TOOLS can run unconfirmed despite the agent config.
+            if agent_action == "confirm":
+                return "confirm"
 
         # 4. A saved "ask" (or any non-allow/deny action) is the user's explicit
         #    preference and outranks the global ruleset.

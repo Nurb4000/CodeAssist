@@ -310,6 +310,22 @@ class TestAgentConfirmation:
             assert await agent.needs_confirmation(tool, {})
 
     @pytest.mark.asyncio
+    async def test_needs_confirmation_honours_custom_confirm_action(self, agent):
+        """A per-agent 'confirm' on a tool outside CONFIRM_TOOLS must prompt.
+
+        Regression: 'confirm' was treated like the legacy fallback, so only the
+        four hardcoded tools ever prompted and custom dangerous-tool rules were
+        silently ignored.
+        """
+        from codeassist.permissions import PermissionRuleset
+
+        rs = PermissionRuleset()
+        rs.add_default("docker", "confirm")
+        agent.agent_ruleset = rs
+
+        assert await agent.needs_confirmation("docker", {})
+
+    @pytest.mark.asyncio
     async def test_needs_confirmation_shell_trusted(self, agent):
         """Test that shell doesn't need confirmation when trusted."""
         await agent.set_trust(trust_shell=True)
@@ -1749,8 +1765,8 @@ class TestBuiltinAgentPermissions:
         "docker", "database",
     )
     # review reviews a change set with `git diff`, but git can also checkout /
-    # reset / clean, so it prompts instead of hard-denying.
-    REVIEW_GIT = "ask"
+    # reset / clean, so its per-agent rule is "confirm" (prompt).
+    REVIEW_GIT = "confirm"
 
     @staticmethod
     def _ruleset(key):

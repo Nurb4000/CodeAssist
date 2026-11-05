@@ -1167,6 +1167,9 @@ class Agent:
                 return False
             if action == "deny":
                 return True  # Will be handled as denied below
+            if action == "confirm":
+                # Explicit per-agent requirement, regardless of CONFIRM_TOOLS.
+                return True
             # action == "ask": fall through to the legacy CONFIRM_TOOLS allowlist
             # below, preserving pre-permission-system behavior for tools the
             # ruleset does not explicitly cover.
