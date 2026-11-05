@@ -2699,6 +2699,8 @@ fileInputEl.addEventListener('change', async () => {
         for (const file of Array.from(fileInputEl.files)) {
             if (file.type.startsWith('image/')) {
                 await addPendingImage(file);
+            } else if (isAudioFile(file)) {
+                await addPendingAudio(file);
             } else if (isTextFile(file)) {
                 await addPendingFile(file);
             } else {
@@ -2723,6 +2725,22 @@ inputEl.addEventListener('paste', (e) => {
                     showError(`Failed to read pasted image: ${err?.message || err}`);
                 });
             }
+        } else {
+            // Non-image clipboard item: classify before attaching so audio and
+            // text files are routed like the file-input/drop handlers (avoids a
+            // silent drop of a pasted mp3 or document).
+            const file = item.getAsFile();
+            if (file) {
+                if (isAudioFile(file)) {
+                    addPendingAudio(file).catch((err) => {
+                        showError(`Failed to read pasted audio: ${err?.message || err}`);
+                    });
+                } else if (isTextFile(file)) {
+                    addPendingFile(file).catch((err) => {
+                        showError(`Failed to read pasted file: ${err?.message || err}`);
+                    });
+                }
+            }
         }
     }
 });
@@ -2741,6 +2759,8 @@ inputAreaEl.addEventListener('drop', (e) => {
     for (const file of Array.from(e.dataTransfer.files || [])) {
         if (file.type.startsWith('image/')) {
             addPendingImage(file);
+        } else if (isAudioFile(file)) {
+            addPendingAudio(file);
         } else if (isTextFile(file)) {
             addPendingFile(file);
         } else {
