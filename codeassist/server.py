@@ -845,8 +845,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         workspace=cfg.workspace,
         config_paths=cfg.instructions.paths,
         disable_project_config=cfg.instructions.disable_project_config,
+        scope=cfg.instructions.scope,
     )
-    instructions_text = discoverer.get_combined_content(instruction_sources)
+    # Label remote (fetched) sources as untrusted so a poisoned URL injected
+    # verbatim into the system prompt is an instruction-injection vector, not a
+    # silent override.
+    instructions_text = discoverer.get_instruction_block(
+        instruction_sources, label_remote=cfg.instructions.label_remote
+    )
 
     features = {
         "mcp_enabled": cfg.mcp.enabled,

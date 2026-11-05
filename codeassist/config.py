@@ -124,6 +124,15 @@ class ToolOutputConfig:
 class InstructionsConfig:
     paths: list[str] = field(default_factory=list)
     disable_project_config: bool = False
+    # Scope of the AGENTS.md/CLAUDE.md walk up from the workspace. "workspace"
+    # only inspects the workspace dir; "workspace+parent" also checks one parent
+    # (e.g. a monorepo root). The old default walked to filesystem root, so an
+    # AGENTS.md in the home dir or "/" became authoritative model instructions.
+    scope: str = "workspace+parent"
+    # Label remote (fetched) instruction sources as untrusted in the injected
+    # block so the model knows they may be authored by a third party rather than
+    # being framed as authoritative "should be followed".
+    label_remote: bool = True
 
 
 @dataclass
@@ -334,6 +343,8 @@ class Config:
             instructions=InstructionsConfig(
                 paths=raw.get("instructions", {}).get("paths", []),
                 disable_project_config=raw.get("instructions", {}).get("disable_project_config", False),
+                scope=raw.get("instructions", {}).get("scope", "workspace+parent"),
+                label_remote=raw.get("instructions", {}).get("label_remote", True),
             ),
             compaction=CompactionConfig(
                 enabled=raw.get("compaction", {}).get("enabled", True),

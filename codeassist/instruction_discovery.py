@@ -102,6 +102,7 @@ class InstructionDiscoverer:
         workspace: Path,
         config_paths: list[str] | None = None,
         disable_project_config: bool = False,
+        scope: str = "workspace+parent",
     ) -> list[InstructionSource]:
         """Discover and load all instruction sources.
 
@@ -109,6 +110,7 @@ class InstructionDiscoverer:
             workspace: The workspace root directory.
             config_paths: Additional paths/URLs from config [instructions].paths.
             disable_project_config: If True, skip AGENTS.md/CLAUDE.md discovery.
+            scope: How far up the tree to look for project instructions.
 
         Returns:
             List of successfully loaded instruction sources.
@@ -118,7 +120,9 @@ class InstructionDiscoverer:
 
         # 1. Discover project-level instructions (AGENTS.md, CLAUDE.md)
         if not disable_project_config:
-            project_sources = await self._discover_project_instructions(workspace)
+            project_sources = await self._discover_project_instructions(
+                workspace, scope=scope or "workspace+parent"
+            )
             self.sources.extend(project_sources)
 
         # 2. Discover global config instructions
@@ -136,12 +140,19 @@ class InstructionDiscoverer:
         loaded = [s for s in self.sources if s.loaded]
         return loaded
 
-    async def _discover_project_instructions(self, workspace: Path) -> list[InstructionSource]:
-        """Walk up from workspace to find instruction files."""
+    async def _discover_project_instructions(self, workspace: Path, scope: str = "workspace+parent") -> list[InstructionSource]:
+        """Walk up from the workspace to find instruction files.
+
+        ``scope="workspace"`` inspects only the workspace dir; ``scope="workspace+parent"``
+        also checks one parent (e.g. a monorepo root). The old default walked to
+        filesystem root, so an AGENTS.md in the home dir or "/" became authoritative
+        model instructions -- a local-file injection vector.
+        """
         results = []
         current = workspace.resolve()
+        parents = 1 if scope == "workspace+parent" else 0
 
-        while True:
+        for level in range(parents + 1):
             for filename in INSTRUCTION_FILENAMES:
                 candidate = current / filename
                 if candidate.exists():
@@ -149,9 +160,9 @@ class InstructionDiscoverer:
                     if source and source.loaded:
                         results.append(source)
 
-            # Stop at filesystem root or if we've gone up too far
+            # Stop at filesystem root or once the scope budget is spent.
             parent = current.parent
-            if parent == current:
+            if parent == current or level == parents:
                 break
             current = parent
 
@@ -199,8 +210,13 @@ class InstructionDiscoverer:
         else:
             return await load_file_instructions(resolved)
 
-    def get_combined_content(self, sources: list[InstructionSource] | None = None) -> str:
-        """Combine all loaded instructions into a single text block."""
+    def get_combined_content(self, sources: list[InstructionSource] | None = None, label_remote: bool = True) -> str:
+        """Combine all loaded instructions into a single text block.
+
+        Remote (fetched) sources are labeled untrusted when ``label_remote`` so the
+        model can distinguish workspace-owned instructions from third-party-authored
+        ones.
+        """
         if sources is None:
             sources = [s for s in self.sources if s.loaded]
 
@@ -209,14 +225,23 @@ class InstructionDiscoverer:
 
         parts = []
         for source in sources:
-            header = f"## Instructions from {source.filename}"
+            if label_remote and source.is_url:
+                header = f"## Untrusted Remote Instructions (fetched from {source.path})"
+            else:
+                header = f"## Instructions from {source.filename}"
             parts.append(f"{header}\n\n{source.content}")
 
         return "\n\n---\n\n".join(parts)
 
-    def get_instruction_block(self, sources: list[InstructionSource] | None = None) -> str:
-        """Get formatted instruction block for system prompt injection."""
-        content = self.get_combined_content(sources)
+    def get_instruction_block(self, sources: list[InstructionSource] | None = None, label_remote: bool = True) -> str:
+        """Get formatted instruction block for system prompt injection.
+
+        Unlike ``get_combined_content`` (which frames everything as authoritative
+        "should be followed"), this labels remote (fetched) sources as untrusted so
+        the model knows they may be authored by a third party -- a poisoned URL
+        injected verbatim into the system prompt is an instruction-injection vector.
+        """
+        content = self.get_combined_content(sources, label_remote=label_remote)
         if not content:
             return ""
 
