@@ -150,6 +150,24 @@ def build_system_prompt(workspace: Path, model_id: str, features: dict | None = 
     return "\n\n".join(parts)
 
 
+# Maps an audio mime type to the format string llama.cpp / OpenAI-style audio
+# backends expect in the input_audio part. The backend validates the mime, so
+# this only ever sees one of ALLOWED_AUDIO_MIME; unknown values fall back to a
+# reasonable default. llama.cpp treats "format" as redundant (it decodes from
+# the bytes), but sending a correct value keeps non-llama backends happy.
+_AUDIO_FORMATS = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/flac": "flac",
+    "audio/m4a": "m4a",
+    "audio/mp4": "m4a",
+}
+_AUDIO_FORMAT_DEFAULT = "mp3"
+
+
 def build_openai_messages(system_prompt: str, history: list[dict]) -> list[dict]:
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -165,6 +183,19 @@ def build_openai_messages(system_prompt: str, history: list[dict]) -> list[dict]
                         content.append({
                             "type": "text",
                             "text": f"[Attached file: {att.get('file_name', 'file')}]\n{att.get('data', '')}",
+                        })
+                    elif att.get("attachment_type") == "audio":
+                        # Native audio: send as an input_audio part so a model that
+                        # can hear it processes the raw waveform directly. The mime
+                        # was validated server-side, so this format is a safe guess.
+                        mime = att.get("mime_type") or att.get("type") or _AUDIO_FORMAT_DEFAULT
+                        fmt = _AUDIO_FORMATS.get(mime, _AUDIO_FORMAT_DEFAULT)
+                        content.append({
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": att.get("data", ""),
+                                "format": fmt,
+                            },
                         })
                     else:
                         content.append({

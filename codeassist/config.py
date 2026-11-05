@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .cost_tracker import BudgetConfig
+from .transcribe import TranscriptionConfig
 
 log = logging.getLogger(__name__)
 
@@ -201,6 +202,7 @@ class Config:
     # this table existed but was never wired here, so CostTracker() was always
     # bare (enabled=False) and enforcement was dead (§7).
     cost: BudgetConfig = field(default_factory=BudgetConfig)
+    transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
     def refresh_workspace(self) -> None:
@@ -317,6 +319,12 @@ class Config:
             git=GitConfig(
                 enabled=raw.get("git", {}).get("enabled", True),
                 auto_detect=raw.get("git", {}).get("auto_detect", True),
+            ),
+            transcription=TranscriptionConfig(
+                engine=raw.get("transcription", {}).get("engine", "local"),
+                model=raw.get("transcription", {}).get("model", "base"),
+                api_key=raw.get("transcription", {}).get("api_key", ""),
+                base_url=raw.get("transcription", {}).get("base_url", ""),
             ),
             tool_output=ToolOutputConfig(
                 max_lines=raw.get("tool_output", {}).get("max_lines", 2000),

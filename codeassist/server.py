@@ -733,13 +733,18 @@ def _parse_audio_attachments(audio) -> tuple[list[dict], str | None]:
         if isinstance(item, dict):
             b64 = item.get("data")
             mime_hint = item.get("type")
+            file_name = item.get("file_name") or f"audio-{i + 1}.mp3"
         elif isinstance(item, str):
             b64 = item
             mime_hint = None
+            file_name = f"audio-{i + 1}.mp3"
         else:
             return [], "Invalid audio attachment."
         if not isinstance(b64, str):
             return [], "Invalid audio attachment."
+        # Keep the payload exactly as supplied (data URL header included) so it
+        # round-trips verbatim; b64 is stripped below only for validation.
+        original_b64 = b64
         # Accept both a data URL header and a raw base64 blob. When there is no
         # header (raw b64), fall back to the client-provided mime hint, then to
         # the most common audio mime -- the model consumes the base64 directly,
@@ -771,11 +776,13 @@ def _parse_audio_attachments(audio) -> tuple[list[dict], str | None]:
         attachments.append({
             "attachment_type": "audio",
             "mime_type": mime,
-            "file_name": f"audio-{len(attachments) + 1}.mp3",
-            # Store the original base64 (with its data URL header if present) so a
-            # native audio model can consume it directly; raw b64 is re-wrapped by
-            # the caller when needed.
-            "data": item,
+            # Preserve the client-supplied file name (e.g. rec.mp3); fall back to
+            # a synthetic one only when the sender omitted it -- consistent with
+            # _parse_text_files/_parse_image_attachments carrying the original name.
+            "file_name": file_name,
+            # Store the original payload (data URL header included if present) so
+            # it round-trips verbatim; b64 above is stripped only for validation.
+            "data": original_b64,
         })
     return attachments, None
 
@@ -1033,6 +1040,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             if data.get("type") == "user_message":
                 from codeassist.capabilities import model_audio_capable, model_vision_capable
+                from codeassist.transcribe import transcribe_audio
                 content = data.get("content", "")
                 images, img_error = _parse_image_attachments(data.get("images") or [])
                 files, file_error = _parse_text_files(data.get("files") or [])
@@ -1086,14 +1094,27 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     })
                     continue
                 # Audio is only sent to a native-audio model; otherwise it is
-                # transcribed (see the LLM call path) so the turn still proceeds.
+                # transcribed and inlined as text so the turn still proceeds.
                 if audio and not await model_audio_capable(cfg):
-                    slot_busy = False
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "This model/server does not take audio natively. It will be transcribed instead.",
+                    transcript = await transcribe_audio(audio, cfg)
+                    if transcript is None:
+                        slot_busy = False
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": (
+                                "This model/server does not take audio natively, and "
+                                "transcription is unavailable."
+                            ),
+                        })
+                        continue
+                    # Drop raw audio (the model can hear it); inline the transcript
+                    # as a text attachment so it flows through the same pipeline.
+                    files.append({
+                        "name": "_transcribed_audio",
+                        "content": transcript,
+                        "type": "text/plain",
                     })
-                    continue
+                    audio = []
 
                 attachments = images + files + audio
                 # Re-resolve the agent every turn so a `switch_agent` issued
