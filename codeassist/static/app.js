@@ -35,6 +35,7 @@ let pendingImages = [];
 let pendingFiles = [];
 let pendingAudio = [];
 let visionCapable = false;
+let audioCapable = false;
 let currentAgentName = null;
 
 const MAX_IMAGES_PER_MESSAGE = 4;
@@ -173,6 +174,8 @@ async function loadConfig() {
     }
     modelInfoEl.textContent = `${modelLabel} | ${configData.workspace}`;
     visionCapable = !!configData.vision_capable;
+    // Audio is gated on *audio* capability, not vision -- see addPendingAudio.
+    audioCapable = !!configData.audio_capable;
     setAttachmentUiEnabled(true);
     await loadAgents();
 }
@@ -405,7 +408,10 @@ function removePendingImage(index) {
 
 async function addPendingAudio(file) {
     // Only send audio to a native-audio model; otherwise it is transcribed.
-    if (!visionCapable) {
+    // Gated on *audio* capability (not vision -- addPendingImage's copy-paste
+    // bug gated images on vision, which is why audio uploads were wrongly
+    // rejected when vision was disabled via the GUI).
+    if (!audioCapable) {
         showError('This model/server does not take audio natively. It will be transcribed instead.');
         return;
     }
