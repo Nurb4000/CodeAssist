@@ -3,19 +3,20 @@ from pathlib import Path
 import httpx
 
 from . import Tool, ToolResult
-from .security import validate_url
+from .security import _PinnedHTTPTransport, validate_url
 
 # Shared client reused across calls to avoid per-request TCP overhead.
 # Lazy-initialized on first use; connection pool handles concurrency.
 _fetch_client: httpx.AsyncClient | None = None
 
 
-def _redirect_hook(response: httpx.Response) -> None:
+async def _redirect_hook(response: httpx.Response) -> None:
     """Re-validate each redirect target to prevent DNS rebinding attacks.
 
     Between the initial URL validation and the actual HTTP fetch, the DNS entry
     could change (rebinding attack). A redirect to an internal IP after the
-    initial check would be accepted without this hook.
+    initial check would be accepted without this hook. httpx 0.28 awaits response
+    hooks, so this is async.
     """
     next_url = str(response.headers.get("location", ""))
     if next_url and not validate_url(next_url):
@@ -33,6 +34,10 @@ def _get_fetch_client() -> httpx.AsyncClient:
             timeout=30,
             follow_redirects=True,
             event_hooks={"response": [_redirect_hook]},
+            # Pin validated IPs at connect time so the pool's connect-time DNS
+            # lookup can't swap to a rebind (F1). The redirect hook still covers
+            # hop-by-hop redirects.
+            transport=_PinnedHTTPTransport(),
         )
     return _fetch_client
 
