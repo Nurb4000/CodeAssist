@@ -33,6 +33,7 @@ const ICONS = {
 let configData = {};
 let pendingImages = [];
 let pendingFiles = [];
+let pendingAudio = [];
 let visionCapable = false;
 let currentAgentName = null;
 
@@ -40,6 +41,10 @@ const MAX_IMAGES_PER_MESSAGE = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_FILES_PER_MESSAGE = 5;
 const MAX_FILE_BYTES = 256 * 1024;
+// Audio files (mp3/wav/ogg/flac/m4a) are large by nature -- songs are many MB.
+// Kept in sync with server.MAX_AUDIO_BYTES so the GUI and backend agree on the
+// cap before either rejects an upload.
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
 let currentSessionId = null;
 // Serializes session switches. switchSession() is synchronous: it captures the
@@ -329,6 +334,17 @@ function isTextFile(file) {
     return file.type.startsWith('text/') || TEXT_FILE_EXTS.has((file.name.split('.').pop() || '').toLowerCase());
 }
 
+const AUDIO_FILE_EXTS = new Set(['mp3','wav','ogg','flac','m4a','mp4']);
+
+function isAudioFile(file) {
+    // Classify audio by browser-reported mime, falling back to the extension.
+    // Mirrors isTextFile's Set.has() fix: never use `in` against a Set.
+    const mime = (file.type || '').toLowerCase();
+    if (mime.startsWith('audio/')) return true;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    return AUDIO_FILE_EXTS.has(ext);
+}
+
 function readFileAsText(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -387,6 +403,38 @@ function removePendingImage(index) {
     renderPendingImages();
 }
 
+async function addPendingAudio(file) {
+    // Only send audio to a native-audio model; otherwise it is transcribed.
+    if (!visionCapable) {
+        showError('This model/server does not take audio natively. It will be transcribed instead.');
+        return;
+    }
+    if (!isAudioFile(file)) {
+        const label = file.type || 'unknown';
+        showError(`Unsupported audio type '${label}'. Supported: mp3, wav, ogg, flac, m4a`);
+        return;
+    }
+    if (file.size > MAX_AUDIO_BYTES) {
+        showError(`Audio too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum is ${MAX_AUDIO_BYTES / (1024 * 1024)}MB`);
+        return;
+    }
+    if (pendingFiles.length + pendingImages.length + pendingAudio.length >= MAX_FILES_PER_MESSAGE) {
+        showError(`Too many files. Maximum is ${MAX_FILES_PER_MESSAGE} per message`);
+        return;
+    }
+    // Store the browser-reported mime so the backend classifies it correctly
+    // (a forged type cannot reclassify audio as something else). The data URL
+    // round-trips verbatim so a native audio model can consume it directly.
+    const dataUrl = await readFileAsDataURL(file);
+    pendingAudio.push({ name: file.name, data: dataUrl, type: file.type });
+    renderPendingImages();
+}
+
+function removePendingAudio(index) {
+    pendingAudio.splice(index, 1);
+    renderPendingImages();
+}
+
 function renderPendingImages() {
     attachPreviewEl.innerHTML = '';
     pendingFiles.forEach((file, i) => {
@@ -418,6 +466,21 @@ function renderPendingImages() {
         thumb.appendChild(img);
         thumb.appendChild(remove);
         attachPreviewEl.appendChild(thumb);
+    });
+    pendingAudio.forEach((att, i) => {
+        const chip = document.createElement('div');
+        chip.className = 'attach-chip';
+        const label = document.createElement('span');
+        label.textContent = att.name;
+        label.title = att.name;
+        const remove = document.createElement('button');
+        remove.className = 'attach-remove';
+        remove.innerHTML = '&times;';
+        remove.title = 'Remove audio';
+        remove.onclick = () => removePendingAudio(i);
+        chip.appendChild(label);
+        chip.appendChild(remove);
+        attachPreviewEl.appendChild(chip);
     });
 }
 
@@ -2232,6 +2295,7 @@ function sendMessage() {
 
     const images = pendingImages.slice();
     const files = pendingFiles.slice().map(f => ({ name: f.name, content: f.content, type: f.type }));
+    const audio = pendingAudio.slice();
     appendUserMessage(text, [...files.map(f => ({ attachment_type: 'text', file_name: f.name })), ...images]);
     clearPendingImages();
     hideContinueButton();
@@ -2240,7 +2304,7 @@ function sendMessage() {
     workBlockUserToggled = false;
     runActive = true;
     showProgress('Thinking...');
-    ws.send(JSON.stringify({ type: 'user_message', content: text, images, files }));
+    ws.send(JSON.stringify({ type: 'user_message', content: text, images, files, audio }));
 }
 
 function showError(msg) {

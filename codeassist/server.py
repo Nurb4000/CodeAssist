@@ -728,17 +728,28 @@ def _parse_audio_attachments(audio) -> tuple[list[dict], str | None]:
 
     attachments = []
     for i, item in enumerate(audio):
-        if not isinstance(item, str):
+        # Accept a raw base64 string (data URL or bare blob) or an object shaped
+        # like a text attachment ({name, data, type}); read 'data' from either.
+        if isinstance(item, dict):
+            b64 = item.get("data")
+            mime_hint = item.get("type")
+        elif isinstance(item, str):
+            b64 = item
+            mime_hint = None
+        else:
+            return [], "Invalid audio attachment."
+        if not isinstance(b64, str):
             return [], "Invalid audio attachment."
         # Accept both a data URL header and a raw base64 blob. When there is no
-        # header (raw b64), default to the most common audio mime -- the model
-        # consumes the base64 directly, so the type is informational rather than
-        # decisive.
-        if item.startswith("data:"):
-            header, _, b64 = item.partition(",")
+        # header (raw b64), fall back to the client-provided mime hint, then to
+        # the most common audio mime -- the model consumes the base64 directly,
+        # so the type is informational rather than decisive.
+        if b64.startswith("data:"):
+            header, _, b64 = b64.partition(",")
             mime = header[len("data:"):].split(";")[0].lower()
+        elif mime_hint:
+            mime = str(mime_hint).split(";", 1)[0].split(",", 1)[0].strip().lower()
         else:
-            b64 = item.split(";", 1)[0]
             mime = "audio/mpeg"
         if mime not in ALLOWED_AUDIO_MIME:
             label = mime or "unknown"
