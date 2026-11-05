@@ -22,11 +22,13 @@ async def api_config():
     from ..capabilities import (
         effective_context_window,
         get_backend_info,
+        model_audio_capable,
         model_vision_capable,
     )
     from ..server import get_config
     cfg = get_config()
     vision = await model_vision_capable(cfg)
+    audio = await model_audio_capable(cfg)
     backend = await get_backend_info(cfg)
     # Local vs external provider rule: auto-detect the in-use model for local /
     # self-hosted backends; hosted providers keep showing the admin-configured
@@ -49,6 +51,10 @@ async def api_config():
         "agent_name": cfg.agent.default_agent,
         "vision": cfg.llm.vision,
         "vision_capable": vision,
+        # Audio capability is surfaced so the GUI can gate audio uploads on it
+        # (not on vision -- see addPendingAudio). Mirrors vision_capable.
+        "audio": cfg.llm.audio,
+        "audio_capable": audio,
         "context_window": cfg.llm.context_window,
         "effective_context_window": window,
         "detected_context_window": backend.get("context_window"),
