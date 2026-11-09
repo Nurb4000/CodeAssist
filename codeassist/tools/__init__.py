@@ -234,6 +234,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from .glob import GlobTool
     from .grep import GrepTool
     from .http import HTTPTool
+    from .musicgen import MusicGenTool
     from .image_analyze import ImageAnalyzeTool
     from .package_manager import PackageManagerTool
     from .parse_json import ParseJsonTool
@@ -290,6 +291,9 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     # Register HTTP tool
     http_tool = HTTPTool()
     registry.register(http_tool)
+
+    # Register MusicGen tool (external ACE-Step synthesis server)
+    registry.register(MusicGenTool())
 
     # Register Database tool
     database_tool = DatabaseTool()

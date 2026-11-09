@@ -192,6 +192,17 @@ def _deep_merge(base: dict, override: Any) -> dict:
 
 
 @dataclass
+class MusicGenConfig:
+    # Host/port of the external musicgen (ACE-Step) synthesis server. Defaults
+    # target a local instance; set host to the remote device's LAN IP in
+    # practice (see findings/musicgen-codeassist-integration-Findings.md).
+    # Runtime tool args (host/port) override these values.
+    host: str = "localhost"
+    port: int = 3000
+    timeout_seconds: int = 900
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -212,6 +223,7 @@ class Config:
     # bare (enabled=False) and enforcement was dead (§7).
     cost: BudgetConfig = field(default_factory=BudgetConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
+    musicgen: MusicGenConfig = field(default_factory=MusicGenConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
     def refresh_workspace(self) -> None:
@@ -358,6 +370,11 @@ class Config:
             ),
             permissions=PermissionConfig(
                 trust_all=_validate_trust_all(raw.get("permissions", {})),
+            ),
+            musicgen=MusicGenConfig(
+                host=raw.get("musicgen", {}).get("host", "localhost"),
+                port=raw.get("musicgen", {}).get("port", 3000),
+                timeout_seconds=raw.get("musicgen", {}).get("timeout_seconds", 900),
             ),
             cost=BudgetConfig(
                 enabled=raw.get("cost", {}).get("enabled", False),
