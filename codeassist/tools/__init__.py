@@ -293,7 +293,9 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     registry.register(http_tool)
 
     # Register MusicGen tool (external ACE-Step synthesis server)
-    registry.register(MusicGenTool())
+    musicgen_tool = MusicGenTool()
+    musicgen_tool.workspace = workspace
+    registry.register(musicgen_tool)
 
     # Register Database tool
     database_tool = DatabaseTool()
