@@ -401,6 +401,9 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `docker` | Container management (build, run, stop, logs, compose) |
 | `image_analyze` | Analyze screenshots and mockups using vision-capable LLMs |
 | `lsp` | Query language servers for diagnostics, completions, and formatting |
+| `musicgen` | Generate audio via the external musicgen (ACE-Step) server; POSTs a prompt + structured payload to `/api/generate` and saves the prompt, JSON payload, and generated WAV(s) under `<workspace>/music_generations/` (supports batch with a new seed per item) |
+
+> The `musicgen` tool talks to an external synthesis server. Configure its address in `[musicgen]` (`host`/`port`/`timeout_seconds`) in `config.toml`; runtime `host`/`port` arguments override it. Default points at `localhost:3000`.
 
 ### Agent Types
 
