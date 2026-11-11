@@ -220,6 +220,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     from .advanced import QuestionTool, WebSearchTool
     from .apply_patch import ApplyPatchTool
+    from .browser import BrowserTool
     from .create_skill import CreateSkill
     from .create_tool import CreateTool
     from .database import DatabaseTool
@@ -349,6 +350,12 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     screenshot_tool = ScreenshotTool()
     screenshot_tool.workspace = workspace
     registry.register(screenshot_tool)
+
+    # Register Browser tool (persistent Playwright automation; interactive
+    # sibling of screenshot). State is bound per CodeAssist session in Agent.run.
+    browser_tool = BrowserTool()
+    browser_tool.workspace = workspace
+    registry.register(browser_tool)
 
     # Register Skill tool (if skill registry exists)
     if skill_registry:

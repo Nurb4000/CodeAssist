@@ -72,3 +72,21 @@ tool_result_max_tokens = 4000
 #   "session"  -> auto-allow all tool calls until the server restarts
 #   "always"   -> auto-allow all tool calls, persisted across restarts
 trust_all = "ask"
+
+[browser]
+# Playwright-backed browser automation. In Docker, localhost is the container
+# itself; a dev server on the host is reachable at host.docker.internal (see
+# docker-compose.yml extra_hosts). Cloud metadata/link-local addresses are never
+# allowed. Public URLs are off by default.
+enabled = true
+headless = true
+allow_local = true
+allow_public = false
+allowed_origins = []
+allowed_private_hosts = ["host.docker.internal"]
+navigation_timeout_seconds = 45
+action_timeout_seconds = 15
+idle_timeout_seconds = 900
+max_pages = 8
+viewport_width = 1280
+viewport_height = 800

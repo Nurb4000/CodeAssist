@@ -203,6 +203,84 @@ class MusicGenConfig:
 
 
 @dataclass
+class BrowserConfig:
+    """Policy and lifecycle settings for the Playwright-backed ``browser`` tool.
+
+    The browser is a stronger SSRF primitive than webfetch, so its URL policy is
+    intentionally separate from ``security.validate_url`` (see
+    ``tools/browser.py:validate_browser_url``). Loopback dev servers are the
+    primary target; LAN/private and public hosts require explicit opt-in.
+    """
+
+    enabled: bool = True
+    headless: bool = True
+    # Permit loopback (127.0.0.0/8, ::1, localhost) on any port.
+    allow_local: bool = True
+    # Permit arbitrary public hosts. Off by default: local development only.
+    allow_public: bool = False
+    # Exact origins that are always permitted, e.g. "http://host.docker.internal:5173".
+    allowed_origins: list[str] = field(default_factory=list)
+    # Hostnames (not ranges) permitted even when they are private/LAN, e.g.
+    # "host.docker.internal" or "devbox.lan".
+    allowed_private_hosts: list[str] = field(default_factory=list)
+    navigation_timeout_seconds: int = 45
+    action_timeout_seconds: int = 15
+    idle_timeout_seconds: int = 900
+    max_pages: int = 8
+    viewport_width: int = 1280
+    viewport_height: int = 800
+    # Optional system Chrome/Chromium path. Empty => Playwright-managed browser,
+    # falling back to a discovered system Chrome/Chromium.
+    executable_path: str = ""
+    # None => add --no-sandbox only when running as root (Docker). Set false to
+    # force the sandbox on, true to force it off.
+    no_sandbox: bool | None = None
+
+
+def _browser_config(raw: dict) -> BrowserConfig:
+    """Build ``BrowserConfig`` from a raw ``[browser]`` TOML table.
+
+    Unknown keys are ignored (TOML loaders are lenient elsewhere too), but list
+    and timeout values are normalized so a typo cannot silently disable the URL
+    policy or produce a zero timeout.
+    """
+
+    def _positive_int(name: str, default: int) -> int:
+        try:
+            value = int(raw.get(name, default))
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    def _string_list(name: str) -> list[str]:
+        value = raw.get(name, [])
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    no_sandbox = raw.get("no_sandbox")
+    if no_sandbox is not None:
+        no_sandbox = bool(no_sandbox)
+
+    return BrowserConfig(
+        enabled=bool(raw.get("enabled", True)),
+        headless=bool(raw.get("headless", True)),
+        allow_local=bool(raw.get("allow_local", True)),
+        allow_public=bool(raw.get("allow_public", False)),
+        allowed_origins=_string_list("allowed_origins"),
+        allowed_private_hosts=_string_list("allowed_private_hosts"),
+        navigation_timeout_seconds=_positive_int("navigation_timeout_seconds", 45),
+        action_timeout_seconds=_positive_int("action_timeout_seconds", 15),
+        idle_timeout_seconds=_positive_int("idle_timeout_seconds", 900),
+        max_pages=_positive_int("max_pages", 8),
+        viewport_width=_positive_int("viewport_width", 1280),
+        viewport_height=_positive_int("viewport_height", 800),
+        executable_path=str(raw.get("executable_path", "") or ""),
+        no_sandbox=no_sandbox,
+    )
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -224,6 +302,7 @@ class Config:
     cost: BudgetConfig = field(default_factory=BudgetConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
     musicgen: MusicGenConfig = field(default_factory=MusicGenConfig)
+    browser: BrowserConfig = field(default_factory=BrowserConfig)
     workspace: Path = field(default_factory=lambda: Path.cwd())
 
     def refresh_workspace(self) -> None:
@@ -376,6 +455,7 @@ class Config:
                 port=raw.get("musicgen", {}).get("port", 3000),
                 timeout_seconds=raw.get("musicgen", {}).get("timeout_seconds", 900),
             ),
+            browser=_browser_config(raw.get("browser", {})),
             cost=BudgetConfig(
                 enabled=raw.get("cost", {}).get("enabled", False),
                 max_tokens_per_session=raw.get("cost", {}).get("max_tokens_per_session", 0),

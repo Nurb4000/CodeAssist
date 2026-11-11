@@ -480,6 +480,8 @@ async def lifespan(app: FastAPI):
     yield
     if mcp_client:
         await mcp_client.close()
+    from .tools.browser import shutdown_browser
+    await shutdown_browser()
 
 
 app = FastAPI(title="CodeAssist", lifespan=lifespan)

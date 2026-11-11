@@ -400,10 +400,14 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `git_snapshot` | Auto-commit workspace state for safe experimentation |
 | `docker` | Container management (build, run, stop, logs, compose) |
 | `image_analyze` | Analyze screenshots and mockups using vision-capable LLMs |
+| `screenshot` | Capture a PNG of a web page (or the CodeAssist UI) via headless Chromium |
+| `browser` | Drive a persistent headless browser: open, snapshot accessible elements/refs, click, fill, type, select, check, wait, screenshot, evaluate, and read console/network errors. Loopback dev servers are allowed by default; state persists per session |
 | `lsp` | Query language servers for diagnostics, completions, and formatting |
 | `musicgen` | Generate audio via the external musicgen (ACE-Step) server; POSTs a prompt + structured payload to `/api/generate` and saves the prompt, JSON payload, and generated WAV(s) under `<workspace>/music_generations/` (supports batch with a new seed per item) |
 
 > The `musicgen` tool talks to an external synthesis server. Configure its address in `[musicgen]` (`host`/`port`/`timeout_seconds`) in `config.toml`; runtime `host`/`port` arguments override it. Default points at `localhost:3000`.
+>
+> The `browser` tool needs Playwright and a Chromium build. The Docker image installs both automatically. On a host: `pip install -e '.[browser]' && playwright install chromium` (a system Chrome/Chromium is also detected as a fallback). Configure loopback/LAN/public access in `[browser]`; `allow_local` defaults to true for `127.0.0.1`/`localhost` dev servers.
 
 ### Agent Types
 

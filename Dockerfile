@@ -17,10 +17,15 @@ RUN apt-get update && apt-get install -y \
         chromium \
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies (installed separately for layer caching)
+# Python dependencies (installed separately for layer caching). Playwright's
+# Chromium is installed into a dedicated layer so app-code rebuilds do not
+# re-download the browser; the browser tool reads PLAYWRIGHT_BROWSERS_PATH.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # Application code
 COPY . .

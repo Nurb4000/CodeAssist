@@ -27,6 +27,9 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.0.0",
 ]
+browser = [
+    "playwright>=1.49,<2",
+]
 
 [project.scripts]
 codeassist = "codeassist.cli:main"

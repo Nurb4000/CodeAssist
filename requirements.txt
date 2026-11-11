@@ -9,6 +9,9 @@ pygments>=2.18.0
 wcmatch>=8.5
 tiktoken>=0.7.0
 duckduckgo-search>=4.0
+# Browser automation tool (Playwright). The Docker image additionally installs
+# the matching Chromium build with `playwright install --with-deps chromium`.
+playwright>=1.49,<2
 
 # Testing
 pytest>=9.0.0

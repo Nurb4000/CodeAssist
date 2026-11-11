@@ -1340,10 +1340,13 @@ class Agent:
 
         with contextlib.ExitStack() as scope:
             # Bind the session for the whole turn first so any tool that reads it
-            # as a fallback (session, todo) sees this turn's id, not another
-            # connection's.
+            # as a fallback (session, todo, browser) sees this turn's id, not
+            # another connection's.
             if session_tool is not None and hasattr(session_tool, "active"):
                 scope.enter_context(session_tool.active(self.session.id))
+            browser_tool = self.tools.get("browser")
+            if browser_tool is not None and hasattr(browser_tool, "active"):
+                scope.enter_context(browser_tool.active(self.session.id))
             # Bind this turn's attachments so tools can operate on images/text the
             # user attached (they live in the message store, not on disk). A
             # ContextVar, like the session/todo binding above, because tool

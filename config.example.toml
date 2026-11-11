@@ -198,3 +198,27 @@ trust_all = "ask"
 # host = "10.0.1.27"
 # port = 3000
 # timeout_seconds = 900
+
+[browser]
+# Playwright-backed browser automation tool (open/snapshot/click/fill/...).
+# Loopback dev servers (127.0.0.1, localhost, ::1) are allowed by default on any
+# port. LAN/private hosts and public URLs require explicit opt-in below.
+enabled = true
+headless = true
+allow_local = true
+allow_public = false
+# Exact origins always allowed, e.g. "http://host.docker.internal:5173".
+allowed_origins = []
+# Hostnames allowed even when private/LAN, e.g. "host.docker.internal" or
+# "devbox.lan". Cloud metadata/link-local addresses are never allowed.
+allowed_private_hosts = []
+navigation_timeout_seconds = 45
+action_timeout_seconds = 15
+idle_timeout_seconds = 900
+max_pages = 8
+viewport_width = 1280
+viewport_height = 800
+# Optional system Chrome/Chromium path. Empty uses Playwright's browser, then a
+# discovered system Chrome/Chromium as fallback.
+# executable_path = ""
+# no_sandbox = false  # default: auto (enabled only when running as root)
