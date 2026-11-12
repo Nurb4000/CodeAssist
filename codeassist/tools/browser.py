@@ -204,7 +204,7 @@ _PRIVATE_SUFFIXES = (
 
 
 class BrowserUnavailable(RuntimeError):
-    """Playwright or a usable Chromium binary is not installed."""
+    """Playwright or the configured browser engine is not installed."""
 
 
 class BrowserActionError(RuntimeError):
@@ -499,24 +499,36 @@ class BrowserManager:
             else:
                 self._browser = None
 
+            engine = str(getattr(cfg, "engine", "chromium") or "chromium").lower()
+            if engine not in ("chromium", "firefox", "webkit"):
+                raise BrowserUnavailable(
+                    f"Unknown browser engine '{engine}'; "
+                    "expected chromium, firefox, or webkit"
+                )
+
             try:
                 from playwright.async_api import async_playwright
             except ImportError as exc:  # pragma: no cover - environment dependent
                 raise BrowserUnavailable(
                     "The 'browser' tool requires the Playwright Python package. "
                     "Install it with: pip install 'codeassist[browser]' "
-                    "(or pip install playwright) and run: playwright install chromium"
+                    "(or pip install playwright) and run: "
+                    f"playwright install {engine}"
                 ) from exc
 
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
 
-            args = ["--disable-dev-shm-usage", "--disable-gpu"]
-            no_sandbox = getattr(cfg, "no_sandbox", None)
-            if no_sandbox is None:
-                no_sandbox = hasattr(os, "geteuid") and os.geteuid() == 0
-            if no_sandbox:
-                args.append("--no-sandbox")
+            # Chromium-only flags. Firefox/WebKit reject most of these, and the
+            # sandbox handling below is Chromium-specific.
+            args: list[str] = []
+            if engine == "chromium":
+                args = ["--disable-dev-shm-usage", "--disable-gpu"]
+                no_sandbox = getattr(cfg, "no_sandbox", None)
+                if no_sandbox is None:
+                    no_sandbox = hasattr(os, "geteuid") and os.geteuid() == 0
+                if no_sandbox:
+                    args.append("--no-sandbox")
 
             headless = bool(getattr(cfg, "headless", True))
             executable = (
@@ -526,11 +538,18 @@ class BrowserManager:
             )
 
             try:
-                browser = await self._launch(executable, headless, args)
+                browser = await self._launch(engine, executable, headless, args)
             except Exception as exc:
                 if executable:
                     raise BrowserUnavailable(
-                        f"Could not launch browser at '{executable}': {exc}"
+                        f"Could not launch {engine} at '{executable}': {exc}"
+                    ) from exc
+                # Only Chromium has a system-browser fallback; Firefox/WebKit
+                # must come from Playwright's own install.
+                if engine != "chromium":
+                    raise BrowserUnavailable(
+                        f"Playwright could not launch its {engine} build. Run: "
+                        f"playwright install {engine} ({exc})"
                     ) from exc
                 system = _find_system_browser()
                 if not system:
@@ -540,25 +559,30 @@ class BrowserManager:
                         "(or set browser.executable_path)."
                     ) from exc
                 log.debug("Playwright browser missing; falling back to %s", system)
-                browser = await self._launch(system, headless, args)
+                browser = await self._launch(engine, system, headless, args)
 
             self._browser = browser
             if not headless and not self._headed_warned:
                 log.warning("browser.headless=false: a visible browser window will be used")
                 self._headed_warned = True
             log.debug(
-                "browser launched (version=%s, headless=%s, executable=%s)",
+                "browser launched (engine=%s, version=%s, headless=%s, executable=%s)",
+                engine,
                 browser.version,
                 headless,
                 executable or "playwright-managed",
             )
             return browser
 
-    async def _launch(self, executable: str, headless: bool, args: list[str]) -> Any:
-        kwargs: dict[str, Any] = {"headless": headless, "args": args}
+    async def _launch(
+        self, engine: str, executable: str, headless: bool, args: list[str]
+    ) -> Any:
+        kwargs: dict[str, Any] = {"headless": headless}
+        if args:
+            kwargs["args"] = args
         if executable:
             kwargs["executable_path"] = executable
-        return await self._playwright.chromium.launch(**kwargs)
+        return await getattr(self._playwright, engine).launch(**kwargs)
 
     async def session(self, session_id: str, cfg: Any) -> _SessionState:
         await self._cleanup_idle(cfg)

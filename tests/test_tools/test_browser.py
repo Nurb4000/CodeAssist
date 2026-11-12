@@ -1,8 +1,9 @@
 """Tests for the Playwright-backed browser tool.
 
 Unit tests cover the URL policy, schema and config parsing without a browser.
-The integration test drives a real headless Chromium against a local HTTP server
-and is skipped when neither Playwright's Chromium nor a system Chrome exists.
+The integration tests drive a real headless browser against a local HTTP server
+and are skipped per-engine when that Playwright engine (or a system Chrome for
+Chromium) is unavailable.
 """
 
 import os
@@ -148,6 +149,7 @@ def test_browser_config_parsing(tmp_path):
 [browser]
 enabled = true
 headless = false
+engine = "firefox"
 allow_local = false
 allow_public = true
 allowed_origins = ["http://host.docker.internal:5173"]
@@ -162,6 +164,7 @@ no_sandbox = false
     cfg = Config.load(cfg_path)
     assert cfg.browser.enabled is True
     assert cfg.browser.headless is False
+    assert cfg.browser.engine == "firefox"
     assert cfg.browser.allow_local is False
     assert cfg.browser.allow_public is True
     assert cfg.browser.allowed_origins == ["http://host.docker.internal:5173"]
@@ -177,8 +180,49 @@ def test_browser_config_defaults_and_normalization():
     cfg = _browser_config({"max_pages": 0, "action_timeout_seconds": "nope"})
     assert cfg.max_pages == 8
     assert cfg.action_timeout_seconds == 15
+    assert cfg.engine == "chromium"
     assert cfg.no_sandbox is None
     assert _browser_config({"allowed_origins": "not-a-list"}).allowed_origins == []
+
+
+def test_browser_config_engine_is_normalized_and_validated():
+    assert _browser_config({"engine": " WebKit "}).engine == "webkit"
+    with pytest.raises(ValueError, match="browser.engine"):
+        _browser_config({"engine": "gecko"})
+
+
+class _FakeEngine:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def launch(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(version="fake")
+
+
+class _FakePlaywright:
+    def __init__(self) -> None:
+        self.chromium = _FakeEngine()
+        self.firefox = _FakeEngine()
+        self.webkit = _FakeEngine()
+
+
+@pytest.mark.asyncio
+async def test_browser_manager_dispatches_to_configured_engine():
+    manager = BrowserManager()
+    fake = _FakePlaywright()
+    manager._playwright = fake
+
+    await manager._launch("firefox", "", True, [])
+    assert fake.firefox.calls == [{"headless": True}]
+    assert fake.chromium.calls == [] and fake.webkit.calls == []
+
+    await manager._launch("chromium", "/usr/bin/chrome", False, ["--no-sandbox"])
+    assert fake.chromium.calls == [
+        {"headless": False, "args": ["--no-sandbox"], "executable_path": "/usr/bin/chrome"}
+    ]
+    assert fake.firefox.calls == [{"headless": True}]
+    assert fake.webkit.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -230,25 +274,31 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def _playwright_has_browser() -> bool:
-    if browser_mod._find_system_browser():
+_ENGINE_GLOBS = {"chromium": "chromium*", "firefox": "firefox*", "webkit": "webkit*"}
+
+
+def _playwright_has_engine(engine: str) -> bool:
+    # Only Chromium has a system-browser fallback.
+    if engine == "chromium" and browser_mod._find_system_browser():
         return True
     roots = [
         os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
         str(Path.home() / ".cache" / "ms-playwright"),
     ]
     for root in roots:
-        if root and Path(root).exists() and any(Path(root).glob("chromium*")):
+        if root and Path(root).exists() and any(
+            Path(root).glob(_ENGINE_GLOBS[engine])
+        ):
             return True
     return False
 
 
-def _has_playwright() -> bool:
+def _has_playwright_package() -> bool:
     try:
         import playwright.async_api  # noqa: F401
     except ImportError:
         return False
-    return _playwright_has_browser()
+    return True
 
 
 def _ref(output: str, role: str, name: str) -> str:
@@ -257,15 +307,42 @@ def _ref(output: str, role: str, name: str) -> str:
     return match.group(1)
 
 
-@pytest.mark.skipif(not _has_playwright(), reason="Playwright/Chromium unavailable")
 @pytest.mark.asyncio
-async def test_browser_e2e_flow(tmp_path, monkeypatch):
+@pytest.mark.parametrize("engine", ["chromium", "firefox", "webkit"])
+async def test_browser_manager_launches_configured_engine(engine):
+    if not _has_playwright_package():
+        pytest.skip("Playwright package unavailable")
+    if not _playwright_has_engine(engine):
+        pytest.skip(f"Playwright {engine} unavailable")
+
+    manager = BrowserManager()
+    cfg = BrowserConfig(engine=engine)
+    try:
+        browser = await manager._ensure_browser(cfg)
+        assert browser.is_connected()
+        assert manager.running is True
+    finally:
+        await manager.close_all()
+
+    assert manager.running is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["chromium", "firefox", "webkit"])
+async def test_browser_e2e_flow(engine, tmp_path, monkeypatch):
+    if not _has_playwright_package():
+        pytest.skip("Playwright package unavailable")
+    if not _playwright_has_engine(engine):
+        pytest.skip(f"Playwright {engine} unavailable")
+
     manager = BrowserManager()
     tool = BrowserTool(manager=manager)
     tool.workspace = tmp_path
 
     cfg = SimpleNamespace(
-        browser=BrowserConfig(action_timeout_seconds=5, navigation_timeout_seconds=10),
+        browser=BrowserConfig(
+            engine=engine, action_timeout_seconds=5, navigation_timeout_seconds=10
+        ),
         workspace=tmp_path,
     )
     monkeypatch.setattr(browser_mod, "live_config", lambda: cfg)

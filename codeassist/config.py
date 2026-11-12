@@ -214,6 +214,10 @@ class BrowserConfig:
 
     enabled: bool = True
     headless: bool = True
+    # Playwright engine. Chromium is the default because it has the widest
+    # headless support and a system Chrome fallback; Firefox/WebKit must be
+    # installed with `playwright install <engine>`.
+    engine: str = "chromium"
     # Permit loopback (127.0.0.0/8, ::1, localhost) on any port.
     allow_local: bool = True
     # Permit arbitrary public hosts. Off by default: local development only.
@@ -237,12 +241,17 @@ class BrowserConfig:
     no_sandbox: bool | None = None
 
 
+_BROWSER_ENGINES = ("chromium", "firefox", "webkit")
+
+
 def _browser_config(raw: dict) -> BrowserConfig:
     """Build ``BrowserConfig`` from a raw ``[browser]`` TOML table.
 
     Unknown keys are ignored (TOML loaders are lenient elsewhere too), but list
     and timeout values are normalized so a typo cannot silently disable the URL
-    policy or produce a zero timeout.
+    policy or produce a zero timeout. ``engine`` is validated strictly: an
+    unknown value raises ``ValueError`` at load instead of silently selecting
+    Chromium.
     """
 
     def _positive_int(name: str, default: int) -> int:
@@ -262,9 +271,17 @@ def _browser_config(raw: dict) -> BrowserConfig:
     if no_sandbox is not None:
         no_sandbox = bool(no_sandbox)
 
+    engine = str(raw.get("engine", "chromium") or "chromium").strip().lower()
+    if engine not in _BROWSER_ENGINES:
+        raise ValueError(
+            f"Invalid browser.engine={raw.get('engine')!r} in config.toml; "
+            f"must be one of {_BROWSER_ENGINES}"
+        )
+
     return BrowserConfig(
         enabled=bool(raw.get("enabled", True)),
         headless=bool(raw.get("headless", True)),
+        engine=engine,
         allow_local=bool(raw.get("allow_local", True)),
         allow_public=bool(raw.get("allow_public", False)),
         allowed_origins=_string_list("allowed_origins"),

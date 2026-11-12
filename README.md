@@ -407,7 +407,7 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 
 > The `musicgen` tool talks to an external synthesis server. Configure its address in `[musicgen]` (`host`/`port`/`timeout_seconds`) in `config.toml`; runtime `host`/`port` arguments override it. Default points at `localhost:3000`.
 >
-> The `browser` tool needs Playwright and a Chromium build. The Docker image installs both automatically. On a host: `pip install -e '.[browser]' && playwright install chromium` (a system Chrome/Chromium is also detected as a fallback). Configure loopback/LAN/public access in `[browser]`; `allow_local` defaults to true for `127.0.0.1`/`localhost` dev servers.
+> The `browser` tool needs Playwright and at least one browser engine. The Docker image installs Chromium, Firefox, and WebKit automatically. On a host: `pip install -e '.[browser]' && playwright install chromium` (the default engine; a system Chrome/Chromium is also detected as a fallback). Select `engine = "chromium"`, `"firefox"`, or `"webkit"` in `[browser]` and install it with `playwright install <engine>`. Configure loopback/LAN/public access in `[browser]`; `allow_local` defaults to true for `127.0.0.1`/`localhost` dev servers.
 
 ### Agent Types
 

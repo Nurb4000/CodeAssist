@@ -1,6 +1,8 @@
 FROM python:3.13-slim AS base
 
-# System dependencies. Minimal, non-recommends set for the app itself.
+# System dependencies. Minimal, non-recommends set for the app itself. libatomic1
+# is required by the Playwright driver's bundled Node before `playwright install
+# --with-deps` can run (notably for Firefox/WebKit).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         gh \
@@ -8,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ripgrep \
         ca-certificates \
         curl \
+        libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium powers the screenshot tool (headless Chrome via CDP). Installed with
@@ -17,14 +20,15 @@ RUN apt-get update && apt-get install -y \
         chromium \
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies (installed separately for layer caching). Playwright's
-# Chromium is installed into a dedicated layer so app-code rebuilds do not
-# re-download the browser; the browser tool reads PLAYWRIGHT_BROWSERS_PATH.
+# Python dependencies (installed separately for layer caching). All three
+# Playwright engines are installed into a dedicated layer so app-code rebuilds
+# do not re-download them; the browser tool reads PLAYWRIGHT_BROWSERS_PATH and
+# selects one via [browser] engine = "chromium" | "firefox" | "webkit".
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m playwright install --with-deps chromium \
+    && python -m playwright install --with-deps chromium firefox webkit \
     && rm -rf /var/lib/apt/lists/*
 
 # Application code

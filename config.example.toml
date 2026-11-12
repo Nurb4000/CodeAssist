@@ -205,6 +205,9 @@ trust_all = "ask"
 # port. LAN/private hosts and public URLs require explicit opt-in below.
 enabled = true
 headless = true
+# Playwright engine: chromium, firefox, or webkit. Chromium is the default and
+# has a system Chrome fallback; install others with `playwright install <engine>`.
+engine = "chromium"
 allow_local = true
 allow_public = false
 # Exact origins always allowed, e.g. "http://host.docker.internal:5173".
