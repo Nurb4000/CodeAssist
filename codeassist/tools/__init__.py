@@ -449,6 +449,8 @@ def export_base_tools() -> dict:
             continue
         if py.name in excluded:
             continue
+        if not py.exists():
+            continue
         payload["data"]["base_tools"].append({
             "file": py.name,
             "source": py.read_text(encoding="utf-8"),

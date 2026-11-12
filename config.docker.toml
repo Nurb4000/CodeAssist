@@ -73,6 +73,16 @@ tool_result_max_tokens = 4000
 #   "always"   -> auto-allow all tool calls, persisted across restarts
 trust_all = "ask"
 
+[musicgen]
+# External ACE-Step synthesis server (musicgen) used by the musicgen tool.
+# NOTE: in Docker, config.toml is overwritten at boot by this baked-in file
+# (see docker-entrypoint.sh), so the [musicgen] section must live here — or be
+# set via Settings > Tools in the admin UI. Changing this file requires a
+# rebuild (the image COPYs it in at build time).
+host = "10.0.1.27"
+port = 3000
+timeout_seconds = 9000
+
 [browser]
 # Playwright-backed browser automation. In Docker, localhost is the container
 # itself; a dev server on the host is reachable at host.docker.internal (see

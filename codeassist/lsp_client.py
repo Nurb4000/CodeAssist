@@ -742,6 +742,8 @@ class LSPTool(Tool):
     async def _handle_format(
         self, path: Path, language: str | None = None, **_kw,
     ) -> ToolResult:
+        if not path.exists():
+            return ToolResult(output=f"Error: File '{path}' does not exist", error=True)
         text = path.read_text(encoding="utf-8")
         formatted = await self.lsp_client.format_document(path, text)
         if formatted:

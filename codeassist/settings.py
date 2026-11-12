@@ -95,6 +95,20 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
      "label": "Tool output tokens in context", "description": "Max tokens of each tool result kept in the conversation. Lower keeps the model focused (less wandering); raise for large outputs you need to see fully.",
      "group": "Tools", "restart_required": False},
 
+    # --- MusicGen (external ACE-Step synthesis server) ---
+    # These map directly onto MusicGenConfig (cfg.musicgen.*), so no TOML path
+    # override is needed. Applied live and persisted in the DB (survives a data
+    # reset / container recreation); the musicgen tool reads them at call time.
+    {"key": "musicgen.host", "section": "musicgen", "field": "host", "type": "str",
+     "label": "MusicGen host", "description": "Host of the external ACE-Step musicgen server (blank = localhost).",
+     "group": "MusicGen", "restart_required": False},
+    {"key": "musicgen.port", "section": "musicgen", "field": "port", "type": "int",
+     "label": "MusicGen port", "description": "Port of the external ACE-Step musicgen server (default 3000).",
+     "group": "MusicGen", "restart_required": False},
+    {"key": "musicgen.timeout_seconds", "section": "musicgen", "field": "timeout_seconds", "type": "int",
+     "label": "MusicGen timeout (s)", "description": "Seconds to wait for a musicgen generation before aborting (default 900).",
+     "group": "MusicGen", "restart_required": False},
+
     # --- Cost / session budget ---
     # Governs the §15.100 budget rollover: at warning_threshold_pct of
     # max_tokens_per_session the turn rolls into a summarized checkpoint with a
@@ -161,6 +175,7 @@ _CONSTRAINTS: dict[str, dict] = {
     "tools.shell_timeout": {"min": 1},
     "tools.max_output_chars": {"min": 1},
     "tools.tool_output_max_tokens": {"min": 1},
+    "musicgen.port": {"min": 1, "max": 65535},
 }
 for _spec in SETTINGS_CATALOG:
     _spec.update(_CONSTRAINTS.get(_spec["key"], {}))

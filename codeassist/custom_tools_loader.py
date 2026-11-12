@@ -146,6 +146,8 @@ class CustomToolRegistry:
         for tool_file in sorted(self.tools_dir.glob("*.py")):
             if tool_file.name.startswith("_"):
                 continue
+            if not tool_file.exists():
+                continue
             try:
                 tree = ast.parse(tool_file.read_text(encoding="utf-8"),
                                  filename=str(tool_file))
@@ -226,6 +228,8 @@ class CustomToolRegistry:
             return manifest
         for tool_file in sorted(self.tools_dir.glob("*.py")):
             if tool_file.name.startswith("_"):
+                continue
+            if not tool_file.exists():
                 continue
             source = tool_file.read_text(encoding="utf-8")
             try:

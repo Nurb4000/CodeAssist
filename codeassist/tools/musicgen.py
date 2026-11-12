@@ -17,6 +17,21 @@ log = logging.getLogger(__name__)
 MUSICGEN_REFERENCE = "https://github.com/Nurb4000/acestep.cpp-simple-GUI"
 
 
+def log_musicgen_target(host: str | None = None, port: int | None = None) -> str:
+    """Resolve and log the configured musicgen host/port from [musicgen].
+
+    Runtime overrides take precedence over config.toml; falls back to
+    localhost:3000 when the section is absent. Returns the ``host:port`` string.
+    """
+    cfg = live_config()
+    mg = getattr(cfg, "musicgen", None)
+    resolved_host = host or (mg.host if mg else "localhost")
+    resolved_port = int(port) if port is not None else (mg.port if mg else 3000)
+    target = f"{resolved_host}:{resolved_port}"
+    log.info("musicgen target: %s", target)
+    return target
+
+
 def _new_seed() -> int:
     """A fresh 32-bit-ish seed so batch variants differ (item 9)."""
     return int.from_bytes(uuid.uuid4().bytes[:8], "big") % (2 ** 31 - 1) + 1

@@ -256,6 +256,9 @@ class SkillRegistry:
 
     def _parse_skill_file(self, path: Path) -> Skill | None:
         """Parse a skill markdown file with frontmatter and validate it."""
+        if not path.exists():
+            log.warning("Skill file not found: %s", path)
+            return None
         try:
             content = path.read_text(encoding="utf-8")
         except Exception as e:  # noqa: BLE001

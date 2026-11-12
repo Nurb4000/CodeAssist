@@ -3,7 +3,7 @@ import logging
 import re
 from pathlib import Path
 
-from . import Tool, ToolResult
+from . import Tool, ToolResult, tool_error
 from .security import WorkspaceViolationError, validate_path
 
 log = logging.getLogger(__name__)
@@ -58,6 +58,9 @@ class DocumentationTool(Tool):
         try:
             path = Path(file_path).resolve()
             validate_path(path, self.workspace)
+
+            if not path.exists():
+                return tool_error(f"file not found: {file_path}")
 
             if action == "generate":
                 return await self._generate(path, format, include_private, include_dunders, output_path)
@@ -140,6 +143,9 @@ class DocumentationTool(Tool):
 
     def _extract_python(self, path: Path, include_private: bool, include_dunders: bool) -> list[dict]:
         """Extract documentation from Python file."""
+        if not path.exists():
+            log.error("Documentation source not found: %s", path)
+            return []
         try:
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source)
@@ -236,6 +242,9 @@ class DocumentationTool(Tool):
 
     def _extract_javascript(self, path: Path, include_private: bool, include_dunders: bool) -> list[dict]:
         """Extract documentation from JavaScript/TypeScript file."""
+        if not path.exists():
+            log.error("Documentation source not found: %s", path)
+            return []
         source = path.read_text(encoding="utf-8")
         docs = []
 
