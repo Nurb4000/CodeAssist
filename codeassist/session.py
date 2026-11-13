@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import uuid
@@ -8,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
+
+log = logging.getLogger(__name__)
 
 
 def _resolve_db_path() -> Path:
@@ -47,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class _DBPool:
@@ -238,6 +241,10 @@ async def init_db():
         if current_version < 14:
             await _add_v14_tables(db)
             current_version = 14
+
+        if current_version < 15:
+            await _add_v15_tables(db)
+            current_version = 15
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -702,6 +709,43 @@ async def _add_v14_tables(db):
     await db.commit()
 
 
+async def _add_v15_tables(db):
+    """Track where each session title came from.
+
+    The sidebar hides the generated session summary once the user has given a
+    session its own name, so the UI needs to tell a manual rename apart from a
+    timestamp, the first-message heuristic, and a model-written title.
+    """
+    cursor = await db.execute("PRAGMA table_info(sessions)")
+    rows = await cursor.fetchall()
+    if any(r["name"] == "title_source" for r in rows):
+        return
+    await db.execute("ALTER TABLE sessions ADD COLUMN title_source TEXT")
+    await db.commit()
+
+    # Backfill existing sessions so manually named ones hide their summary
+    # immediately after the upgrade. A name that matches the heuristic title of
+    # the first user message is auto-derived; anything else was set by hand.
+    cursor = await db.execute(
+        "SELECT s.id, s.name, "
+        "(SELECT m.content FROM messages m WHERE m.session_id = s.id "
+        "AND m.role = 'user' ORDER BY m.created_at, m.rowid LIMIT 1) AS first_user "
+        "FROM sessions s WHERE s.title_source IS NULL"
+    )
+    for row in await cursor.fetchall():
+        name = row["name"]
+        if is_default_title(name):
+            source = TITLE_SOURCE_DEFAULT
+        elif name == derive_title(row["first_user"]):
+            source = TITLE_SOURCE_AUTO
+        else:
+            source = TITLE_SOURCE_MANUAL
+        await db.execute(
+            "UPDATE sessions SET title_source = ? WHERE id = ?", (source, row["id"])
+        )
+    await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -788,6 +832,34 @@ async def _ensure_fts5_tables():
 DEFAULT_TITLE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 AUTO_TITLE_MAX = 60
 
+# Where a session's current name came from. New sessions start as "default" (a
+# timestamp). The first user message moves that to "auto" and a model-written
+# title moves it to "ai". A user rename sets "manual": that pins the name and
+# tells the sidebar it can drop the generated summary beneath it.
+TITLE_SOURCE_DEFAULT = "default"
+TITLE_SOURCE_AUTO = "auto"
+TITLE_SOURCE_AI = "ai"
+TITLE_SOURCE_MANUAL = "manual"
+
+# Sessions with a title request currently in flight, so queued turns finishing
+# back to back do not fire duplicate model calls for the same name.
+_TITLING_SESSIONS: set[str] = set()
+
+_AI_TITLE_PROMPT = """Write a short, specific title for this coding-assistant session.
+
+Rules:
+- 3-6 words
+- plain text only: no quotes, no markdown, no trailing punctuation
+- describe the task or topic, not the conversation
+
+User's first message:
+{user_message}
+
+Assistant's opening reply (for context):
+{assistant_reply}
+
+Respond with the title only."""
+
 
 def is_default_title(name: str | None) -> bool:
     """True when name is exactly a Session.create() default timestamp. These
@@ -813,6 +885,66 @@ def derive_title(content: str | None) -> str | None:
     return f"{cut}…"
 
 
+def normalize_ai_title(raw: str | None) -> str | None:
+    """Turn a model's raw title response into a clean session name.
+
+    Models routinely wrap titles in quotes/backticks, prefix them with
+    "Title:", or add a sentence of explanation after the first line. Keep only
+    the first meaningful line and strip that decoration.
+    """
+    if not raw:
+        return None
+    # Drop a surrounding markdown fence if the model wrapped the title in one.
+    text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", raw.strip())
+    text = re.sub(r"\s*```$", "", text)
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    line = re.sub(r"^(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
+    line = re.sub(
+        r"^[\s*_`]*(?:session\s+)?title[\s*_`]*[:：]\s*",
+        "",
+        line,
+        flags=re.IGNORECASE,
+    )
+    line = line.strip(" \t\r\n\"'`*_")
+    title = derive_title(line)
+    if not title:
+        return None
+    title = title.rstrip(" .,:;!?-")
+    return title or None
+
+
+async def generate_ai_title(llm, user_message: str | None,
+                            assistant_reply: str | None = None) -> str | None:
+    """Ask ``llm`` for a concise title, returning None on any failure.
+
+    Title generation is best-effort: it must never fail a turn or block the
+    UI, so provider errors are logged and swallowed. The call is capped to a
+    small token budget so even models with a large configured response size
+    cannot spend significant time here.
+    """
+    if llm is None or not user_message:
+        return None
+    prompt = _AI_TITLE_PROMPT.format(
+        user_message=user_message[:2000],
+        assistant_reply=(assistant_reply or "(no reply yet)")[:1000],
+    )
+    try:
+        from .llm import TextDelta
+
+        chunks: list[str] = []
+        async for event in llm.stream(
+            [{"role": "user", "content": prompt}],
+            max_tokens=48,
+            temperature=0.3,
+        ):
+            if isinstance(event, TextDelta):
+                chunks.append(event.content)
+        return normalize_ai_title("".join(chunks))
+    except Exception as e:  # noqa: BLE001 - titling is optional polish
+        log.info("Could not generate AI session title: %s", e)
+        return None
+
+
 class Session:
     def __init__(self, session_id: str):
         self.id = session_id
@@ -823,10 +955,11 @@ class Session:
         now = datetime.now(UTC)
         now_str = now.isoformat()
         default_name = name or now.strftime("%Y-%m-%d %H:%M")
+        title_source = TITLE_SOURCE_MANUAL if name else TITLE_SOURCE_DEFAULT
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO sessions (id, name, parent_id, fork_point, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (sid, default_name, parent_id, fork_point, now_str, now_str),
+                "INSERT INTO sessions (id, name, title_source, parent_id, fork_point, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sid, default_name, title_source, parent_id, fork_point, now_str, now_str),
             )
             await db.commit()
         return cls(sid)
@@ -872,9 +1005,9 @@ class Session:
         now_str = now.isoformat()
         async with get_db() as db:
             await db.execute(
-                "INSERT OR IGNORE INTO sessions (id, name, parent_id, fork_point, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (session_id, now.strftime("%Y-%m-%d %H:%M"), None, None, now_str, now_str),
+                "INSERT OR IGNORE INTO sessions (id, name, title_source, parent_id, fork_point, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, now.strftime("%Y-%m-%d %H:%M"), TITLE_SOURCE_DEFAULT, None, None, now_str, now_str),
             )
             await db.commit()
         return cls(session_id)
@@ -954,9 +1087,15 @@ class Session:
     async def _maybe_auto_title(self, db, content: str | None):
         """Replace an untouched timestamp title with one derived from the first
         user message, so new sessions get readable names automatically."""
-        cursor = await db.execute("SELECT name FROM sessions WHERE id = ?", (self.id,))
+        cursor = await db.execute(
+            "SELECT name, title_source FROM sessions WHERE id = ?", (self.id,)
+        )
         row = await cursor.fetchone()
-        if not row or not is_default_title(row[0]):
+        if not row or not is_default_title(row["name"]):
+            return
+        # A manual rename may coincidentally look like a timestamp; the source
+        # column is authoritative, with NULL covering pre-v15 sessions.
+        if row["title_source"] not in (None, TITLE_SOURCE_DEFAULT):
             return
         cursor = await db.execute(
             "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'",
@@ -969,9 +1108,87 @@ class Session:
         if not title:
             return
         await db.execute(
-            "UPDATE sessions SET name = ? WHERE id = ?",
-            (title, self.id),
+            "UPDATE sessions SET name = ?, title_source = ? WHERE id = ?",
+            (title, TITLE_SOURCE_AUTO, self.id),
         )
+
+    async def maybe_generate_ai_title(self, llm) -> str | None:
+        """Replace the heuristic first-message title with a model-written one.
+
+        Only a timestamp or heuristic title is eligible: a manual rename or an
+        existing AI title is never overwritten. The final UPDATE is conditional
+        on the name we read still being current, so a rename that lands while
+        the model call is in flight wins. Concurrent calls for the same session
+        are collapsed, which matters when queued turns finish back to back.
+        Returns the new title, or None when nothing changed.
+        """
+        if self.id in _TITLING_SESSIONS:
+            return None
+        _TITLING_SESSIONS.add(self.id)
+        try:
+            return await self._generate_ai_title_locked(llm)
+        finally:
+            _TITLING_SESSIONS.discard(self.id)
+
+    async def _generate_ai_title_locked(self, llm) -> str | None:
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT name, title_source FROM sessions WHERE id = ?", (self.id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            original_name = row["name"]
+            source = row["title_source"]
+            if source is None:
+                # Sessions that predate title_source: only the timestamp
+                # placeholder is definitely safe to retitle.
+                if not is_default_title(original_name):
+                    return None
+                source = TITLE_SOURCE_DEFAULT
+            if source not in (TITLE_SOURCE_DEFAULT, TITLE_SOURCE_AUTO):
+                return None
+
+            cursor = await db.execute(
+                "SELECT role, content FROM messages WHERE session_id = ? "
+                "AND role IN ('user', 'assistant') ORDER BY created_at, rowid",
+                (self.id,),
+            )
+            messages = await cursor.fetchall()
+
+        user_messages = [m for m in messages if m["role"] == "user" and m["content"]]
+        assistant_messages = [
+            m for m in messages if m["role"] == "assistant" and m["content"]
+        ]
+        # Wait for an assistant reply: it gives the model enough context to
+        # describe the task instead of just repeating the user's prompt.
+        if not user_messages or not assistant_messages:
+            return None
+
+        title = await generate_ai_title(
+            llm, user_messages[0]["content"], assistant_messages[0]["content"]
+        )
+        if not title:
+            return None
+
+        async with get_db() as db:
+            cursor = await db.execute(
+                "UPDATE sessions SET name = ?, title_source = ? "
+                "WHERE id = ? AND name = ? "
+                "AND (title_source IS NULL OR title_source IN (?, ?))",
+                (
+                    title,
+                    TITLE_SOURCE_AI,
+                    self.id,
+                    original_name,
+                    TITLE_SOURCE_DEFAULT,
+                    TITLE_SOURCE_AUTO,
+                ),
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                return None
+        return title
 
     async def get_messages(self) -> list[dict]:
         async with get_db() as db:
@@ -1091,7 +1308,10 @@ class Session:
     async def rename(self, name: str):
         now = datetime.now(UTC).isoformat()
         async with get_db() as db:
-            await db.execute("UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?", (name, now, self.id))
+            await db.execute(
+                "UPDATE sessions SET name = ?, title_source = ?, updated_at = ? WHERE id = ?",
+                (name, TITLE_SOURCE_MANUAL, now, self.id),
+            )
             await db.commit()
 
     async def delete(self):

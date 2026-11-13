@@ -686,6 +686,108 @@ class TestAutoTitle:
         assert title.endswith('…')
         assert not title.endswith(' ')
 
+    @pytest.mark.asyncio
+    async def test_title_source_tracks_default_and_explicit_names(self):
+        await init_db()
+        auto = await Session.create()
+        named = await Session.create(name="My Project")
+        rows = {s["id"]: s for s in await Session.list_all()}
+        assert rows[auto.id]["title_source"] == "default"
+        assert rows[named.id]["title_source"] == "manual"
+
+    @pytest.mark.asyncio
+    async def test_manual_timestamp_like_name_is_not_auto_retitled(self):
+        await init_db()
+        s = await Session.create(name="2026-01-02 03:04")
+        await s.add_message("user", "Refactor auth module")
+        row = next(s_ for s_ in await Session.list_all() if s_["id"] == s.id)
+        assert row["name"] == "2026-01-02 03:04"
+        assert row["title_source"] == "manual"
+
+    @pytest.mark.asyncio
+    async def test_manual_rename_marks_title_source_manual(self):
+        await init_db()
+        s = await Session.create()
+        await s.add_message("user", "Refactor auth module")
+        await s.rename("Custom Name")
+        row = next(s_ for s_ in await Session.list_all() if s_["id"] == s.id)
+        assert row["name"] == "Custom Name"
+        assert row["title_source"] == "manual"
+
+    @pytest.mark.asyncio
+    async def test_ai_title_replaces_heuristic_title_after_first_turn(self):
+        await init_db()
+        s = await Session.create()
+        await s.add_message("user", "Fix the login timeout bug")
+        await s.add_message("assistant", "I'll inspect the auth handler and its retry logic.")
+
+        llm = _FakeTitleLLM('"Login timeout fix"')
+        title = await s.maybe_generate_ai_title(llm)
+
+        assert title == "Login timeout fix"
+        row = next(s_ for s_ in await Session.list_all() if s_["id"] == s.id)
+        assert row["name"] == "Login timeout fix"
+        assert row["title_source"] == "ai"
+        assert llm.calls
+
+    @pytest.mark.asyncio
+    async def test_ai_title_does_not_overwrite_manual_name(self):
+        await init_db()
+        s = await Session.create(name="My Project")
+        await s.add_message("user", "Help me build a CLI")
+        await s.add_message("assistant", "Sure, let's start with the command parser.")
+
+        llm = _FakeTitleLLM("CLI builder")
+        assert await s.maybe_generate_ai_title(llm) is None
+        row = next(s_ for s_ in await Session.list_all() if s_["id"] == s.id)
+        assert row["name"] == "My Project"
+        assert row["title_source"] == "manual"
+        assert llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_ai_title_waits_for_a_reply(self):
+        await init_db()
+        s = await Session.create()
+        await s.add_message("user", "First request")
+
+        llm = _FakeTitleLLM("First request title")
+        assert await s.maybe_generate_ai_title(llm) is None
+        assert llm.calls == []
+
+    @pytest.mark.asyncio
+    async def test_ai_title_is_generated_once(self):
+        await init_db()
+        s = await Session.create()
+        await s.add_message("user", "Fix login timeout")
+        await s.add_message("assistant", "Looking at the auth retry path.")
+
+        first = _FakeTitleLLM("Login timeout fix")
+        assert await s.maybe_generate_ai_title(first) == "Login timeout fix"
+
+        second = _FakeTitleLLM("A different title")
+        assert await s.maybe_generate_ai_title(second) is None
+        assert second.calls == []
+        row = next(s_ for s_ in await Session.list_all() if s_["id"] == s.id)
+        assert row["name"] == "Login timeout fix"
+
+    def test_normalize_ai_title_strips_model_decoration(self):
+        from codeassist.session import normalize_ai_title
+        assert normalize_ai_title('Title: "Fix auth bug."') == "Fix auth bug"
+        assert normalize_ai_title("```\n**Fix auth bug**\n```") == "Fix auth bug"
+        assert normalize_ai_title("1. Session title: Fix auth bug") == "Fix auth bug"
+        assert normalize_ai_title("   \n  ") is None
+
+
+class _FakeTitleLLM:
+    def __init__(self, response: str):
+        self.response = response
+        self.calls = []
+
+    async def stream(self, messages, *, max_tokens=None, temperature=None):
+        from codeassist.llm import TextDelta
+        self.calls.append(messages)
+        yield TextDelta(content=self.response)
+
 
 class TestPinning:
     """Pin/unpin sessions and pinned-first ordering."""
@@ -862,6 +964,45 @@ class TestPinning:
         legacy = next(m for m in msgs if m["id"] == legacy_id)
         assert legacy["content"] == "old answer without reasoning"
         assert legacy["reasoning_content"] is None
+
+    @pytest.mark.asyncio
+    async def test_schema_v14_to_v15_migration_backfills_title_source(self):
+        """Upgrading a pre-v15 database classifies existing session names so
+        manually named sessions hide their generated summary, while timestamp
+        and heuristic titles stay eligible for retitling."""
+        await init_db()
+        # No messages: the name stays the timestamp placeholder.
+        default_s = await Session.create()
+        auto_s = await Session.create()
+        await auto_s.add_message("user", "Investigate the login timeout bug")
+        manual_s = await Session.create(name="My Project")
+        await manual_s.add_message("user", "Help me build a CLI")
+        empty_manual_s = await Session.create(name="Empty notes")
+
+        from codeassist import session as smod
+
+        # Simulate a v14 database: no title_source column at all, so the
+        # migration takes the ALTER TABLE path and backfills every row.
+        async with smod.get_db() as db:
+            await db.execute("ALTER TABLE sessions DROP COLUMN title_source")
+            await db.execute(
+                "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', '14')"
+            )
+            await db.commit()
+
+        await init_db()
+
+        rows = {s["id"]: s for s in await Session.list_all()}
+        assert rows[default_s.id]["title_source"] == "default"
+        assert rows[auto_s.id]["title_source"] == "auto"
+        assert rows[manual_s.id]["title_source"] == "manual"
+        assert rows[empty_manual_s.id]["title_source"] == "manual"
+
+        async with smod.get_db() as db:
+            cur = await db.execute(
+                "SELECT value FROM schema_info WHERE key = 'version'"
+            )
+            assert (await cur.fetchone())[0] == str(smod.SCHEMA_VERSION)
 
 
 @pytest.mark.asyncio

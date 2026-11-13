@@ -555,7 +555,7 @@ async function loadSessions() {
         row.appendChild(delBtn);
         div.appendChild(row);
 
-        if (s.summary) {
+        if (s.summary && s.title_source !== 'manual') {
             const sum = document.createElement('div');
             sum.className = 'session-summary';
             sum.textContent = s.summary.length > 120 ? s.summary.slice(0, 120) + '…' : s.summary;
@@ -600,6 +600,12 @@ function startRename(sessionId, nameSpan) {
                 // Optimistic update: show the new name before the round-trip.
                 nameSpan.textContent = newName;
                 await api('PATCH', `/api/sessions/${sessionId}`, { name: newName });
+                // The server records this as a manual title, which hides the
+                // generated summary beneath the name. Do it here too rather
+                // than reloading the whole sidebar.
+                const item = nameSpan.closest('.session-item');
+                const summary = item && item.querySelector('.session-summary');
+                if (summary) summary.remove();
             } catch (e) {
                 // Roll back and surface the failure: the sidebar name must match
                 // what the server accepted. Before this the rejected PATCH threw
@@ -2166,6 +2172,15 @@ function connectWS() {
             runWasCancelled = false;
             scrollToBottom();
             setBusy(false);
+        } else if (data.type === 'session_title') {
+            // The server names the session with the model shortly after the
+            // first turn. Update the sidebar in place; no transcript reload.
+            const item = Array.from(sessionListEl.querySelectorAll('.session-item'))
+                .find((el) => el.dataset.id === data.session_id);
+            if (item) {
+                const nameEl = item.querySelector('.session-name');
+                if (nameEl) nameEl.textContent = data.title;
+            }
         } else if (data.type === 'cancelled') {
             hideProgress();
             endRun();

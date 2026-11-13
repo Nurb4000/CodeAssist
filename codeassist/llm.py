@@ -282,12 +282,15 @@ class LLMClient:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
         kwargs = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature if temperature is None else temperature,
+            "max_tokens": self.config.max_tokens if max_tokens is None else max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }

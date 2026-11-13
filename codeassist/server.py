@@ -1021,6 +1021,25 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     "type": event.type,
                     **event.data,
                 })
+            if ended:
+                # Titles are polish, never part of the turn: generate in the
+                # background so "done" is not delayed by a second model call.
+                async def _refresh_title():
+                    try:
+                        title = await session.maybe_generate_ai_title(runner.llm)
+                        if title:
+                            await broadcast_message(
+                                {
+                                    "type": "session_title",
+                                    "session_id": session_id,
+                                    "title": title,
+                                },
+                                session_id=session_id,
+                            )
+                    except Exception:
+                        log.debug("AI session title generation failed", exc_info=True)
+
+                asyncio.create_task(_refresh_title())
         except asyncio.CancelledError:
             # Stop was pressed. The agent persists any partial output on its way
             # out; we only report it. Swallowing the cancellation ends the task
