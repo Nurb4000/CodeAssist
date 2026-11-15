@@ -172,8 +172,10 @@ The sidebar footer shows two live readouts:
   workspace path. Example: `gpt-4o (128,000) | /workspace/MyProject`. If the model was
   **auto-detected** from a local backend, a `• auto` badge is appended and hovering shows the
   detected model id.
-- **Token line** — cumulative tokens used in the current session plus a live rate (e.g. `· 12.4
-  tok/s`) while the model is streaming.
+- **Generation rate** — while the model is streaming, an estimated speed is shown (e.g.
+  `Generating · ~42 tok/s`). It is derived from the streamed output (roughly one token per four
+  characters), so it works even on local/self-hosted backends that do not report token usage. It
+  disappears as soon as the completion finishes, so nothing stale lingers between turns.
 
 ## Import and export sessions
 

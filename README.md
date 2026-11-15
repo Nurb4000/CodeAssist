@@ -254,6 +254,7 @@ see [`docs/user-guide.md`](docs/user-guide.md).
 - **Fetch web content** for documentation lookup
 - **Track tasks** across multi-step work
 - **Continue** conversations with context
+- **Live generation rate** in the sidebar footer while the model streams (estimated, so it works on local backends that report no token usage)
 - **Knowledge base** - persistent learning across sessions with semantic search
 
 ## Knowledge Base

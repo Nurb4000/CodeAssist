@@ -63,8 +63,15 @@ let isStreaming = false;
 // server's `cancelled` reply gets back.
 let stopRequested = false;
 
-// Running token accounting for the sidebar footer (cumulative + rate).
-let tokenState = { total: 0, lastTotal: 0, lastTime: null };
+// Live generation-rate readout for the sidebar footer. Estimated from the
+// streamed output (chars / 4) rather than provider usage: local/self-hosted
+// backends omit usage, which left the old cumulative counter stuck at
+// "0 tokens" and suppressed the rate entirely. Shown only while a completion is
+// streaming; hidden on finish and when the run ends.
+const CHARS_PER_TOKEN = 4;
+const STREAM_RATE_MIN_ELAPSED_MS = 300;
+const STREAM_RATE_PAINT_CHARS = 16;
+let streamRate = { start: 0, chars: 0, sincePaint: 0 };
 let reconnectTimer = null;
 // Keepalive for the idle WebSocket. uvicorn itself never closes an idle socket,
 // but intermediate proxies/browsers sometimes do; a periodic ping keeps the
@@ -1336,6 +1343,7 @@ function flushPendingToMainFlow() {
 }
 
 function handleProse(content) {
+    noteStreamDelta(content);
     const isNewTurn = ranTools;
     ranTools = false;
     if (isNewTurn) closeActiveStep();   // previous turn used tools → new step
@@ -1346,6 +1354,7 @@ function handleProse(content) {
 }
 
 function onReasoning(content) {
+    noteStreamDelta(content);
     const unit = pendingUnit || startPendingUnit();
     const rEl = unit.querySelector('.thinking-content');
     if (rEl) {
@@ -2192,19 +2201,11 @@ function connectWS() {
             onReasoning(data.content);
             maybeScrollToBottom();
         } else if (data.type === 'finish') {
+            // The completion that was streaming has ended, so the live rate is
+            // stale; hide it. The next step's deltas re-show it.
+            clearStreamRate();
             const usage = data.usage;
             if (usage) {
-                const turn = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
-                const now = performance.now();
-                if (tokenState.lastTime != null) {
-                    const dtSec = (now - tokenState.lastTime) / 1000;
-                    tokenState.rate = dtSec > 0 ? turn / dtSec : 0;
-                } else {
-                    tokenState.rate = 0;
-                }
-                tokenState.total += turn;
-                tokenState.lastTime = now;
-                updateTokenInfo(tokenState.total, tokenState.rate);
                 // Provider-reported prompt tokens are exact. Prefer them over
                 // the local estimate for the context gauge, especially right
                 // after compaction when the estimate can be stale.
@@ -2404,6 +2405,7 @@ function setBusy(busy) {
         stopBtn.classList.add('busy');
         document.body.classList.add('is-working');
     } else {
+        clearStreamRate();
         stopRequested = false;
         sendBtn.disabled = false;
         sendBtn.style.display = 'flex';
@@ -2524,7 +2526,24 @@ function updateContextUsageFromPrompt(promptTokens) {
     updateContextUsage(tokens, Math.round(pct * 10) / 10, severity);
 }
 
-function updateTokenInfo(totalTokens, rate) {
+// Feed one streamed delta (prose or reasoning) into the live rate estimate.
+// Token count is estimated as chars / 4; repaints are throttled by volume so a
+// fast stream does not thrash layout.
+function noteStreamDelta(text) {
+    const len = text ? text.length : 0;
+    if (!len) return;
+    const now = performance.now();
+    if (!streamRate.start) streamRate.start = now;
+    streamRate.chars += len;
+    streamRate.sincePaint += len;
+    if (streamRate.sincePaint < STREAM_RATE_PAINT_CHARS) return;
+    streamRate.sincePaint = 0;
+    const elapsedMs = Math.max(now - streamRate.start, STREAM_RATE_MIN_ELAPSED_MS);
+    const tokensPerSec = (streamRate.chars / CHARS_PER_TOKEN) / (elapsedMs / 1000);
+    paintStreamRate(tokensPerSec);
+}
+
+function paintStreamRate(tokensPerSec) {
     let el = document.getElementById('token-info');
     if (!el) {
         el = document.createElement('div');
@@ -2532,10 +2551,21 @@ function updateTokenInfo(totalTokens, rate) {
         el.style.fontSize = '11px';
         el.style.color = 'var(--text-muted)';
         el.style.marginTop = '2px';
-        document.querySelector('.sidebar-footer').appendChild(el);
+        const footer = document.querySelector('.sidebar-footer');
+        if (footer) footer.appendChild(el);
     }
-    const rateText = rate > 0 ? ` · ${rate.toFixed(1)} tok/s` : '';
-    el.textContent = `${totalTokens.toLocaleString()} tokens${rateText}`;
+    el.textContent = `Generating · ~${tokensPerSec.toFixed(1)} tok/s`;
+    el.style.display = 'block';
+}
+
+// Hide the rate line and start a fresh burst for the next completion.
+function clearStreamRate() {
+    streamRate = { start: 0, chars: 0, sincePaint: 0 };
+    const el = document.getElementById('token-info');
+    if (el) {
+        el.textContent = '';
+        el.style.display = 'none';
+    }
 }
 
 // Plan panel: the list box shows about this many task rows and scrolls for the
