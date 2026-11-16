@@ -1,6 +1,6 @@
 'use strict';
 // Session naming UX:
-//  - a manually named session hides the generated summary beneath its title
+//  - the sidebar renders titles only, never the generated session summary
 //  - a model-written title pushed by the server updates the sidebar in place
 
 const test = require('node:test');
@@ -27,16 +27,19 @@ const FIXTURES = {
   '/api/todos': [],
 };
 
-test('the summary is hidden only for manually titled sessions', async () => {
+test('the sidebar no longer renders generated session summaries', async () => {
   const env = await boot({ fixtures: FIXTURES });
   const items = env.document.querySelectorAll('.session-item');
 
-  assert.ok(items[0].querySelector('.session-summary'), 'auto-titled row keeps its summary');
-  assert.strictEqual(
-    items[1].querySelector('.session-summary'),
-    null,
-    'manually titled row drops the summary',
-  );
+  assert.strictEqual(items.length, 2);
+  for (const item of items) {
+    assert.strictEqual(
+      item.querySelector('.session-summary'),
+      null,
+      'no session row should show a summary',
+    );
+  }
+  assert.ok(!env.document.body.textContent.includes('Session started with:'));
 });
 
 test('a server-pushed AI title updates the sidebar in place', async () => {
@@ -46,8 +49,9 @@ test('a server-pushed AI title updates the sidebar in place', async () => {
   env.feed({ type: 'session_title', session_id: 'session-1', title: 'Login timeout fix' });
 
   assert.strictEqual(name.textContent, 'Login timeout fix');
-  assert.ok(
+  assert.strictEqual(
     name.closest('.session-item').querySelector('.session-summary'),
-    'an AI title is not manual, so its summary stays',
+    null,
+    'AI-titled rows stay summary-free too',
   );
 });

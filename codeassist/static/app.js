@@ -562,13 +562,6 @@ async function loadSessions() {
         row.appendChild(delBtn);
         div.appendChild(row);
 
-        if (s.summary && s.title_source !== 'manual') {
-            const sum = document.createElement('div');
-            sum.className = 'session-summary';
-            sum.textContent = s.summary.length > 120 ? s.summary.slice(0, 120) + '…' : s.summary;
-            sum.title = s.summary;
-            div.appendChild(sum);
-        }
         sessionListEl.appendChild(div);
     }
 }
@@ -607,12 +600,6 @@ function startRename(sessionId, nameSpan) {
                 // Optimistic update: show the new name before the round-trip.
                 nameSpan.textContent = newName;
                 await api('PATCH', `/api/sessions/${sessionId}`, { name: newName });
-                // The server records this as a manual title, which hides the
-                // generated summary beneath the name. Do it here too rather
-                // than reloading the whole sidebar.
-                const item = nameSpan.closest('.session-item');
-                const summary = item && item.querySelector('.session-summary');
-                if (summary) summary.remove();
             } catch (e) {
                 // Roll back and surface the failure: the sidebar name must match
                 // what the server accepted. Before this the rejected PATCH threw
