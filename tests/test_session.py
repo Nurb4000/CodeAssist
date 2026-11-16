@@ -729,6 +729,8 @@ class TestAutoTitle:
         assert row["name"] == "Login timeout fix"
         assert row["title_source"] == "ai"
         assert llm.calls
+        # Reasoning models need room to think before producing the title.
+        assert llm.max_tokens >= 512
 
     @pytest.mark.asyncio
     async def test_ai_title_does_not_overwrite_manual_name(self):
@@ -782,10 +784,14 @@ class _FakeTitleLLM:
     def __init__(self, response: str):
         self.response = response
         self.calls = []
+        self.max_tokens = None
+        self.temperature = None
 
     async def stream(self, messages, *, max_tokens=None, temperature=None):
         from codeassist.llm import TextDelta
         self.calls.append(messages)
+        self.max_tokens = max_tokens
+        self.temperature = temperature
         yield TextDelta(content=self.response)
 
 

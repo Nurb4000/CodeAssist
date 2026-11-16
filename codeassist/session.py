@@ -851,6 +851,7 @@ Rules:
 - 3-6 words
 - plain text only: no quotes, no markdown, no trailing punctuation
 - describe the task or topic, not the conversation
+- do not explain your reasoning or repeat these instructions
 
 User's first message:
 {user_message}
@@ -858,7 +859,13 @@ User's first message:
 Assistant's opening reply (for context):
 {assistant_reply}
 
-Respond with the title only."""
+Respond with the title only, on a single line."""
+
+# Reasoning models spend completion tokens thinking before they emit any text.
+# 48 tokens was enough for plain chat models but left thinking models with
+# finish_reason="length" and an empty answer, so titles never appeared. This
+# budget covers the reasoning plus a short title while still bounding the call.
+AI_TITLE_MAX_TOKENS = 1024
 
 
 def is_default_title(name: str | None) -> bool:
@@ -918,9 +925,10 @@ async def generate_ai_title(llm, user_message: str | None,
     """Ask ``llm`` for a concise title, returning None on any failure.
 
     Title generation is best-effort: it must never fail a turn or block the
-    UI, so provider errors are logged and swallowed. The call is capped to a
-    small token budget so even models with a large configured response size
-    cannot spend significant time here.
+    UI, so provider errors are logged and swallowed. The call is capped so even
+    models with a large configured response size cannot spend significant time
+    here, but the cap is high enough for reasoning models to finish thinking
+    and still emit the title.
     """
     if llm is None or not user_message:
         return None
@@ -934,11 +942,13 @@ async def generate_ai_title(llm, user_message: str | None,
         chunks: list[str] = []
         async for event in llm.stream(
             [{"role": "user", "content": prompt}],
-            max_tokens=48,
+            max_tokens=AI_TITLE_MAX_TOKENS,
             temperature=0.3,
         ):
             if isinstance(event, TextDelta):
                 chunks.append(event.content)
+        if not chunks:
+            log.debug("AI title model returned no text (reasoning-only response)")
         return normalize_ai_title("".join(chunks))
     except Exception as e:  # noqa: BLE001 - titling is optional polish
         log.info("Could not generate AI session title: %s", e)
