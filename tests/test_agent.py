@@ -2930,3 +2930,105 @@ class TestWorkingContextPersists:
         post = [e for e in events if e.type == "context" and e.data["tokens"] < 1000]
         assert post, "a post-compaction context event must report the reduced size"
         assert post[0].data["tokens"] < compacted[0].data["tokens_before"]
+
+
+class TestCompactingEvent:
+    """The summarizer request is silent, so the client needs a start notice.
+
+    Without `compacting`, the UI sits on "Thinking..." from the pre-compaction
+    `context` event until `compacted` finally arrives -- which looks exactly like
+    a hang when the summarizer is a slow local model.
+    """
+
+    @pytest.mark.asyncio
+    async def test_announced_before_the_llm_summarizer_request(
+        self, agent, mock_session,
+    ):
+        history = [
+            {"role": "user", "content": "q0", "id": "u0"},
+            {"role": "assistant", "content": "a0", "id": "a0"},
+            {"role": "user", "content": "q1", "id": "u1"},
+            {"role": "assistant", "content": "a1", "id": "a1"},
+            {"role": "user", "content": "q2", "id": "u2"},
+            {"role": "assistant", "content": "a2", "id": "a2"},
+        ]
+        mock_session.get_messages = AsyncMock(return_value=history)
+        mock_session.add_message = AsyncMock(return_value="placeholder")
+        agent.config.compaction.enabled = True
+        agent.config.compaction.mode = "llm"
+        agent.config.compaction.threshold_pct = 50
+        agent.config.agent.max_iterations = 1
+
+        order: list[str] = []
+
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("Done.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = fake_stream
+
+        checks = {"n": 0}
+
+        def fake_ctx(messages, *args, **kwargs):
+            checks["n"] += 1
+            needs = checks["n"] == 1  # only the pre-compaction check trips
+            return {
+                "needs_compaction": needs,
+                "total_tokens": 900 if needs else 100,
+                "usage_pct": 90.0 if needs else 10.0,
+                "severity": "warning" if needs else "ok",
+                "usable_window": 1000,
+            }
+
+        async def fake_compact(messages, **kwargs):
+            order.append("summarizer-called")
+            return (
+                [messages[0], {"role": "user", "content": "[Previous conversation summary]\nDone."}],
+                "summary",
+            )
+
+        with patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=2000)), \
+             patch("codeassist.agent.check_context_limit", side_effect=fake_ctx), \
+             patch("codeassist.agent.llm_compact_messages", new=fake_compact):
+            async for event in agent.run("go"):
+                order.append(f"event:{event.type}")
+
+        compacting_at = order.index("event:compacting")
+        assert compacting_at < order.index("summarizer-called"), (
+            "the client must be told before the silent request is awaited"
+        )
+        assert order.index("summarizer-called") < order.index("event:compacted")
+        assert "event:context" in order[:compacting_at], "the gauge update still precedes it"
+        assert "event:done" in order, "the turn still completes"
+
+    @pytest.mark.asyncio
+    async def test_budget_rollover_also_announces_its_summary(self, agent, mock_session):
+        mock_session.get_messages = AsyncMock(return_value=[
+            {"role": "user", "content": "q", "id": "u1"},
+            {"role": "assistant", "content": "a", "id": "a1"},
+        ])
+        mock_session.add_message = AsyncMock(return_value="placeholder")
+        agent.config.agent.max_iterations = 1
+        agent.config.cost.enabled = True
+        agent.config.cost.warning_threshold_pct = 50
+        agent.cost_tracker.budget_percent = MagicMock(return_value=90.0)
+
+        async def fake_stream(messages, openai_tools):
+            yield TextDelta("Done.")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+        agent.llm.stream = fake_stream
+        agent._perform_rollover = AsyncMock(return_value="summary")
+
+        with patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=2000)), \
+             patch("codeassist.agent.check_context_limit", return_value={
+                 "needs_compaction": False, "total_tokens": 10,
+                 "usage_pct": 1.0, "severity": "ok", "usable_window": 1000,
+             }):
+            events = [event async for event in agent.run("go")]
+
+        types = [e.type for e in events]
+        assert types.index("session_collapse") < types.index("compacting") < types.index("session_rolled")
+        rollover_notice = next(e for e in events if e.type == "compacting")
+        assert rollover_notice.data["reason"] == "budget_rollover"
+        agent._perform_rollover.assert_awaited_once()

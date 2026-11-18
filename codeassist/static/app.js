@@ -2071,6 +2071,11 @@ function connectWS() {
             return;
         }
 
+        // Any other frame means the pause is over. Clearing here rather than
+        // waiting for `compacted` matters: that event is deliberately not sent
+        // when summarization made nothing smaller, so the indicator would stick.
+        if (data.type !== 'compacting') clearCompacting();
+
         if (data.type === 'active_agent') {
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
         } else if (data.type === 'agent_switched') {
@@ -2092,6 +2097,8 @@ function connectWS() {
             onToolResult(data.id, data.output);
         } else if (data.type === 'context') {
             updateContextUsage(data.tokens, data.usage_pct, data.severity, data);
+        } else if (data.type === 'compacting') {
+            showCompacting(data);
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
         } else if (data.type === 'session_collapse') {
@@ -2212,6 +2219,7 @@ function connectWS() {
         // the end of the run: tear the turn down and re-enable the UI.
         if (isStreaming) {
             hideProgress();
+            clearCompacting();
             endRun();
             if (ensureMainMessage().querySelector('.message-content')) {
                 ensureMainMessage().querySelector('.message-content').innerHTML +=
@@ -2324,6 +2332,54 @@ function showError(msg) {
     div.innerHTML = `<div class="message-role" style="color:var(--red)">System</div><div class="message-content"><p style="color:var(--red)">${escapeHtml(msg)}</p></div>`;
     messagesEl.appendChild(div);
     scrollToBottom();
+}
+
+// The summarizer request is silent: no text deltas, no tool calls, and not even
+// an assistant placeholder yet. Two small signs cover that pause -- the busy
+// spinner changes its label, and a persistent line appears by the context gauge
+// in the sidebar footer (where the user is already looking for token usage).
+// Remember the label we replaced so clearing restores it exactly, whatever the
+// server chose to put in `message`.
+let compactingPreviousLabel = null;
+
+function showCompacting(data) {
+    const label = data.message || 'Compacting context...';
+    if (progressEl) {
+        // A second compacting frame can arrive with no progress frame in between
+        // (budget rollover immediately followed by window compaction). Keep the
+        // label from the first one so clearing restores the real pre-pause text.
+        if (compactingPreviousLabel === null) {
+            const textEl = progressEl.querySelector('.status-text');
+            compactingPreviousLabel = (textEl && textEl.textContent) || 'Thinking...';
+        }
+        updateProgress(label);
+    } else {
+        if (compactingPreviousLabel === null) compactingPreviousLabel = 'Thinking...';
+        showProgress(label);
+    }
+    let el = document.getElementById('compacting-status');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'compacting-status';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        const footer = document.querySelector('.sidebar-footer');
+        if (footer) footer.appendChild(el);
+    }
+    el.innerHTML = `${escapeHtml(label)}<span class="progress-dots"></span>`;
+    el.style.fontSize = '11px';
+    el.style.marginTop = '4px';
+}
+
+function clearCompacting() {
+    const el = document.getElementById('compacting-status');
+    if (el) el.remove();
+    // Restore the spinner's prior label if it is still up; the next progress
+    // event (text_delta, tool_call, ...) replaces it with something better.
+    if (progressEl && compactingPreviousLabel !== null) {
+        updateProgress(compactingPreviousLabel);
+    }
+    compactingPreviousLabel = null;
 }
 
 // Compaction is a status note, not an error, and it belongs with the turn that

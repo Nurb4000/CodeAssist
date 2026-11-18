@@ -1619,6 +1619,14 @@ class Agent:
                     yield AgentEvent("session_collapse", {
                         "message": "Reaching the session budget -- summarizing to keep going.",
                     })
+                    # The rollover issues its own LLM summary request before any
+                    # tokens of this turn stream. Announce the pause so the UI can
+                    # relabel its spinner instead of leaving it on "Thinking...".
+                    yield AgentEvent("compacting", {
+                        "message": "Summarizing the session budget checkpoint...",
+                        "reason": "budget_rollover",
+                        "mode": "llm",
+                    })
                     rolled = await self._perform_rollover()
                     if rolled:
                         yield AgentEvent("session_rolled", {
@@ -1719,6 +1727,18 @@ class Agent:
                             # head against its window minus the 4096-token summary
                             # output and a safety margin.
                             summarizer_input = max(1024, context_window - 4096 - 512)
+                            # This is the long, silent step: a summary request to
+                            # the LLM that yields no stream events to the UI. Tell
+                            # the client *before* awaiting it, otherwise the turn
+                            # looks hung between the pre-compaction `context` and
+                            # the eventual `compacted` event.
+                            yield AgentEvent("compacting", {
+                                "message": "Context window is full — compacting before continuing",
+                                "reason": "context_window",
+                                "mode": "llm",
+                                "tokens": tokens_before,
+                                "usage_pct": ctx["usage_pct"],
+                            })
                             messages, self._compaction_summary = await llm_compact_messages(
                                 messages,
                                 tail_turns=compaction_cfg.tail_turns,
@@ -1999,6 +2019,12 @@ class Agent:
                     tokens_before = count_tokens(
                         base, self.config.llm.model, tool_schemas=tool_schemas,
                     )
+                    yield AgentEvent("compacting", {
+                        "message": "Provider rejected the request — compacting and retrying",
+                        "reason": "forced",
+                        "mode": "forced",
+                        "tokens": tokens_before,
+                    })
                     base = _force_compact(
                         base,
                         tool_schemas=tool_schemas,

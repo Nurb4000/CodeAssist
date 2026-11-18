@@ -988,6 +988,17 @@ body {
     margin: 0;
 }
 
+/* Persistent sidebar line while the compaction summary request is in flight.
+   Reuses the existing progress ellipsis animation; inline sizing is set in JS
+   like the neighbouring #context-usage / #budget-usage lines. */
+#compacting-status {
+    color: var(--yellow);
+}
+#compacting-status .progress-dots::after {
+    content: '';
+    animation: dots 1.5s steps(4, end) infinite;
+}
+
 /* Thinking indicator */
 .thinking {
     color: var(--text-muted);

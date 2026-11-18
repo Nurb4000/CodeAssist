@@ -71,6 +71,12 @@ The password is NEVER accepted via query parameters (security best practice).
 // request actually shrank (tokens is the size of the next request).
 {"type": "context", "tokens": 12345, "usage_pct": 85.2, "severity": "warning"}
 
+// Compaction started. Emitted immediately before the (silent, potentially slow)
+// summarizer request so clients can show an in-progress indicator. `reason` is
+// "context_window", "budget_rollover" or "forced". Not every "compacting" is
+// followed by "compacted": the latter only fires when the request shrank.
+{"type": "compacting", "message": "...", "reason": "context_window", "mode": "llm", "tokens": 12345, "usage_pct": 85.2}
+
 // Context was compacted. tokens_before/tokens_after make the reduction
 // visible; clients must not assume this fires when nothing shrank.
 {"type": "compacted", "message": "...", "mode": "llm", "count": 1, "tokens_before": 12345, "tokens_after": 4567}
