@@ -82,9 +82,9 @@ class TestInstructionDiscovery:
         """Test combining multiple instruction sources."""
         discoverer = InstructionDiscoverer()
         discoverer.sources = [
-            type('Source', (), {'loaded': True, 'filename': 'AGENTS.md', 'content': '# A'})(),
-            type('Source', (), {'loaded': True, 'filename': 'CLAUDE.md', 'content': '# B'})(),
-            type('Source', (), {'loaded': False, 'filename': 'missing.md', 'content': ''})(),
+            type('Source', (), {'loaded': True, 'is_url': False, 'filename': 'AGENTS.md', 'content': '# A'})(),
+            type('Source', (), {'loaded': True, 'is_url': False, 'filename': 'CLAUDE.md', 'content': '# B'})(),
+            type('Source', (), {'loaded': False, 'is_url': False, 'filename': 'missing.md', 'content': ''})(),
         ]
         combined = discoverer.get_combined_content()
         assert "# A" in combined
@@ -95,7 +95,7 @@ class TestInstructionDiscovery:
         """Test formatted instruction block for system prompt."""
         discoverer = InstructionDiscoverer()
         discoverer.sources = [
-            type('Source', (), {'loaded': True, 'filename': 'AGENTS.md', 'content': '# Rules'})(),
+            type('Source', (), {'loaded': True, 'is_url': False, 'filename': 'AGENTS.md', 'content': '# Rules'})(),
         ]
         block = discoverer.get_instruction_block()
         assert "## Project Instructions" in block

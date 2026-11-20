@@ -16,6 +16,28 @@ log = logging.getLogger(__name__)
 MAX_FILES_SCANNED = 10_000
 
 
+def _is_excluded(path_obj: Path, directory: Path, exclude: str) -> bool:
+    """Whether *path_obj* matches the user's ``exclude`` pattern.
+
+    ``Path.match`` compares only the final component, so a bare directory name
+    (``node_modules``) would not exclude the files inside it. Match every parent
+    path relative to the search root too, which also covers slash patterns such
+    as ``tests/*``.
+    """
+    try:
+        relative = path_obj.relative_to(directory)
+    except ValueError:
+        relative = path_obj
+    parts = relative.parts
+    for i in range(1, len(parts) + 1):
+        try:
+            if Path(*parts[:i]).match(exclude):
+                return True
+        except Exception:  # noqa: BLE001, S112
+            continue
+    return False
+
+
 class GrepTool(Tool):
     name = "grep"
     description = "Search file contents using regex. Uses ripgrep if available, otherwise Python regex."
@@ -59,18 +81,33 @@ class GrepTool(Tool):
         cmd = ["rg", "-n", "--max-count", "1000"]
         if context > 0:
             cmd.extend(["-C", str(context)])
-        # `--` guards against a pattern that begins with `-` (e.g. "-foo") being
-        # parsed as an rg flag rather than a literal search pattern.
-        cmd.extend(["--", pattern, str(directory)])
+        # Glob filters must come BEFORE `--`: everything after the separator is a
+        # positional path, so a trailing `-g`/`!pattern` would be searched for as
+        # a file name instead of filtering results (and rg would report errors on
+        # stderr that the old code never looked at).
         if include:
             cmd.extend(["-g", include])
         if exclude:
             cmd.extend(["-g", f"!{exclude}"])
+        # `--` guards against a pattern that begins with `-` (e.g. "-foo") being
+        # parsed as an rg flag rather than a literal search pattern.
+        cmd.extend(["--", pattern, str(directory)])
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
         except subprocess.TimeoutExpired:
             return ToolResult(output="Error: search timed out", error=True)
+
+        # rg exits 1 for "no matches" and >=2 for real errors (bad regex, bad
+        # path, ...). Checking stdout alone used to turn those errors into a
+        # misleading "No matches found" with error=False.
+        returncode = getattr(result, "returncode", 0)
+        if returncode and returncode > 1:
+            detail = (getattr(result, "stderr", "") or "").strip()
+            return ToolResult(
+                output=f"Error: {detail or f'rg exited with code {returncode}'}",
+                error=True,
+            )
 
         output = result.stdout.strip()
         if not output:
@@ -89,10 +126,14 @@ class GrepTool(Tool):
             return ToolResult(output=f"Error: invalid regex: {e}", error=True)
 
         matches = []
-        search_pattern = include or "*.*"
+        # "*.*" skipped files without a dot (Makefile, LICENSE, ...); "*" also
+        # matches those. Directories are filtered out by is_file() below.
+        search_pattern = include or "*"
         scanned = 0
 
         for path_obj in directory.rglob(search_pattern):
+            if not path_obj.is_file():
+                continue
             scanned += 1
             if scanned > MAX_FILES_SCANNED:
                 # Stop traversing before reading the whole tree; surface a clear
@@ -100,20 +141,14 @@ class GrepTool(Tool):
                 return ToolResult(
                     output=(
                         f"Search stopped after scanning {MAX_FILES_SCANNED} files "
-                        f"({len(matches)} match(es) found so far). Narrow your "
-                        f"--include/--exclude, raise --max-depth, or use ripgrep "
-                        f"for larger trees."
+                        f"({len(matches)} match(es) found so far). Narrow the "
+                        f"search with include/exclude, or use ripgrep for "
+                        f"larger trees."
                     ),
                     error=True,
                 )
-            if not path_obj.is_file():
+            if exclude and _is_excluded(path_obj, directory, exclude):
                 continue
-            if exclude:
-                try:
-                    if path_obj.match(exclude):
-                        continue
-                except Exception:  # noqa: BLE001, S110
-                    pass
             try:
                 text = path_obj.read_text(errors="replace")
             except OSError:

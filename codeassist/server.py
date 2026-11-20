@@ -963,12 +963,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             if slot_busy:
                 return
             try:
-                content, images, files = pending.get_nowait()
+                # The receive loop enqueues (content, images, files, audio);
+                # unpacking only three used to crash this callback, leaving the
+                # queued turn unstarted (and clients waiting forever).
+                content, images, files, audio = pending.get_nowait()
             except asyncio.QueueEmpty:
                 return
             slot_busy = True
-            attachments = images + files
-            from codeassist.capabilities import model_vision_capable
+            from codeassist.capabilities import (
+                model_audio_capable,
+                model_vision_capable,
+            )
+            from codeassist.transcribe import transcribe_audio
             started = False
             try:
                 if images and not await model_vision_capable(cfg):
@@ -977,6 +983,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     # reject to).
                     slot_busy = False
                     return
+                # Mirror the direct-message path: audio goes to native-audio
+                # models, otherwise its transcript is inlined as a text file.
+                if audio and not await model_audio_capable(cfg):
+                    transcript = await transcribe_audio(audio, cfg)
+                    if transcript is None:
+                        slot_busy = False
+                        return
+                    files.append({
+                        "name": "_transcribed_audio",
+                        "content": transcript,
+                        "type": "text/plain",
+                    })
+                    audio = []
+                attachments = images + files + audio
                 active_name = await resolve_agent_name()
                 if active_name != current_agent_name:
                     current_agent_name = active_name

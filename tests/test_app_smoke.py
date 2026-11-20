@@ -6,6 +6,34 @@ and where route handlers referenced pre-refactor module names (`from session
 import ...`) that would 500 at request time.
 """
 
+import queue
+import threading
+
+
+def _receive_json(ws, timeout: float = 10.0):
+    """Read one WS frame with a hard timeout.
+
+    ``TestClient.websocket_connect`` has no receive timeout: a missing frame
+    used to block forever and hang the entire suite. Read on a daemon thread so
+    a stalled server produces a normal assertion failure instead.
+    """
+    box: queue.Queue = queue.Queue(maxsize=1)
+
+    def _read():
+        try:
+            box.put(("ok", ws.receive_json()))
+        except Exception as exc:  # noqa: BLE001 -- re-raised on the main thread
+            box.put(("err", exc))
+
+    threading.Thread(target=_read, daemon=True).start()
+    try:
+        kind, value = box.get(timeout=timeout)
+    except queue.Empty:
+        raise AssertionError(f"no websocket message within {timeout}s") from None
+    if kind == "err":
+        raise value
+    return value
+
 
 REST_ENDPOINTS_GET = [
     "/health",
@@ -100,10 +128,10 @@ def test_unauthenticated_websocket_is_not_registered(live_client):
     leaking the entry into _active_websockets forever."""
     import uuid
 
-    from codeassist import server
-
     import pytest
     from fastapi import WebSocketDisconnect
+
+    from codeassist import server
 
     cfg = server.get_config()
     before = len(server._active_websockets)
@@ -149,10 +177,10 @@ def test_websocket_auth_fails_closed_on_non_ascii_password(live_client):
     this, but the WS path did not."""
     import uuid
 
-    from codeassist import server
-
     import pytest
     from fastapi import WebSocketDisconnect
+
+    from codeassist import server
 
     cfg = server.get_config()
     before = len(server._active_websockets)
@@ -437,7 +465,7 @@ def test_ws_unknown_session_id_creates_session_not_orphan(live_client, monkeypat
 def _drain_until(ws, msg_type, max_reads=50):
     """Read WS messages until one of the wanted type appears. Returns that dict."""
     for _ in range(max_reads):
-        data = ws.receive_json()
+        data = _receive_json(ws)
         if data.get("type") == msg_type:
             return data
     raise AssertionError(f"never received a '{msg_type}' WS message")
@@ -922,7 +950,7 @@ def test_user_message_queued_not_rejected_while_turn_running(live_client, monkey
         # that a second message sent now will be queued, not run immediately.
         started = False
         for _ in range(100):
-            data = ws.receive_json()
+            data = _receive_json(ws)
             if data.get("type") == "text_delta" and data.get("content") == "turn:first":
                 started = True
                 break
@@ -935,7 +963,7 @@ def test_user_message_queued_not_rejected_while_turn_running(live_client, monkey
         # first turn finishes -- so turn 2's output eventually arrives.
         second_ran = False
         for _ in range(100):
-            data = ws.receive_json()
+            data = _receive_json(ws)
             if data.get("type") == "error" and data.get("message") == "Agent is busy, please wait":
                 assert False, f"queued message was rejected instead of queued: {data}"
             if data.get("type") == "text_delta" and data.get("content") == "turn:second":
