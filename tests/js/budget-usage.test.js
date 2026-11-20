@@ -21,7 +21,7 @@ const CONFIG = {
   detected_context_window: 1000,
   backend_source: null,
   backend_external: false,
-  compaction_threshold_pct: 75,
+  compaction_threshold_pct: 85,
   features: {},
 };
 

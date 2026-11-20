@@ -240,7 +240,7 @@ class TestCheckContextLimit:
         assert result["total_tokens"] > 0
         assert result["usage_pct"] < 10
 
-    def test_warning_at_75_percent(self):
+    def test_warning_at_default_threshold(self):
         big_content = "hello world\n" * 5000
         msgs = [{"role": "user", "content": big_content}]
         result = check_context_limit(msgs, context_window=1000)
@@ -266,7 +266,7 @@ class TestCheckContextLimit:
         assert with_s["total_tokens"] >= without["total_tokens"]
 
     def test_threshold_pct_controls_trigger(self):
-        """The configured threshold must be the trigger, not a hardcoded 75%."""
+        """The configured threshold must be the trigger, not a hardcoded default."""
         msgs = [{"role": "user", "content": "word " * 100}]
         tokens = check_context_limit(msgs)["total_tokens"]
         window = int(tokens / 0.5)  # roughly 50% usage
@@ -284,7 +284,7 @@ class TestCheckContextLimit:
         """Room for the next response is not free context."""
         msgs = [{"role": "user", "content": "word " * 100}]
         tokens = check_context_limit(msgs)["total_tokens"]
-        window = int(tokens / 0.7)  # roughly 70% full
+        window = int(tokens / 0.8)  # roughly 80% full, below the 85% trigger
 
         without = check_context_limit(msgs, context_window=window)
         with_reserve = check_context_limit(
@@ -299,7 +299,7 @@ class TestCheckContextLimit:
     def test_invalid_threshold_falls_back_to_default(self):
         msgs = [{"role": "user", "content": "hello"}]
         result = check_context_limit(msgs, context_window=128000, threshold_pct=0)
-        assert result["threshold_pct"] == 75
+        assert result["threshold_pct"] == 85
 
 
 class TestFitTextToTokens:

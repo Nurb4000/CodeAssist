@@ -2562,7 +2562,7 @@ function updateContextUsageFromPrompt(promptTokens) {
     const windowSize = Number(configData.effective_context_window || configData.context_window || 0);
     const tokens = Number(promptTokens);
     if (!windowSize || !Number.isFinite(tokens) || tokens <= 0) return;
-    const threshold = Number(configData.compaction_threshold_pct || 75);
+    const threshold = Number(configData.compaction_threshold_pct || 85);
     const critical = Math.min(99, threshold + 15);
     const pct = (tokens / windowSize) * 100;
     const severity = pct > critical ? 'critical' : pct >= threshold ? 'warning' : 'ok';

@@ -173,7 +173,7 @@ def _validate_trust_all(permissions_raw: dict) -> str:
 class CompactionConfig:
     enabled: bool = True
     mode: str = "llm"  # "llm" or "text"
-    threshold_pct: int = 75
+    threshold_pct: int = 85
     keep_recent: int = 20
     tail_turns: int = 2  # Recent turns to preserve intact
     preserve_recent_tokens: int = 4000  # Token budget for recent context
@@ -457,7 +457,7 @@ class Config:
             compaction=CompactionConfig(
                 enabled=raw.get("compaction", {}).get("enabled", True),
                 mode=raw.get("compaction", {}).get("mode", "llm"),
-                threshold_pct=raw.get("compaction", {}).get("threshold_pct", 75),
+                threshold_pct=raw.get("compaction", {}).get("threshold_pct", 85),
                 keep_recent=raw.get("compaction", {}).get("keep_recent", 20),
                 tail_turns=raw.get("compaction", {}).get("tail_turns", 2),
                 preserve_recent_tokens=raw.get("compaction", {}).get("preserve_recent_tokens", 4000),

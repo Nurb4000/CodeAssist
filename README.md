@@ -171,7 +171,7 @@ Configuration in `config.toml`:
 ```toml
 [compaction]
 enabled = true
-threshold_pct = 75      # Trigger compaction at this usage percentage
+threshold_pct = 85      # Trigger compaction at this usage percentage
 keep_recent = 20        # Number of recent messages to preserve unchanged
 tool_result_max_tokens = 4000  # Per-tool-result cap in the summarizer input
 ```
@@ -194,7 +194,7 @@ usage for a session and roll it over instead of stopping hard:
   unless `hard_limit = false`, which only warns and lets the turn finish.
 
 The rollover threshold is *separate* from the per-request compaction trigger
-above (`threshold_pct`, default 75%): compaction keeps one request within the
+above (`threshold_pct`, default 85%): compaction keeps one request within the
 context window; the budget rollover resets the cumulative session counter.
 
 Configuration in `config.toml`:

@@ -1,7 +1,7 @@
 'use strict';
 // The context gauge must use the provider's real prompt-token count and the
 // configured compaction threshold, not only the local estimate and a hardcoded
-// 75%. After compaction the estimate can lag; `finish.usage.prompt_tokens` is
+// default. After compaction the estimate can lag; `finish.usage.prompt_tokens` is
 // exactly what the request carried.
 
 const test = require('node:test');

@@ -140,7 +140,7 @@ enabled = true
 mode = "llm"
 
 # Trigger compaction when context usage exceeds this percentage
-threshold_pct = 75
+threshold_pct = 85
 
 # Number of recent messages to keep intact during text-mode compaction
 keep_recent = 20

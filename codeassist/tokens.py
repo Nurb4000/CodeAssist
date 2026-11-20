@@ -335,7 +335,7 @@ def check_context_limit(
     model: str = "gpt-4",
     context_window: int = 128000,
     tool_schemas: list[dict] | None = None,
-    threshold_pct: int = 75,
+    threshold_pct: int = 85,
     reserve_tokens: int = 0,
 ) -> dict:
     """Check if we're approaching the context limit.
@@ -356,9 +356,9 @@ def check_context_limit(
     try:
         threshold_pct = float(threshold_pct)
     except (TypeError, ValueError):
-        threshold_pct = 75.0
+        threshold_pct = 85.0
     if not 0 < threshold_pct <= 100:
-        threshold_pct = 75.0
+        threshold_pct = 85.0
     try:
         reserve_tokens = max(0, int(reserve_tokens))
     except (TypeError, ValueError):
@@ -370,8 +370,8 @@ def check_context_limit(
     usage_pct = tokens / usable_window
 
     threshold = threshold_pct / 100.0
-    # Keep the default 75/90 split: "critical" is 15 points above the trigger,
-    # capped below 100% so a 99% threshold still has a critical band.
+    # Keep "critical" 15 points above the trigger, capped below 100% so a high
+    # threshold still has a narrow critical band (85/99 with the default).
     critical_threshold = min(0.99, threshold + 0.15)
     if usage_pct > critical_threshold:
         severity = "critical"

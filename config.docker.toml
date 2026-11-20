@@ -61,7 +61,7 @@ auto_detect = true
 
 [compaction]
 enabled = true
-threshold_pct = 75
+threshold_pct = 85
 keep_recent = 20
 tool_result_max_tokens = 4000
 

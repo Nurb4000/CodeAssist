@@ -1683,7 +1683,7 @@ class Agent:
                 context_window = await effective_context_window(self.config)
                 threshold_pct = compaction_cfg.threshold_pct
                 if not isinstance(threshold_pct, (int, float)) or isinstance(threshold_pct, bool):
-                    threshold_pct = 75
+                    threshold_pct = 85
                 threshold_pct = max(1, min(99, int(threshold_pct)))
                 reserve_tokens = self._output_reserve()
 
