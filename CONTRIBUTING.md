@@ -54,6 +54,27 @@ python -m codeassist --workspace /path/to/your/project
 
 The server starts at `http://localhost:8090` by default. API docs are available at `http://localhost:8090/docs`.
 
+## Docker Development (bind mounts)
+
+`docker-compose.yml` bind-mounts your host project directory as `/workspace`. With a rootful Docker daemon, files the container writes show up as `root:root` on the host and you can no longer edit them. Do **not** fix that with `chmod -R 777`: it also sets the executable bit on every file, so Git reports hundreds of mode-only changes.
+
+Use **rootless Docker** instead (`dockerd-rootless-setuptool.sh install`, then `docker context use rootless`). The daemon runs as your user, container root is mapped to your host UID, and bind-mount writes are owned by you with normal `644`/`755` modes. No UID or GID needs to be committed to this repository. Rootless cannot bind privileged host ports by default; this project uses 8090, so nothing changes here.
+
+If you must stay on a rootful daemon, map the container to the invoking user at launch instead of hardcoding an account: export `HOST_UID`/`HOST_GID` from `id` in a local wrapper script or gitignored `.env`, then add `user: "${HOST_UID}:${HOST_GID}"` to the service in your local compose override.
+
+If you already have root-owned files, fix **ownership**, not permissions:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" /path/to/your/projects
+```
+
+To restore an existing checkout whose modes were flattened to `777`:
+
+```bash
+git ls-files -s | awk '$1=="100644"{print $4}' | xargs -r chmod 644
+git ls-files -s | awk '$1=="100755"{print $4}' | xargs -r chmod 755
+```
+
 ## Running Tests
 
 ```bash
