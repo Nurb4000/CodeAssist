@@ -50,6 +50,22 @@ class _ErroringTool(Tool):
         raise RuntimeError("boom")
 
 
+class _RecordingTool(Tool):
+    name = "recording_tool"
+    description = "Records the arguments it receives."
+    parameters = {  # noqa: RUF012
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+    }
+
+    def __init__(self):
+        self.received = None
+
+    async def execute(self, **kwargs) -> ToolResult:
+        self.received = kwargs
+        return ToolResult(output="ok")
+
+
 @pytest.fixture
 def registry(tmp_path):
     return ToolRegistry(tmp_path)
@@ -230,4 +246,20 @@ class TestGetToolsWorkspace:
         config = type("C", (), {"workspace": tmp_path, "tools": None})()
         tools = get_tools(config)
         assert "read" in tools
+
+
+class TestArgumentCoercionHook:
+    """Tools without an override must see exactly the supplied arguments."""
+
+    @pytest.mark.asyncio
+    async def test_default_coercion_is_a_no_op(self, registry):
+        tool = _RecordingTool()
+        registry.register(tool)
+        args = {"value": "as-is"}
+
+        result = await registry.execute("recording_tool", args)
+
+        assert result.error is False
+        assert tool.received == {"value": "as-is"}
+        assert args == {"value": "as-is"}  # the caller's dict is not mutated
 

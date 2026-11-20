@@ -148,6 +148,16 @@ class Tool(ABC):
         """
         return current_attachments()
 
+    def coerce_arguments(self, arguments: dict) -> dict:
+        """Normalize model-supplied arguments *before* schema validation.
+
+        Default is a no-op. A tool whose execute() accepts flexible spellings
+        (aliases, numeric-string ids) overrides this so those values reach the
+        validator in canonical form without loosening the advertised schema,
+        which some providers use to build their tool-call grammar.
+        """
+        return arguments
+
     def schema(self) -> dict:
         return {
             "name": self.name,
@@ -172,13 +182,22 @@ class ToolRegistry:
         if not tool:
             return ToolResult(output=f"Error: unknown tool '{name}'", error=True)
 
+        # Let a tool canonicalize flexible spellings before validation. Work on
+        # a copy so a rejected call cannot mutate the caller's arguments. Use
+        # getattr because registered tools need not subclass Tool (SkillTool
+        # and plugins are duck-typed).
+        args = dict(arguments)
+        coerce = getattr(tool, "coerce_arguments", None)
+        if callable(coerce):
+            args = coerce(args)
+
         # Validate arguments against tool schema before execution
-        err = _validate_args(tool.parameters, arguments)
+        err = _validate_args(tool.parameters, args)
         if err:
             return ToolResult(output=f"Error: {name}: {err}", error=True)
 
         try:
-            result = await tool.execute(**arguments)
+            result = await tool.execute(**args)
         except Exception as e:
             log.exception("Tool '%s' failed", name)
             return ToolResult(output=f"Error executing {name}: {e}", error=True)

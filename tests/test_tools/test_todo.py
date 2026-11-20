@@ -2,6 +2,7 @@
 import pytest
 import pytest_asyncio
 
+from codeassist.tools import ToolRegistry
 from codeassist.tools.todo import TodoTool
 
 
@@ -100,6 +101,74 @@ class TestTodoTool:
         assert schema["name"] == "todo"
         assert "action" in schema["parameters"]["properties"]
         assert schema["parameters"]["properties"]["action"]["enum"] == ["add", "update", "list", "clear"]
+
+
+class TestTodoArgumentCoercion:
+    """The registry validates arguments before calling execute().
+
+    Direct ``execute()`` tests cannot catch a model spelling being rejected at
+    the registry boundary, so these go through ``ToolRegistry.execute()``.
+    """
+
+    @pytest.fixture
+    def todo(self):
+        return TodoTool()
+
+    @pytest.fixture
+    def registry(self, tmp_path):
+        reg = ToolRegistry(tmp_path)
+        reg.register(TodoTool())
+        return reg
+
+    def test_coerce_arguments_canonicalizes_known_spellings(self, todo):
+        args = todo.coerce_arguments({
+            "action": "update", "task_id": "3", "status": "Completed",
+        })
+        assert args == {"action": "update", "task_id": 3, "status": "completed"}
+
+    def test_coerce_arguments_leaves_unknown_values_for_validation(self, todo):
+        args = todo.coerce_arguments({
+            "action": "update", "task_id": "abc", "status": "halfway",
+        })
+        assert args == {"action": "update", "task_id": "abc", "status": "halfway"}
+
+    @pytest.mark.asyncio
+    async def test_alias_and_numeric_string_id_reach_execute(self, registry):
+        await registry.execute("todo", {"action": "add", "content": "Task A"})
+        result = await registry.execute("todo", {
+            "action": "update", "task_id": "1", "status": "done",
+        })
+        assert result.error is False, result.output
+        assert registry.get("todo").get_tasks()[0]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_mixed_case_status_reaches_execute(self, registry):
+        await registry.execute("todo", {"action": "add", "content": "Task A"})
+        result = await registry.execute("todo", {
+            "action": "update", "task_id": 1, "status": "DONE",
+        })
+        assert result.error is False, result.output
+        assert registry.get("todo").get_tasks()[0]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_invalid_status_still_rejected_through_registry(self, registry):
+        await registry.execute("todo", {"action": "add", "content": "Task A"})
+        result = await registry.execute("todo", {
+            "action": "update", "task_id": 1, "status": "halfway",
+        })
+        assert result.error is True
+        assert "must be one of" in result.output
+        assert registry.get("todo").get_tasks()[0]["status"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_id_still_rejected_through_registry(self, registry):
+        await registry.execute("todo", {"action": "add", "content": "Task A"})
+        result = await registry.execute("todo", {
+            "action": "update", "task_id": "abc", "status": "done",
+        })
+        assert result.error is True
+        assert "must be an integer" in result.output
+        assert registry.get("todo").get_tasks()[0]["status"] == "pending"
 
 class TestTodoPersistence:
     """The plan list is the user's record of what the agent is doing.

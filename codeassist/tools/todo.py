@@ -90,6 +90,27 @@ class TodoTool(Tool):
         "required": ["action"],
     }
 
+    def coerce_arguments(self, arguments: dict) -> dict:
+        """Canonicalize ids/statuses before the registry's strict validation.
+
+        ``_coerce_task_id`` and ``_normalize_status`` used to run only inside
+        ``execute()``, but the registry checks ``task_id`` as an integer and
+        ``status`` against a three-value enum first. Models frequently send
+        ``"1"``, ``"done"`` or ``"Completed"``, so those updates were rejected
+        before they ever reached the tool and the plan stayed stale. Unknown
+        values are left alone so validation (or ``execute``) still rejects them.
+        """
+        args = dict(arguments)
+        if "task_id" in args:
+            tid = _coerce_task_id(args["task_id"])
+            if tid is not None:
+                args["task_id"] = tid
+        if "status" in args:
+            normalized = _normalize_status(args["status"])
+            if normalized is not None:
+                args["status"] = normalized
+        return args
+
     def __init__(self):
         # session id -> ordered task list, and the next id to hand out in each.
         self._tasks: dict[str, list[dict]] = {}
