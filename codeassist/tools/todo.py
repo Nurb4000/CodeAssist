@@ -8,6 +8,7 @@ the conversation that produced it and survives a restart.
 """
 import contextlib
 import logging
+import re
 from collections.abc import Iterator
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -40,17 +41,24 @@ STATUS_ALIASES = {
     "backlog": "pending",
     "in_progress": "in_progress",
     "in progress": "in_progress",
+    "inprogress": "in_progress",
+    "wip": "in_progress",
     "active": "in_progress",
     "started": "in_progress",
     "working": "in_progress",
+    "working on": "in_progress",
     "working_on": "in_progress",
     "running": "in_progress",
+    "ongoing": "in_progress",
+    "doing": "in_progress",
     "completed": "completed",
     "complete": "completed",
     "done": "completed",
     "finished": "completed",
     "finished!": "completed",
     "closed": "completed",
+    "committed": "completed",
+    "pushed": "completed",
 }
 VALID_STATUSES = set(STATUS_ALIASES.values())
 
@@ -60,6 +68,45 @@ def _normalize_status(status: str) -> str | None:
         return None
     key = str(status).strip().lower().replace("-", " ").replace("_", " ")
     return STATUS_ALIASES.get(key)
+
+
+# Models often write the status into the task *text* ("Fix X — IN PROGRESS",
+# "Y — DONE: notes", "[completed] synced requirements") and leave `status` at its
+# default. Those tags used to be ignored, so the plan showed the item as pending
+# even though the text said work had started or finished. Only unmistakable tags
+# count: a bracketed word, an uppercase label after a dash/colon, or one at the
+# very end. Ordinary prose ("done by Friday", "a DONE handler") is left alone.
+_BRACKETED_STATUS_RE = re.compile(
+    r"[\[(]\s*(done|complete|completed|finished|closed|in[ -]?progress|wip)\s*[\])]",
+    re.IGNORECASE,
+)
+_BARE_STATUS_RE = re.compile(
+    r"(?:^|[—–:;|]\s*|\s+-\s+)(DONE|COMPLETE|COMPLETED|FINISHED|CLOSED|COMMITTED|PUSHED|IN[ -]?PROGRESS|WIP)"
+    r"(?=$|[\s—–:;,.!|)])"
+)
+_TAIL_STATUS_RE = re.compile(r"\s+(DONE|COMPLETED|IN[ -]?PROGRESS|WIP)\s*[.!]?$")
+
+
+def _status_from_content(content: str | None) -> str | None:
+    """Read an explicit status tag from task text, or None if there is none."""
+    if not content:
+        return None
+    tags = [m.group(1) for m in _BRACKETED_STATUS_RE.finditer(content)]
+    tags += [m.group(1) for m in _BARE_STATUS_RE.finditer(content)]
+    tags += [m.group(1) for m in _TAIL_STATUS_RE.finditer(content)]
+    for tag in tags:
+        status = _normalize_status(tag)
+        if status and status != "pending":
+            return status
+    return None
+
+
+def _effective_status(task: dict) -> str:
+    """Status to display for a task, honouring text tags on legacy rows."""
+    status = _normalize_status(task.get("status"))
+    if status and status != "pending":
+        return status
+    return _status_from_content(task.get("content")) or "pending"
 
 
 def _coerce_task_id(task_id) -> int | None:
@@ -242,8 +289,10 @@ class TodoTool(Tool):
                     output=f"Error: unknown status '{status}'. Use one of: {', '.join(sorted(VALID_STATUSES))}",
                     error=True,
                 )
+            if normalized in (None, "pending"):
+                normalized = _status_from_content(content) or normalized or "pending"
             next_id = self._next_id.setdefault(key, 1)
-            task = {"id": next_id, "content": content, "status": normalized or "pending"}
+            task = {"id": next_id, "content": content, "status": normalized}
             tasks.append(task)
             self._next_id[key] = next_id + 1
             await self.save_session(key)
@@ -262,6 +311,10 @@ class TodoTool(Tool):
                     output=f"Error: unknown status '{status}'. Use one of: {', '.join(sorted(VALID_STATUSES))}",
                     error=True,
                 )
+            # A content rewrite is often how the model records progress ("— DONE").
+            # Treat that as a status change too, so the plan does not stay gray.
+            if content is not None and normalized in (None, "pending"):
+                normalized = _status_from_content(content) or normalized
             if content is None and normalized is None:
                 return ToolResult(
                     output="Error: provide content and/or status to update",
@@ -283,7 +336,8 @@ class TodoTool(Tool):
                 return ToolResult(output="No tasks")
             lines = []
             for t in tasks:
-                marker = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}.get(t["status"], "[ ]")
+                status = _effective_status(t)
+                marker = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}.get(status, "[ ]")
                 lines.append(f"#{t['id']} {marker} {t['content']}")
             return ToolResult(output="\n".join(lines))
 

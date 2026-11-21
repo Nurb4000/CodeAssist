@@ -2669,23 +2669,62 @@ const PLAN_STATUS_ALIASES = {
     'not started': 'pending',
     backlog: 'pending',
     'in progress': 'in_progress',
+    inprogress: 'in_progress',
+    wip: 'in_progress',
     active: 'in_progress',
     started: 'in_progress',
     working: 'in_progress',
     'working on': 'in_progress',
     running: 'in_progress',
+    ongoing: 'in_progress',
+    doing: 'in_progress',
     completed: 'completed',
     complete: 'completed',
     done: 'completed',
     finished: 'completed',
     'finished!': 'completed',
     closed: 'completed',
+    committed: 'completed',
+    pushed: 'completed',
 };
 
 function normalizePlanStatus(status) {
     if (status === null || status === undefined) return 'pending';
     const key = String(status).trim().toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
     return PLAN_STATUS_ALIASES[key] || 'pending';
+}
+
+// The model sometimes writes progress into the task text ("Fix X — IN PROGRESS",
+// "Y — DONE: notes", "[completed] synced requirements") while leaving `status`
+// pending. Read those explicit tags so the visual cue matches what the task says.
+// Keep the match narrow -- a bracketed word, an uppercase label after a
+// dash/colon, or one at the end -- so ordinary prose is not mistaken for status.
+const CONTENT_BRACKETED_STATUS_RE = /[\[(]\s*(done|complete|completed|finished|closed|in[-\s]?progress|wip)\s*[\])]/gi;
+const CONTENT_BARE_STATUS_RE = /(?:^|[—–:;|]\s*|\s+-\s+)(DONE|COMPLETE|COMPLETED|FINISHED|CLOSED|COMMITTED|PUSHED|IN[ -]?PROGRESS|WIP)(?=$|[\s—–:;,.!|)])/g;
+const CONTENT_TAIL_STATUS_RE = /\s+(DONE|COMPLETED|IN[ -]?PROGRESS|WIP)\s*[.!]?$/g;
+
+function statusFromContent(content) {
+    if (!content) return null;
+    const text = String(content);
+    const tags = [
+        ...(text.match(CONTENT_BRACKETED_STATUS_RE) || []),
+        ...(text.match(CONTENT_BARE_STATUS_RE) || []),
+        ...(text.match(CONTENT_TAIL_STATUS_RE) || []),
+    ];
+    for (const tag of tags) {
+        const key = tag.trim().replace(/^[\[(\s—–:;|]+|[\])?.,!;:|\s]+$/g, '');
+        const status = normalizePlanStatus(key);
+        if (status !== 'pending') return status;
+    }
+    return null;
+}
+
+// An explicit non-pending status always wins: the text may still say
+// "IN PROGRESS" from when work started even though the task is now complete.
+function planStatus(task) {
+    const explicit = normalizePlanStatus(task.status);
+    if (explicit !== 'pending') return explicit;
+    return statusFromContent(task.content) || 'pending';
 }
 
 const PLAN_STATUS_LABELS = {
@@ -2697,8 +2736,8 @@ const PLAN_STATUS_LABELS = {
 // The row the panel should keep in view: the task in progress, or else the next
 // one still to do. -1 when everything is finished.
 function planAnchorRow(tasks) {
-    const active = tasks.findIndex((t) => normalizePlanStatus(t.status) === 'in_progress');
-    return active !== -1 ? active : tasks.findIndex((t) => normalizePlanStatus(t.status) === 'pending');
+    const active = tasks.findIndex((t) => planStatus(t) === 'in_progress');
+    return active !== -1 ? active : tasks.findIndex((t) => planStatus(t) === 'pending');
 }
 
 // Scroll so the active task sits one row below the top of the box, with a row of
@@ -2758,7 +2797,7 @@ function updatePlanDisplay(tasks) {
     title.appendChild(toggle);
     title.appendChild(document.createTextNode('Current Plan'));
     if (tasks.length > PLAN_DISPLAY_MAX) {
-        const done = tasks.filter((t) => normalizePlanStatus(t.status) === 'completed').length;
+        const done = tasks.filter((t) => planStatus(t) === 'completed').length;
         const count = document.createElement('span');
         count.className = 'plan-count';
         count.textContent = `${tasks.length}`;
@@ -2772,7 +2811,7 @@ function updatePlanDisplay(tasks) {
     const list = document.createElement('div');
     list.className = 'plan-list';
     for (const task of tasks) {
-        const status = normalizePlanStatus(task.status);
+        const status = planStatus(task);
         const item = document.createElement('div');
         item.className = `plan-item ${status}`;
 

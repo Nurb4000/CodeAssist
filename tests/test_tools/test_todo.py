@@ -57,6 +57,44 @@ class TestTodoTool:
             assert todo.get_tasks()[0]["status"] == canonical, f"alias {alias!r} -> {canonical}"
 
     @pytest.mark.asyncio
+    async def test_status_tag_in_task_text_is_recorded(self, todo):
+        # Models often write "IN PROGRESS"/"DONE" into the task text and leave
+        # `status` at its pending default. Those explicit tags are the only
+        # signal in that case, so they must become the recorded status.
+        for content, expected in [
+            ("Gap #8: cron validation — IN PROGRESS", "in_progress"),
+            ("Task E: end-to-end checks IN PROGRESS", "in_progress"),
+            ("Task F - IN PROGRESS", "in_progress"),
+            ("[in progress] investigate regression", "in_progress"),
+            ("#27 Audit IDOR — DONE: both endpoints gated", "completed"),
+            ("#9 Pin dependencies — MEDIUM [completed] requirements synced", "completed"),
+            ("Fix the DONE handler", "pending"),  # prose, not a status tag
+            ("Finished writing the test", "pending"),  # lowercase prose
+        ]:
+            await todo.clear_tasks()
+            await todo.execute("add", content=content)
+            assert todo.get_tasks()[0]["status"] == expected, content
+
+    @pytest.mark.asyncio
+    async def test_content_update_with_status_tag_marks_progress(self, todo):
+        await todo.execute("add", content="Investigate cron validation")
+        result = await todo.execute("update", task_id=1, content="Investigate cron validation — IN PROGRESS")
+        assert result.error is False
+        assert todo.get_tasks()[0]["status"] == "in_progress"
+        result = await todo.execute("update", task_id=1, content="Investigate cron validation — DONE")
+        assert result.error is False
+        assert todo.get_tasks()[0]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_explicit_status_wins_over_a_stale_text_tag(self, todo):
+        # The text often still says IN PROGRESS after the work is finished.
+        await todo.execute("add", content="Task — IN PROGRESS")
+        await todo.execute("update", task_id=1, status="completed")
+        assert todo.get_tasks()[0]["status"] == "completed"
+        result = await todo.execute("list")
+        assert "[x] Task — IN PROGRESS" in result.output
+
+    @pytest.mark.asyncio
     async def test_numeric_string_task_id_is_accepted(self, todo):
         # Models frequently serialize ids as strings; "1" == 1 is False and used
         # to silently drop the update.

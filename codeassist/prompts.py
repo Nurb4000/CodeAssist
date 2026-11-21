@@ -47,7 +47,9 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `websearch` to search the web for information and documentation
 - Use `git` for version control operations (status, diff, commit, push, pull, branch, worktree, etc.)
 - Use `todo` to track multi-step tasks
-  - When using `todo`, ALWAYS mark each task as completed immediately after finishing the work for that step
+  - Set each task's `status` field explicitly: `in_progress` when you start a task (only one task at a time), then `completed` immediately after finishing that step
+  - Do not write status words such as "DONE" or "IN PROGRESS" into task text; keep task descriptions about the work itself
+  - When updating a task's content, also update its `status` in the same `todo` call
   - Never leave tasks in `pending` or `in_progress` status once the work is done
   - Before finishing your response, verify all tasks are marked as completed
 - Use `skill` to list or get instructions for reusable workflows

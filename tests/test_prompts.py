@@ -1,5 +1,11 @@
 """Tests for prompt/message building."""
-from codeassist.prompts import build_openai_messages
+from codeassist.prompts import BASE_PROMPT, build_openai_messages
+
+
+def test_base_prompt_teaches_explicit_todo_status_updates():
+    assert "`status` field explicitly" in BASE_PROMPT
+    assert "`in_progress` when you start a task" in BASE_PROMPT
+    assert "Do not write status words" in BASE_PROMPT
 
 
 class TestBuildOpenAiMessages:

@@ -137,6 +137,44 @@ test('checkbox status colors survive status aliases and keep the text status', a
   ]);
 });
 
+test('textual status tags in task content drive the status cue', async () => {
+  // Models sometimes append "IN PROGRESS"/"DONE" to the task text and leave the
+  // status field pending. The panel must still show the right colour and glyph
+  // without rewriting the stored text. An explicit non-pending status wins over
+  // a stale tag left in the text.
+  const env = await boot({
+    fixtures: {
+      '/api/sessions': [{ id: 'session-1', name: 'one' }],
+      '/api/sessions/session-1/messages': [],
+      '/api/todos?session_id=session-1': {
+        tasks: [
+          { id: 1, content: 'Gap #8: cron validation — IN PROGRESS', status: 'pending' },
+          { id: 2, content: 'Task E: end-to-end checks IN PROGRESS', status: 'pending' },
+          { id: 3, content: '#27 Audit IDOR — DONE: both endpoints gated', status: 'pending' },
+          { id: 4, content: '#9 Pin dependencies — MEDIUM [completed] requirements synced', status: 'pending' },
+          { id: 5, content: 'Task — IN PROGRESS', status: 'completed' },
+          { id: 6, content: 'Fix the DONE handler', status: 'pending' },
+        ],
+      },
+    },
+  });
+
+  assert.deepStrictEqual(planStatuses(env.document), [
+    'in_progress', 'in_progress', 'completed', 'completed', 'completed', 'pending',
+  ]);
+  assert.deepStrictEqual(planCheckboxes(env.document).map((b) => b.textContent), [
+    '⌛', '⌛', '✓', '✓', '✓', '',
+  ]);
+  assert.deepStrictEqual(planItems(env.document), [
+    'Gap #8: cron validation — IN PROGRESS',
+    'Task E: end-to-end checks IN PROGRESS',
+    '#27 Audit IDOR — DONE: both endpoints gated',
+    '#9 Pin dependencies — MEDIUM [completed] requirements synced',
+    'Task — IN PROGRESS',
+    'Fix the DONE handler',
+  ], 'text tags are read but never stripped from the task');
+});
+
 test('switching sessions shows that session\'s plan instead of wiping it', async () => {
   const env = await boot({ fixtures: TWO_PLANS });
   assert.deepStrictEqual(planItems(env.document), ['First task', 'Second task']);
