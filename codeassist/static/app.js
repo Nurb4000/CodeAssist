@@ -2646,11 +2646,48 @@ function clearPlanDisplay() {
     planScroll = 0;
 }
 
+// Todo statuses arrive from the model (and sometimes from older persisted rows)
+// in more spellings than the canonical three. The plan's checkbox colors and
+// glyphs hang off the row's status class, so an alias such as "in progress" or
+// "done" would otherwise be rendered as a gray pending row even though the task
+// text already says what happened. Canonicalize here -- the same way the tool
+// does server-side -- so the visual cue always matches the recorded status.
+const PLAN_STATUS_ALIASES = {
+    pending: 'pending',
+    todo: 'pending',
+    'not started': 'pending',
+    backlog: 'pending',
+    'in progress': 'in_progress',
+    active: 'in_progress',
+    started: 'in_progress',
+    working: 'in_progress',
+    'working on': 'in_progress',
+    running: 'in_progress',
+    completed: 'completed',
+    complete: 'completed',
+    done: 'completed',
+    finished: 'completed',
+    'finished!': 'completed',
+    closed: 'completed',
+};
+
+function normalizePlanStatus(status) {
+    if (status === null || status === undefined) return 'pending';
+    const key = String(status).trim().toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+    return PLAN_STATUS_ALIASES[key] || 'pending';
+}
+
+const PLAN_STATUS_LABELS = {
+    pending: 'Pending',
+    in_progress: 'In progress',
+    completed: 'Complete',
+};
+
 // The row the panel should keep in view: the task in progress, or else the next
 // one still to do. -1 when everything is finished.
 function planAnchorRow(tasks) {
-    const active = tasks.findIndex((t) => t.status === 'in_progress');
-    return active !== -1 ? active : tasks.findIndex((t) => t.status === 'pending');
+    const active = tasks.findIndex((t) => normalizePlanStatus(t.status) === 'in_progress');
+    return active !== -1 ? active : tasks.findIndex((t) => normalizePlanStatus(t.status) === 'pending');
 }
 
 // Scroll so the active task sits one row below the top of the box, with a row of
@@ -2710,7 +2747,7 @@ function updatePlanDisplay(tasks) {
     title.appendChild(toggle);
     title.appendChild(document.createTextNode('Current Plan'));
     if (tasks.length > PLAN_DISPLAY_MAX) {
-        const done = tasks.filter((t) => t.status === 'completed').length;
+        const done = tasks.filter((t) => normalizePlanStatus(t.status) === 'completed').length;
         const count = document.createElement('span');
         count.className = 'plan-count';
         count.textContent = `${tasks.length}`;
@@ -2724,14 +2761,21 @@ function updatePlanDisplay(tasks) {
     const list = document.createElement('div');
     list.className = 'plan-list';
     for (const task of tasks) {
+        const status = normalizePlanStatus(task.status);
         const item = document.createElement('div');
-        item.className = `plan-item ${task.status}`;
+        item.className = `plan-item ${status}`;
 
         const checkbox = document.createElement('div');
-        checkbox.className = 'plan-checkbox';
-        if (task.status === 'completed') {
+        // The status class goes on the checkbox as well as the row so the
+        // green/blue cues survive even if a stylesheet later targets the
+        // checkbox directly. The row class stays for the existing CSS.
+        checkbox.className = `plan-checkbox status-${status}`;
+        checkbox.setAttribute('role', 'img');
+        checkbox.setAttribute('aria-label', PLAN_STATUS_LABELS[status]);
+        checkbox.title = PLAN_STATUS_LABELS[status];
+        if (status === 'completed') {
             checkbox.innerHTML = '&#10003;';
-        } else if (task.status === 'in_progress') {
+        } else if (status === 'in_progress') {
             checkbox.innerHTML = '&#8987;';
         }
 

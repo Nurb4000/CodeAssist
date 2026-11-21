@@ -1177,6 +1177,22 @@ body {
     animation: pulse 1.5s infinite;
 }
 
+/* Status on the checkbox itself as well as on the row: aliases are canonicalized
+   in app.js, so these rules match the glyph that is actually shown. Keeping the
+   row-level rules above means older cached markup still gets the same colors. */
+.plan-checkbox.status-completed {
+    background: var(--green);
+    border-color: var(--green);
+    color: white;
+}
+
+.plan-checkbox.status-in_progress {
+    border-color: var(--accent);
+    background: rgba(88, 166, 255, 0.12);
+    color: var(--accent);
+    animation: pulse 1.5s infinite;
+}
+
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }

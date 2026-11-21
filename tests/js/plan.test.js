@@ -27,6 +27,9 @@ const planStatuses = (doc) =>
     (n.className.match(/plan-item (\w+)/) || [])[1]
   );
 
+const planCheckboxes = (doc) =>
+  Array.from(doc.querySelectorAll('#plan-display .plan-checkbox'));
+
 // One task row's height, as app.js assumes it when there is no layout to measure
 // (jsdom reports 0 for every box, so the fallback is what runs here).
 const ROW = 27;
@@ -88,6 +91,50 @@ test('the plan for the current session is shown on load', async () => {
   const env = await boot({ fixtures: TWO_PLANS });
   assert.deepStrictEqual(planItems(env.document), ['First task', 'Second task']);
   assert.deepStrictEqual(planStatuses(env.document), ['in_progress', 'pending']);
+});
+
+test('checkbox status colors survive status aliases and keep the text status', async () => {
+  // The plan used to fall back to a gray pending checkbox whenever a status
+  // arrived as anything other than the three canonical spellings -- even when
+  // the task text already said "DONE"/"in progress". Canonicalize in the UI so
+  // the green/blue cues match the text without rewriting stored task content.
+  const env = await boot({
+    fixtures: {
+      '/api/sessions': [{ id: 'session-1', name: 'one' }],
+      '/api/sessions/session-1/messages': [],
+      '/api/todos?session_id=session-1': {
+        tasks: [
+          { id: 1, content: 'First task — DONE', status: 'done' },
+          { id: 2, content: 'Second task — in progress', status: 'In Progress' },
+          { id: 3, content: 'Third task', status: 'pending' },
+        ],
+      },
+    },
+  });
+
+  assert.deepStrictEqual(
+    planStatuses(env.document), ['completed', 'in_progress', 'pending'],
+    'aliases are rendered with canonical status classes'
+  );
+  assert.deepStrictEqual(
+    planItems(env.document),
+    ['First task — DONE', 'Second task — in progress', 'Third task'],
+    'the text status is left untouched'
+  );
+
+  const boxes = planCheckboxes(env.document);
+  assert.deepStrictEqual(boxes.map((b) => b.className), [
+    'plan-checkbox status-completed',
+    'plan-checkbox status-in_progress',
+    'plan-checkbox status-pending',
+  ]);
+  assert.deepStrictEqual(boxes.map((b) => b.textContent), ['✓', '⌛', '']);
+  assert.deepStrictEqual(boxes.map((b) => b.getAttribute('aria-label')), [
+    'Complete', 'In progress', 'Pending',
+  ]);
+  assert.deepStrictEqual(boxes.map((b) => b.title), [
+    'Complete', 'In progress', 'Pending',
+  ]);
 });
 
 test('switching sessions shows that session\'s plan instead of wiping it', async () => {
