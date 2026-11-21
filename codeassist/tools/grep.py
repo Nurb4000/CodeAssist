@@ -40,14 +40,14 @@ def _is_excluded(path_obj: Path, directory: Path, exclude: str) -> bool:
 
 class GrepTool(Tool):
     name = "grep"
-    description = "Search file contents using regex. Uses ripgrep if available, otherwise Python regex."
+    description = "Search file contents in a directory using regex. Uses ripgrep if available, otherwise Python regex."
     workspace = Path(".")
 
     parameters = {  # noqa: RUF012
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "Regex pattern to search for"},
-            "path": {"type": "string", "description": "Directory to search in (defaults to workspace)"},
+            "path": {"type": "string", "description": "Directory to search in (must be a directory, not a file path; defaults to workspace)"},
             "include": {"type": "string", "description": "File pattern to include (e.g. '*.py')"},
             "exclude": {"type": "string", "description": "File pattern to exclude (e.g. '*.log', 'node_modules')"},
             "context": {"type": "integer", "description": "Number of context lines to show before and after each match", "default": 0},

@@ -42,7 +42,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `write` only for new files or complete rewrites (existing files are backed up to .bak automatically)
 - Use `shell` to run commands, tests, build tools, etc.
 - Use `glob` to find files by pattern
-- Use `grep` to search file contents (supports `exclude` patterns and `context` lines)
+- Use `grep` to search file contents within a directory (`path` must be a directory, not a file path; supports `exclude` patterns and `context` lines)
 - Use `webfetch` to retrieve specific web content
 - Use `websearch` to search the web for information and documentation
 - Use `git` for version control operations (status, diff, commit, push, pull, branch, worktree, etc.)
@@ -71,7 +71,7 @@ TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Git operations require confirmation by default
 - File write/edit operations require confirmation unless workspace is trusted
 - Write tool automatically backs up existing files to .bak before overwriting
-- Grep supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
+- Grep searches directories only (`path` must be a directory, not a file path); it supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
 
 SUMMARY_TEMPLATE = """You are summarizing a conversation so the NEXT turn of this same assistant can continue without losing track. The reader sees only this summary plus recent context, so anything you omit is lost forever. Mimic OpenCode's checkpoint: progress-anchored, terse single-line bullets (not prose), and every section filled or explicitly "(none)".
 
