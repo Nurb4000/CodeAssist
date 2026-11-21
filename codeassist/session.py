@@ -50,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class _DBPool:
@@ -245,6 +245,10 @@ async def init_db():
         if current_version < 15:
             await _add_v15_tables(db)
             current_version = 15
+
+        if current_version < 16:
+            await _add_v16_tables(db)
+            current_version = 16
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -743,6 +747,34 @@ async def _add_v15_tables(db):
         await db.execute(
             "UPDATE sessions SET title_source = ? WHERE id = ?", (source, row["id"])
         )
+    await db.commit()
+
+
+async def _add_v16_tables(db):
+    """Persist compacted working transcripts as non-destructive checkpoints.
+
+    Context-window compaction used to live only in an Agent's memory, so
+    reopening a session replayed the full history and paid for the whole
+    summarization again. A checkpoint is a derived cache of that compacted
+    transcript; the raw ``messages`` rows stay untouched for the UI, export,
+    undo and rollback. Validity is checked with the two fingerprints rather
+    than by mutating message rows, so history edits simply make a checkpoint
+    stale instead of destroying anything.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS session_context_checkpoints (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            messages_json TEXT NOT NULL,
+            summary_text TEXT NOT NULL DEFAULT '',
+            covered_count INTEGER NOT NULL,
+            watermark_id TEXT,
+            history_fingerprint TEXT NOT NULL,
+            config_fingerprint TEXT NOT NULL,
+            tokens INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
     await db.commit()
 
 
@@ -1337,6 +1369,7 @@ class Session:
                 ("DELETE FROM message_attachments WHERE message_id IN "
                  "(SELECT id FROM messages WHERE session_id = ?)"),
                 "DELETE FROM messages WHERE session_id = ?",
+                "DELETE FROM session_context_checkpoints WHERE session_id = ?",
                 "DELETE FROM session_exports WHERE session_id = ?",
                 "DELETE FROM session_summaries WHERE session_id = ?",
                 "DELETE FROM tool_executions WHERE session_id = ?",
@@ -1490,6 +1523,73 @@ class Session:
             )
             await db.commit()
             return mid
+
+    async def save_context_checkpoint(
+        self,
+        *,
+        messages: list[dict],
+        summary_text: str,
+        covered_count: int,
+        watermark_id: str | None,
+        history_fingerprint: str,
+        config_fingerprint: str,
+        tokens: int | None = None,
+    ) -> None:
+        """Store (or replace) this session's compacted transcript cache.
+
+        Nothing here modifies ``messages``: the checkpoint is a derived view of
+        history that a fresh Agent can hydrate on resume. Callers validate the
+        fingerprints before using it; a stale row is simply ignored.
+        """
+        now = datetime.now(UTC).isoformat()
+        async with get_db() as db:
+            await db.execute("""
+                INSERT INTO session_context_checkpoints (
+                    session_id, messages_json, summary_text, covered_count,
+                    watermark_id, history_fingerprint, config_fingerprint,
+                    tokens, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    messages_json = excluded.messages_json,
+                    summary_text = excluded.summary_text,
+                    covered_count = excluded.covered_count,
+                    watermark_id = excluded.watermark_id,
+                    history_fingerprint = excluded.history_fingerprint,
+                    config_fingerprint = excluded.config_fingerprint,
+                    tokens = excluded.tokens,
+                    updated_at = excluded.updated_at
+            """, (
+                self.id,
+                json.dumps(messages, ensure_ascii=False),
+                summary_text,
+                covered_count,
+                watermark_id,
+                history_fingerprint,
+                config_fingerprint,
+                tokens,
+                now,
+                now,
+            ))
+            await db.commit()
+
+    async def load_context_checkpoint(self) -> dict | None:
+        """Return the stored checkpoint row, or None if there is none."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT * FROM session_context_checkpoints WHERE session_id = ?",
+                (self.id,),
+            )
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def invalidate_context_checkpoint(self) -> None:
+        """Drop a stale checkpoint. Safe to call when none exists."""
+        async with get_db() as db:
+            await db.execute(
+                "DELETE FROM session_context_checkpoints WHERE session_id = ?",
+                (self.id,),
+            )
+            await db.commit()
 
     async def undo_last_turn(self) -> int:
         """Remove the last turn, including the user message that started it.

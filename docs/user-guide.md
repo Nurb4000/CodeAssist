@@ -19,13 +19,14 @@ document is the overview; this guide is the walkthrough.
 5. [Sending messages and attaching files](#sending-messages-and-attaching-files)
 6. [What happens during a turn](#what-happens-during-a-turn)
 7. [Thinking blocks (reasoning models)](#thinking-blocks-reasoning-models)
-8. [Footer telemetry: model, context, tokens](#footer-telemetry-model-context-tokens)
-9. [Import and export sessions](#import-and-export-sessions)
-10. [Admin & Settings page](#admin--settings-page)
-11. [Knowledge Base GUI](#knowledge-base-gui)
-12. [Tool Manager](#tool-manager)
-13. [Skills in chat](#skills-in-chat)
-14. [Keyboard shortcuts & small behaviors](#keyboard-shortcuts--small-behaviors)
+8. [Context checkpoints and resuming](#context-checkpoints-and-resuming)
+9. [Footer telemetry: model, context, tokens](#footer-telemetry-model-context-tokens)
+10. [Import and export sessions](#import-and-export-sessions)
+11. [Admin & Settings page](#admin--settings-page)
+12. [Knowledge Base GUI](#knowledge-base-gui)
+13. [Tool Manager](#tool-manager)
+14. [Skills in chat](#skills-in-chat)
+15. [Keyboard shortcuts & small behaviors](#keyboard-shortcuts--small-behaviors)
 
 ---
 
@@ -67,9 +68,11 @@ The chat screen (`index.html`) is two columns:
 | ⬇️ Import | Import session dialog |
 | `+` | New session |
 
-**Sidebar footer** shows your model/context, a running token count with live rate, and the
-"Show/Hide thinking" toggle (see [Footer telemetry](#footer-telemetry-model-context-tokens) and
-[Thinking blocks](#thinking-blocks-reasoning-models)).
+**Sidebar footer** shows your model/context, a running token count with live rate, the
+"Show/Hide thinking" toggle, and a **Compact context** button (see
+[Footer telemetry](#footer-telemetry-model-context-tokens),
+[Thinking blocks](#thinking-blocks-reasoning-models), and
+[Context checkpoints](#context-checkpoints-and-resuming)).
 
 ## Sessions: create, switch, rename, pin, delete
 
@@ -150,8 +153,9 @@ After you send a message, the agent works through it using tools. You watch this
   until answered.
 - **Context usage bar** — the sidebar footer tracks how much of the context window is used. When a
   session approaches its limit, CodeAssist automatically **compacts** context (summarizing old tool
-  outputs and messages) so long conversations keep running. See "Context window management" in the
-  README for the thresholds.
+  outputs and messages) so long conversations keep running. The compacted transcript is saved, so
+  reopening the session does not re-summarize it from scratch. See [Context checkpoints](#context-checkpoints-and-resuming)
+  below and "Context window management" in the README for the thresholds.
 - **Continue** — when a multi-step task finishes (or needs more input), a Continue control lets you
   prompt the agent to carry on without re-typing full instructions.
 
@@ -163,6 +167,29 @@ to expand or collapse it individually.
 
 A global toggle in the **sidebar footer** ("Show thinking" / "Hide thinking") flips every thinking
 block at once. Your choice is remembered (in `localStorage`) across page loads.
+
+## Context checkpoints and resuming
+
+Long conversations can outgrow the model's context window. CodeAssist summarizes the older part of
+the conversation into a **compacted transcript** and keeps only the recent turns verbatim. That
+transcript is now *persisted* as a checkpoint for the session:
+
+- **Resume without re-summarizing** — when you switch back to a session, reload the page, or restart
+  the server, the agent starts from the saved compacted transcript and extends it with only messages
+  added since. You do not pay for summarizing the same history again on every reopen.
+- **Your transcript is unchanged** — a checkpoint is a derived cache, not a rewrite of the chat.
+  Every original message stays in the database, so the visible conversation, export, undo, and
+  rollback all still see the full history.
+- **Automatic invalidation** — if messages were edited, undone, rolled back, or the model/agent or
+  compaction settings changed after a checkpoint was saved, it is discarded and rebuilt on the next
+  turn instead of showing a stale summary.
+- **Compact on demand** — the **Compact context** button in the sidebar footer saves a checkpoint at
+  any time. It is disabled while a turn is streaming. A status line confirms how many messages were
+  covered; the chat itself is not modified.
+- **Budget rollover is different** — when a session hits its cumulative token budget, CodeAssist
+  *does* rewrite history into a `[Conversation checkpoint]` row so work can continue with fresh
+  headroom. That is a deliberate, destructive reset (see "Session budget and rollover" in the
+  README), and it clears any saved context checkpoint.
 
 ## Footer telemetry: model, context, tokens
 
@@ -306,5 +333,6 @@ section for the frontmatter format. Custom and auto-created skills appear in the
 | Delete a session | Hover the row → click the **trash** icon |
 | Switch agent | Click the **mode selector** in the input bar |
 | Show/hide all thinking | Sidebar footer **Show/Hide thinking** button |
+| Save a context checkpoint | Sidebar footer **Compact context** button (not while streaming) |
 | Refresh all admin data | Admin header **⟳** button |
 | Jump to an admin section | Click a link in the admin sidebar nav |

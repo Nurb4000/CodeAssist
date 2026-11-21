@@ -12,6 +12,7 @@ import openai
 
 from .capabilities import effective_context_window, is_external_backend
 from .config import Config
+from .context_checkpoint import compute_config_fingerprint, compute_history_fingerprint
 from .cost_tracker import CostTracker
 from .knowledge import KnowledgeBase
 from .llm import (
@@ -808,6 +809,10 @@ class Agent:
         # full transcript again right after compaction).
         self._working_messages: list[dict] | None = None
         self._working_history_len: int = 0
+        # A fresh Agent (reconnect, restart, session switch) restores the
+        # persisted compacted transcript lazily on its first turn. The flag
+        # keeps a single agent from re-reading the checkpoint each iteration.
+        self._context_checkpoint_loaded: bool = False
         # Synthetic turns belonging to the turn in flight that were never
         # written to the database: the continuation nudge, and the reply it is
         # anchored to. Held apart from `_messages` on purpose. That snapshot is
@@ -1509,6 +1514,154 @@ class Agent:
             "budget_threshold_pct": cfg.warning_threshold_pct,
         }
 
+    async def _restore_context_checkpoint(self, history: list[dict]) -> None:
+        """Hydrate a persisted compacted transcript into this fresh Agent.
+
+        Called once, after Phase 0 has read the session's rows. The checkpoint
+        is only a cache, so any sign that history or the prompt changed makes us
+        drop it and continue with the normal full-history rebuild. Nothing is
+        inferred from a stale row: an invalid checkpoint is deleted so later
+        turns do not keep re-checking it.
+        """
+        if self._context_checkpoint_loaded:
+            return
+        self._context_checkpoint_loaded = True
+
+        # Checkpointing is an optional derived cache. A session-like object that
+        # does not implement it (e.g. a test double or a custom session) simply
+        # skips restore instead of failing the whole turn.
+        load = getattr(self.session, "load_context_checkpoint", None)
+        if load is None:
+            return
+        row = await load()
+        if not row:
+            return
+
+        try:
+            covered = int(row["covered_count"])
+            transcript = json.loads(row["messages_json"])
+            if not isinstance(transcript, list) or not transcript:
+                raise ValueError("empty transcript")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            log.warning("Dropping malformed context checkpoint for session %s", self.session.id)
+            invalidate = getattr(self.session, "invalidate_context_checkpoint", None)
+            if invalidate:
+                await invalidate()
+            return
+
+        reason = None
+        if covered <= 0 or covered > len(history):
+            reason = "history is shorter than the checkpoint"
+        else:
+            prefix = history[:covered]
+            if row.get("watermark_id") and prefix[-1].get("id") != row["watermark_id"]:
+                reason = "watermark no longer matches history"
+            elif compute_history_fingerprint(prefix) != row["history_fingerprint"]:
+                reason = "history changed since the checkpoint"
+            elif compute_config_fingerprint(self.system_prompt, self.config) != row["config_fingerprint"]:
+                reason = "prompt or compaction settings changed"
+
+        if reason:
+            log.info("Discarding stale context checkpoint for session %s: %s", self.session.id, reason)
+            invalidate = getattr(self.session, "invalidate_context_checkpoint", None)
+            if invalidate:
+                await invalidate()
+            return
+
+        self._working_messages = transcript
+        self._working_history_len = covered
+        self._compaction_summary = row.get("summary_text") or ""
+        log.info(
+            "Restored context checkpoint for session %s (%d of %d rows covered)",
+            self.session.id, covered, len(history),
+        )
+
+    async def _save_context_checkpoint(
+        self, history: list[dict], tokens: int | None = None,
+    ) -> None:
+        """Persist the current working transcript. Failures are non-fatal."""
+        if self._working_messages is None:
+            return
+        covered = min(self._working_history_len or 0, len(history))
+        if covered <= 0:
+            return
+        save = getattr(self.session, "save_context_checkpoint", None)
+        if save is None:
+            return
+        try:
+            await save(
+                messages=self._working_messages,
+                summary_text=self._compaction_summary,
+                covered_count=covered,
+                watermark_id=history[covered - 1].get("id"),
+                history_fingerprint=compute_history_fingerprint(history[:covered]),
+                config_fingerprint=compute_config_fingerprint(self.system_prompt, self.config),
+                tokens=tokens,
+            )
+            self._context_checkpoint_loaded = True
+        except Exception:  # noqa: BLE001 - a cache write must never break a turn
+            log.exception("Failed to persist context checkpoint for session %s", self.session.id)
+
+    async def checkpoint_now(self) -> dict:
+        """Summarize this session on demand and save a context checkpoint.
+
+        Unlike the budget rollover this is non-destructive: ``messages`` rows
+        are left intact, so undo, rollback, export and the UI transcript keep
+        seeing the full conversation. Only the agent's working context and the
+        checkpoint cache are replaced. Returns a small result dict for the UI.
+        """
+        history = await self.session.get_messages()
+        # A fresh agent (e.g. right after reconnect) may not have run a turn yet,
+        # so hydrate any existing checkpoint first. Otherwise we would summarize
+        # the head from scratch and throw away a summary built over several turns.
+        await self._restore_context_checkpoint(history)
+        cfg = self.config.compaction
+        tail_start = _recent_tail_start(history, cfg.tail_turns)
+        if tail_start <= 0 or tail_start >= len(history):
+            return {"saved": False, "reason": "Not enough history to compact yet."}
+
+        head_text = _extract_conversation_text(
+            history[:tail_start], tool_result_max_tokens=cfg.tool_result_max_tokens,
+        )
+        if not head_text.strip():
+            return {"saved": False, "reason": "Nothing summarizable in this session yet."}
+
+        try:
+            context_window = await effective_context_window(self.config)
+        except Exception:  # noqa: BLE001 - fall back to the configured window
+            context_window = self.config.llm.context_window
+
+        summary_text = await _summarize_head(
+            head_text,
+            previous_summary=self._compaction_summary,
+            compaction_model=cfg.model or self.config.llm.model,
+            main_llm_config=self.config.llm,
+            tool_result_max_tokens=cfg.tool_result_max_tokens,
+            max_input_tokens=max(1024, context_window - 4096 - 512),
+        )
+        if not summary_text.strip() or not summary_is_filled(summary_text):
+            return {"saved": False, "reason": "Summarization produced no usable summary."}
+
+        transcript = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": f"[Previous conversation summary]\n{summary_text}"},
+        ]
+        transcript.extend(build_openai_messages("", history[tail_start:])[1:])
+
+        self._compaction_summary = summary_text
+        self._working_messages = transcript
+        self._working_history_len = len(history)
+        self._messages = list(history)
+        self._messages_dirty = False
+        self._context_checkpoint_loaded = True
+        await self._save_context_checkpoint(history)
+        return {
+            "saved": True,
+            "summary_chars": len(summary_text),
+            "covered": len(history),
+            "tail": len(history) - tail_start,
+        }
+
     async def _perform_rollover(self) -> str:
         """Summarize current history into a checkpoint, truncate the session to
         [checkpoint + recent tail], reset the budget, and invalidate working
@@ -1549,6 +1702,11 @@ class Agent:
         checkpoint_id = await self.session.rollover_from_summary(summary_text, tail_start_id)
         if not checkpoint_id:
             return ""
+        # Rollover deleted the head rows the old checkpoint covered. Drop that
+        # cache explicitly; the new [Conversation checkpoint] row is durable.
+        invalidate = getattr(self.session, "invalidate_context_checkpoint", None)
+        if invalidate:
+            await invalidate()
         # Persisted; refresh in-memory state so the loop rebuilds from the
         # reduced history and the budget starts fresh for the continued work.
         self._compaction_summary = summary_text
@@ -1645,6 +1803,11 @@ class Agent:
                 self._messages = await self.session.get_messages()
                 self._messages_dirty = False
             history = self._messages
+
+            # A fresh Agent (reconnect/restart/session switch) starts with no
+            # working context. Hydrate the persisted compacted transcript once
+            # before deciding whether Phase 0 needs to rebuild from full history.
+            await self._restore_context_checkpoint(history)
 
             # Extend the working context with only the rows that appeared since
             # the last step. Rebuilding from the full DB history here was what
@@ -1823,6 +1986,10 @@ class Agent:
                         if tokens_after < tokens_before:
                             self._working_messages = list(messages)
                             compacted_this_pass = True
+                            # Cache the shorter transcript so reopening this
+                            # session resumes from it instead of paying for the
+                            # same summarization all over again.
+                            await self._save_context_checkpoint(history, tokens_after)
                             yield AgentEvent("compacted", {
                                 "message": "Context window compressed to make room",
                                 "mode": compaction_cfg.mode,
@@ -2035,6 +2202,7 @@ class Agent:
                         base, self.config.llm.model, tool_schemas=tool_schemas,
                     )
                     messages = list(base)
+                    await self._save_context_checkpoint(history, tokens_after)
                     # The tail may have ended on tool results (the agent was
                     # mid-work); nudge it so the replay continues the task.
                     if messages and messages[-1].get("role") == "tool":

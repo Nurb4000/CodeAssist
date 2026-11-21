@@ -398,7 +398,33 @@ CREATE TABLE message_attachments (
     data TEXT NOT NULL,        -- full "data:<mime>;base64,..." URL
     created_at TIMESTAMP
 );
+
+-- v16+: derived cache of a session's compacted working transcript. It is NOT
+-- part of message history: raw `messages` rows stay intact for UI/export/undo.
+CREATE TABLE session_context_checkpoints (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    messages_json TEXT NOT NULL,        -- compacted transcript (OpenAI-shaped)
+    summary_text TEXT NOT NULL DEFAULT '',
+    covered_count INTEGER NOT NULL,     -- how many leading history rows it stands in for
+    watermark_id TEXT,                  -- id of the last covered row
+    history_fingerprint TEXT NOT NULL,  -- hash of the covered rows
+    config_fingerprint TEXT NOT NULL,   -- hash of prompt + compaction settings
+    tokens INTEGER,
+    created_at TEXT,
+    updated_at TEXT
+);
 ```
+
+**Context checkpoint lifecycle.** Context-window compaction used to be in-memory
+only, so reopening a session replayed the entire history and paid for the whole
+summarization again. The v16 table caches the compacted transcript as a *derived
+view*: a fresh `Agent` hydrates it on its first turn and then extends it with only
+the newer DB rows. Validity is checked with two fingerprints (`context_checkpoint.py`)
+plus the covered-row watermark; history edits, undo/rollback, agent/prompt switches,
+or compaction-setting changes mark the checkpoint stale, and it is deleted rather
+than trusted. Writes are best-effort and never fail a turn. Budget rollover is a
+separate, deliberately destructive operation that rewrites history and explicitly
+invalidates this cache.
 
 ### 7. WebSocket Protocol
 
@@ -413,7 +439,9 @@ Server → Client events:
   {"type": "error",           "message": "Rate limit exceeded"}
   {"type": "confirm_request", "id": "...", "tool": "write", "arguments": {...}}
   {"type": "context",         "tokens": 45000, "usage_pct": 35.2, "severity": "ok"}
+  {"type": "compacting",      "message": "Compacting context...", "reason": "manual"}
   {"type": "compacted",       "message": "Context window compressed"}
+  {"type": "checkpoint_saved","message": "Context checkpoint saved.", "covered": 12}
   {"type": "finish",          "reason": "stop", "usage": {...}}
   {"type": "plan_update",     "tasks": [...]}
   {"type": "cancelled"}
@@ -424,6 +452,7 @@ Client → Server events:
   {"type": "cancel"}          # Abort current run
   {"type": "confirm_response", "id": "...", "approved": true}
   {"type": "switch_agent",    "agent": "plan"}
+  {"type": "compact"}         # Save a non-destructive context checkpoint
 ```
 
 `images` is an optional array of base64 `data:` URLs. When present, the user

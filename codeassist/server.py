@@ -1202,6 +1202,39 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     "deleted": deleted,
                 })
 
+            elif data.get("type") == "compact":
+                # Manual, non-destructive checkpoint. Not allowed mid-turn: the
+                # agent's working context is being mutated by the loop, and the
+                # DB snapshot could still hold an unfinalized placeholder.
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
+                await websocket.send_json({
+                    "type": "compacting",
+                    "message": "Saving a context checkpoint for this session...",
+                    "reason": "manual",
+                    "mode": "llm",
+                })
+                try:
+                    result = await agent.checkpoint_now()
+                    if result.get("saved"):
+                        await websocket.send_json({
+                            "type": "checkpoint_saved",
+                            "message": "Context checkpoint saved. Reopening this session will reuse it.",
+                            **result,
+                        })
+                    else:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": result.get("reason") or "Nothing to compact yet.",
+                        })
+                except Exception:
+                    log.exception("Manual compaction failed for session %s", session_id)
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Could not save a context checkpoint.",
+                    })
+
             elif data.get("type") == "rollback":
                 if agent_task and not agent_task.done():
                     await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})

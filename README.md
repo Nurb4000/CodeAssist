@@ -164,6 +164,7 @@ CodeAssist automatically manages context window limits during long sessions:
   - **Level 0**: Tool outputs summarized to 1-line, assistant content truncated, user messages preserved
   - **Level 1** (escalation): Old tool messages dropped entirely, only function names kept
 - **Persistent working context**: A compacted transcript stays compacted on later steps and turns instead of being rebuilt from the full history (which used to re-trigger compaction and restore the old usage count)
+- **Persisted context checkpoints**: The compacted transcript is saved to a derived cache, so reopening or restarting a session resumes from it instead of replaying and re-summarizing the full history. The raw `messages` rows are never modified, and a checkpoint is discarded automatically if the history or the prompt/compaction settings have changed since it was saved.
 - **Accurate telemetry**: The UI updates the gauge from the provider's reported prompt tokens, and `compacted` is emitted only when the request actually shrank
 - **Smart truncation**: Tool output truncation preserves error/traceback lines for debugging
 
@@ -175,6 +176,15 @@ threshold_pct = 85      # Trigger compaction at this usage percentage
 keep_recent = 20        # Number of recent messages to preserve unchanged
 tool_result_max_tokens = 4000  # Per-tool-result cap in the summarizer input
 ```
+
+**Resuming and manual compaction**: After automatic compaction (or by clicking the
+**Compact context** button in the sidebar footer) the session's compacted transcript
+is saved to a `session_context_checkpoints` row. Reopening that session — including
+after a server restart — hydrates the cached transcript on the first turn, then
+extends it with only the newer messages. The button is unavailable while a turn is
+streaming and is non-destructive: undo, rollback, export and the visible transcript
+keep working against the full message history. This is distinct from the *budget
+rollover* described below, which does rewrite history.
 
 ### Session budget and rollover
 
@@ -196,6 +206,8 @@ usage for a session and roll it over instead of stopping hard:
 The rollover threshold is *separate* from the per-request compaction trigger
 above (`threshold_pct`, default 85%): compaction keeps one request within the
 context window; the budget rollover resets the cumulative session counter.
+Rollover also invalidates any persisted context checkpoint, since the history
+rows it covered no longer exist.
 
 Configuration in `config.toml`:
 ```toml

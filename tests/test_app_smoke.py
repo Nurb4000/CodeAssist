@@ -1191,3 +1191,75 @@ def test_approve_tool_allows_in_workspace_path(live_client, monkeypatch):
         inside.unlink(missing_ok=True)
         if inside.parent.exists() and not any(inside.parent.iterdir()):
             inside.parent.rmdir()
+
+
+def test_ws_compact_saves_non_destructive_checkpoint(live_client, monkeypatch):
+    """The manual `compact` action saves a reusable checkpoint over WebSocket
+    without touching the raw message rows the UI/export/undo rely on."""
+    import asyncio
+    import uuid
+    from unittest.mock import AsyncMock
+
+    from codeassist import agent as agent_mod
+    from codeassist.session import Session
+
+    FILLED = """## Objective
+- Save a checkpoint.
+
+## Work State
+### Completed
+- Seeded history.
+
+### Active
+- Testing compact.
+
+### Blocked
+- (none)
+
+## Next Move
+1. Assert the checkpoint exists.
+
+## Relevant Files
+- agent.py
+
+## Important Context
+- Non-destructive.
+"""
+    monkeypatch.setattr(agent_mod, "_summarize_head", AsyncMock(return_value=FILLED))
+    monkeypatch.setattr(
+        agent_mod, "effective_context_window", AsyncMock(return_value=8000),
+    )
+
+    sid = f"compact-{uuid.uuid4()}"
+
+    async def _seed():
+        session = Session(sid)
+        for i in range(4):
+            await session.add_message("user", f"question {i}")
+            await session.add_message("assistant", f"answer {i}")
+        return await session.get_messages()
+
+    before = asyncio.run(_seed())
+
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "compact"})
+        result = None
+        seen = []
+        for _ in range(20):
+            data = _receive_json(ws)
+            seen.append(data.get("type"))
+            if data.get("type") in ("checkpoint_saved", "error"):
+                result = data
+                break
+
+        assert result and result["type"] == "checkpoint_saved", (
+            f"compact did not save a checkpoint: {seen} ({result})"
+        )
+        assert result["covered"] == len(before)
+
+    after = asyncio.run(Session(sid).get_messages())
+    assert after == before, "manual compact must leave raw messages untouched"
+
+    row = asyncio.run(Session(sid).load_context_checkpoint())
+    assert row is not None, "a checkpoint should have been persisted"
+    assert row["covered_count"] == len(before)

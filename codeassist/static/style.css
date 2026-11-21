@@ -735,6 +735,7 @@ body {
 }
 
 .footer-toggle:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+.footer-toggle:disabled { opacity: 0.5; cursor: default; color: var(--text-muted); border-color: var(--border); }
 
 .message-content ul, .message-content ol {
     margin: 8px 0;

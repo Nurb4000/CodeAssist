@@ -5,6 +5,7 @@ const stopBtn = document.getElementById('stop-btn');
 const sessionListEl = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const modelInfoEl = document.getElementById('model-info');
+const compactBtn = document.getElementById('compact-btn');
 const planDisplayEl = document.getElementById('plan-display');
 const attachBtn = document.getElementById('attach-btn');
 const fileInputEl = document.getElementById('file-input');
@@ -2101,6 +2102,15 @@ function connectWS() {
             showCompacting(data);
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
+        } else if (data.type === 'checkpoint_saved') {
+            // Manual compaction finished: re-arm the button and confirm that
+            // the saved transcript will be reused on the next resume.
+            if (compactBtn) compactBtn.disabled = false;
+            showStatus(
+                `${data.message || 'Context checkpoint saved.'}` +
+                (data.covered ? ` (${data.covered} messages covered).` : ''),
+                'success',
+            );
         } else if (data.type === 'session_collapse') {
             // Budget rollover in progress: tell the user we are summarizing so the
             // pause for the summary request does not look like the run hung.
@@ -2123,6 +2133,7 @@ function connectWS() {
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'error') {
             hideProgress();
+            if (compactBtn) compactBtn.disabled = false;
             endRun();
             ensureMainMessage().querySelector('.message-content').innerHTML += `<p style="color:var(--red);margin-top:8px;">Error: ${escapeHtml(data.message)}</p>`;
             scrollToBottom();
@@ -2915,6 +2926,21 @@ stopBtn.addEventListener('click', () => {
     ws.send(JSON.stringify({ type: 'cancel' }));
 });
 newSessionBtn.addEventListener('click', createSession);
+
+if (compactBtn) {
+    compactBtn.addEventListener('click', () => {
+        if (!currentSessionId || !ws || ws.readyState !== WebSocket.OPEN) {
+            showStatus('Connect to a session before compacting.', 'error');
+            return;
+        }
+        if (isStreaming) {
+            showStatus('Wait for the current turn to finish before compacting.', 'info');
+            return;
+        }
+        compactBtn.disabled = true;
+        ws.send(JSON.stringify({ type: 'compact' }));
+    });
+}
 
 const toggleThinkingBtn = document.getElementById('toggle-thinking-btn');
 if (toggleThinkingBtn) {
