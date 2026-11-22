@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ripgrep \
         ca-certificates \
         curl \
+        sshpass \
         libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
