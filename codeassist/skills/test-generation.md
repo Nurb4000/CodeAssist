@@ -21,4 +21,4 @@ You are generating comprehensive tests. Follow these steps:
    - Well-named (describe the behavior being tested)
    - Self-documenting
 
-After writing tests, run them to verify they pass.
+After writing tests, run them with `test_runner` to verify they pass (remote test VM when configured, local fallback otherwise).

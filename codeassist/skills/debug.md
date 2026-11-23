@@ -35,12 +35,12 @@ Use this skill when the user reports a bug or error. Follow this systematic debu
 5. **Implement the fix**
    - Use `diff_preview` to show the proposed fix before applying
    - Apply the fix with `edit` (prefer surgical changes)
-   - Run `test_runner` to verify the fix works
+   - Run `test_runner` to verify the fix works (remote VM by default; check the reported target)
    - Check that no existing tests were broken
 
 6. **Verify the fix**
    - Run the original failing command to confirm it's fixed
-   - Run the full test suite
+   - Run the full test suite with `test_runner`
    - Use `question` tool to ask the user to confirm the fix
 
 ## Debugging Tips

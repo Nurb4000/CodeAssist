@@ -856,12 +856,23 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         instruction_sources, label_remote=cfg.instructions.label_remote
     )
 
+    # Redacted status only: host/user are infrastructure labels, never secrets.
+    # Empty host means "unconfigured" even when enabled=true, so an unconfigured
+    # install reports `off` and test_runner uses its local fallback.
+    remote_vm = cfg.remote_test_vm
+    remote_vm_status = (
+        f"ssh({remote_vm.user + '@' if remote_vm.user else ''}{remote_vm.host})"
+        if remote_vm.enabled and remote_vm.host
+        else "off"
+    )
+
     features = {
         "mcp_enabled": cfg.mcp.enabled,
         "skills_enabled": cfg.skills.enabled,
         "plugins_enabled": cfg.plugins.enabled,
         "lsp_enabled": cfg.lsp.enabled,
         "git_enabled": cfg.git.enabled,
+        "remote_test_vm": remote_vm_status,
     }
 
     # Use the global tools registry (supports dynamic reloading)

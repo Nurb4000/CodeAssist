@@ -83,6 +83,29 @@ websearch_engine = "duckduckgo"
 # Maximum tokens for tool output truncation
 tool_output_max_tokens = 4000
 
+# Dedicated full VM for code tests. `test_runner` prefers this target and falls
+# back to local execution only when the VM is unavailable (never on test failure).
+# Leave host blank to stay local-only. Every setting can be overridden at launch
+# with CODEASSIST_REMOTE_TEST_VM_* (see README.md); empty env vars are ignored so
+# this TOML file remains the default source of truth.
+[remote_test_vm]
+enabled = true
+host = ""                       # "10.0.1.50" or a resolvable VM name
+port = 22
+user = ""                       # e.g. "tester"
+remote_dir = "/tmp/codeassist-tests"
+# Container-side paths; in Docker put keys under ${AUTH_DIR}/ssh on the host.
+key_path = ""                   # e.g. "/auth/ssh/id_ed25519"
+known_hosts = ""                # e.g. "/auth/ssh/known_hosts"
+password = ""                   # prefer key auth; "env:VAR" also works
+sync = "rsync"                  # "rsync" = copy workspace first, "none" = VM already has it
+rsync_excludes = [".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "*.egg-info", "runtime/tool-output"]
+connect_timeout = 5             # SSH preflight / mkdir / rsync timeout
+test_timeout = 300              # remote test command timeout
+fallback_to_local = true
+strict_host_key_checking = true # false accepts any host key (lab use only)
+remote_env = ""                 # trusted preamble, e.g. "source /opt/venv/bin/activate"
+
 [mcp]
 # Enable MCP (Model Context Protocol) client
 enabled = false

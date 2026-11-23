@@ -31,7 +31,7 @@ Use this skill when the user wants to refactor code. Follow these steps systemat
    - Prefer `edit` (surgical string replacement) over `write` (full file replacement)
 
 5. **Verify after each change**
-   - Run the test suite with `test_runner`
+   - Run the test suite with `test_runner` (remote VM by default; note the reported target)
    - If tests fail, revert the last change and try a different approach
    - Use `read` to verify the modified code looks correct
 

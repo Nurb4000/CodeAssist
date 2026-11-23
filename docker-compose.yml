@@ -22,6 +22,8 @@ services:
       # GitHub CLI / git auth config lives on the host, never in the image.
       # Defaults to $HOME/.codeassist/auth (USERPROFILE on Windows) and survives
       # container recreations and image rebuilds. No credentials are baked in.
+      # SSH keys/known_hosts for the remote test VM go in <AUTH_DIR>/ssh and are
+      # visible in the container at /auth/ssh (key file must be chmod 600).
       - ${AUTH_DIR:-${HOME:-${USERPROFILE}}/.codeassist/auth}:/auth
     environment:
       - CODEASSIST_WORKSPACE=/workspace
@@ -31,6 +33,21 @@ services:
       - GH_CONFIG_DIR=/auth/gh
       - GIT_CONFIG_GLOBAL=/auth/gitconfig
       - SERVER_PORT=${SERVER_PORT}
+      # Remote test VM (SSH). Empty values are ignored by Config.load(), so a
+      # TOML endpoint stays authoritative unless a variable is actually set.
+      - CODEASSIST_REMOTE_TEST_VM_ENABLED=${REMOTE_TEST_VM_ENABLED:-}
+      - CODEASSIST_REMOTE_TEST_VM_HOST=${REMOTE_TEST_VM_HOST:-}
+      - CODEASSIST_REMOTE_TEST_VM_USER=${REMOTE_TEST_VM_USER:-}
+      - CODEASSIST_REMOTE_TEST_VM_PORT=${REMOTE_TEST_VM_PORT:-}
+      - CODEASSIST_REMOTE_TEST_VM_REMOTE_DIR=${REMOTE_TEST_VM_REMOTE_DIR:-}
+      - CODEASSIST_REMOTE_TEST_VM_KEY_PATH=${REMOTE_TEST_VM_KEY_PATH:-}
+      - CODEASSIST_REMOTE_TEST_VM_KNOWN_HOSTS=${REMOTE_TEST_VM_KNOWN_HOSTS:-}
+      - CODEASSIST_REMOTE_TEST_VM_PASSWORD=${REMOTE_TEST_VM_PASSWORD:-}
+      - CODEASSIST_REMOTE_TEST_VM_SYNC=${REMOTE_TEST_VM_SYNC:-}
+      - CODEASSIST_REMOTE_TEST_VM_CONNECT_TIMEOUT=${REMOTE_TEST_VM_CONNECT_TIMEOUT:-}
+      - CODEASSIST_REMOTE_TEST_VM_TEST_TIMEOUT=${REMOTE_TEST_VM_TEST_TIMEOUT:-}
+      - CODEASSIST_REMOTE_TEST_VM_FALLBACK_TO_LOCAL=${REMOTE_TEST_VM_FALLBACK_TO_LOCAL:-}
+      - CODEASSIST_REMOTE_TEST_VM_STRICT_HOST_KEY_CHECKING=${REMOTE_TEST_VM_STRICT_HOST_KEY_CHECKING:-}
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - TZ=UTC
     # Let the browser tool reach a dev server running on the Docker host at

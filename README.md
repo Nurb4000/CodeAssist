@@ -43,7 +43,8 @@ Environment variable overrides:
 - `CODEASSIST_WORKSPACE` -- override the workspace path inside the container
 - `HOST_PORT` -- host port to expose (default: 8090)
 - `SERVER_PORT` -- container port (must match config.toml)
-- `AUTH_DIR` -- host directory for GitHub auth config (default: `$HOME/.codeassist/auth`, or `%USERPROFILE%` on Windows)
+- `AUTH_DIR` -- host directory for GitHub auth config (default: `$HOME/.codeassist/auth`, or `%USERPROFILE%` on Windows). SSH keys/known_hosts for the test VM go in `<AUTH_DIR>/ssh`
+- `REMOTE_TEST_VM_HOST`, `REMOTE_TEST_VM_USER`, `REMOTE_TEST_VM_PORT`, etc. -- override `[remote_test_vm]` at launch; see [Remote test VM](#remote-test-vm-ssh). Empty values are ignored, so TOML remains authoritative by default
 
 #### GitHub access (one-time per developer)
 
@@ -247,6 +248,83 @@ CodeAssist includes several quality-of-life improvements:
   websearch_engine = "duckduckgo"  # or "generic" (HTML scrape fallback)
   ```
 
+### Remote test VM (SSH)
+
+By default `test_runner` runs the project's test suite on a dedicated full VM
+instead of inside the CodeAssist container. This is useful when tests need a
+real system (services, kernel features, different toolchain) rather than the
+minimal Docker image. The VM endpoint is administrator configuration -- the LLM
+never asks for an IP during a session. With no host configured, behavior is
+exactly the old local path.
+
+```toml
+[remote_test_vm]
+enabled = true                       # false = always local
+host = "10.0.1.50"                   # or a resolvable name; blank = local fallback
+port = 22
+user = "tester"
+remote_dir = "/tmp/codeassist-tests"
+key_path = "/auth/ssh/id_ed25519"    # container path; blank = SSH defaults
+known_hosts = "/auth/ssh/known_hosts"
+password = ""                        # prefer key auth; "env:VAR" also works
+sync = "rsync"                       # "rsync" = copy workspace first, "none" = VM has its checkout
+rsync_excludes = [".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "*.egg-info", "runtime/tool-output"]
+connect_timeout = 5                  # preflight / mkdir / rsync timeout
+test_timeout = 300                   # remote test command timeout
+fallback_to_local = true
+strict_host_key_checking = true
+remote_env = "source /opt/venv/bin/activate"  # trusted preamble in remote_dir
+```
+
+**Docker note:** `docker-entrypoint.sh` overwrites `config.toml` from
+`config.docker.toml` at boot, so put this table there (or use the Settings UI /
+env vars). Keys belong on the host under `<AUTH_DIR>/ssh`, mounted at
+`/auth/ssh`; chmod the private key `600` on the host. Nothing credential-like is
+baked into the image.
+
+Launch-time overrides use the same values with a `CODEASSIST_REMOTE_TEST_VM_`
+prefix, e.g.:
+
+```bash
+REMOTE_TEST_VM_HOST=10.0.1.50 REMOTE_TEST_VM_USER=tester \
+REMOTE_TEST_VM_KEY_PATH=/auth/ssh/id_ed25519 \
+REMOTE_TEST_VM_KNOWN_HOSTS=/auth/ssh/known_hosts \
+docker compose up -d
+```
+
+`docker-compose.yml` forwards `REMOTE_TEST_VM_*` into the container. Empty env
+values are intentionally ignored, so setting only `REMOTE_TEST_VM_HOST` overrides
+just the host and leaves every other value from TOML intact. The full set of
+override names is in `.env.example`; `Settings > Remote Test VM` edits the same
+config live.
+
+**Execution contract:**
+
+- Each run does an SSH preflight, creates `remote_dir`, rsyncs the workspace
+  (unless `sync = "none"`), then executes the detected test command there.
+- `test_runner` output starts with the target, e.g.
+  `**Test Results** (pytest) — remote VM (tester@10.0.1.50)` or
+  `— local container`.
+- Local fallback happens **only** when the VM is unavailable (unconfigured,
+  auth/host-key failure, connection timeout, rsync failure). A remote test
+  failure is a real result and never silently re-run locally. Set
+  `fallback_to_local = false` to make an unavailable VM a hard error.
+- Force a target per call with `target: "remote"` or `target: "local"`;
+  `target: "auto"` (the default) uses the VM when configured.
+- Framework detection reads the local workspace before syncing. If the VM's
+  checkout differs, pass `framework` explicitly or set `sync = "none"` and keep
+  the markers in sync.
+
+**Security:** key auth is preferred. `password` is passed to `sshpass -e` via the
+environment (never argv) and is marked secret in the UI. Host keys are checked
+strictly by default; `strict_host_key_checking = false` is for disposable labs
+only. `remote_env` is trusted admin config, not model input; model-supplied
+`test_path` and `extra_args` are shell-quoted and restricted to workspace-relative
+paths. rsync does not use `--delete`.
+
+The `/remote-test` skill covers result interpretation and troubleshooting. See
+`tests/test_remote_test_vm.py` for the behavior contract.
+
 ### Agent behavior
 
 - **Parallel tool execution**: Multiple independent tool calls from the LLM execute simultaneously via `asyncio.gather()`
@@ -422,7 +500,7 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `create_skill` | Create new skills for repetitive workflows |
 | `create_tool` | Create custom Python tools |
 | `diff_preview` | Show unified diff before applying edits |
-| `test_runner` | Auto-detect test framework and run tests with structured results |
+| `test_runner` | Auto-detect test framework and run tests with structured results; prefers the configured remote test VM over SSH, with local fallback |
 | `symbol_search` | Go-to-definition and find-references using ctags |
 | `package_manager` | Detect and manage dependencies (pip, npm, yarn, cargo, etc.) |
 | `git_snapshot` | Auto-commit workspace state for safe experimentation |
@@ -434,6 +512,8 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `musicgen` | Generate audio via the external musicgen (ACE-Step) server; POSTs a prompt + structured payload to `/api/generate` and saves the prompt, JSON payload, and generated WAV(s) under `<workspace>/music_generations/` (supports batch with a new seed per item) |
 
 > The `musicgen` tool talks to an external synthesis server. Configure its address in `[musicgen]` (`host`/`port`/`timeout_seconds`) in `config.toml`; runtime `host`/`port` arguments override it. Default points at `localhost:3000`.
+>
+> The `test_runner` tool runs on the remote VM configured in `[remote_test_vm]` and reports the target in every result. See [Remote test VM](#remote-test-vm-ssh) for setup, env overrides, and fallback semantics.
 >
 > The `browser` tool needs Playwright and at least one browser engine. The Docker image installs Chromium, Firefox, and WebKit automatically. On a host: `pip install -e '.[browser]' && playwright install chromium` (the default engine; a system Chrome/Chromium is also detected as a fallback). Select `engine = "chromium"`, `"firefox"`, or `"webkit"` in `[browser]` and install it with `playwright install <engine>`. Configure loopback/LAN/public access in `[browser]`; `allow_local` defaults to true for `127.0.0.1`/`localhost` dev servers.
 

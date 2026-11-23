@@ -20,7 +20,7 @@ Use this skill when the user wants to improve performance. Follow this data-driv
      - Python: `python -m cProfile -s cumulative <script>`, `py-spy`, `memory_profiler`
      - Node: `node --prof <script>`, `clinic.js`
      - Go: `go test -bench=. -benchmem`, `pprof`
-   - Use `test_runner` with timing to measure current performance
+   - Use `test_runner` with timing to measure current performance (remote VM by default; note the reported target)
    - Record baseline metrics
 
 3. **Identify bottlenecks**

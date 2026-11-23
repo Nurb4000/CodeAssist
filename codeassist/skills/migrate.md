@@ -29,7 +29,7 @@ Use this skill when the user needs to perform database migrations or data transf
 
 4. **Test the migration**
    - Run the migration against a test database
-   - Use `test_runner` to verify existing tests still pass
+   - Use `test_runner` to verify existing tests still pass (remote VM by default; note the reported target)
    - Test the rollback path
    - Verify data integrity after migration
 

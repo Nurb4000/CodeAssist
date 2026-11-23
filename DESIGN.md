@@ -554,6 +554,12 @@ A single-page chat interface:
 - [x] Cost tracker (real-time budget enforcement)
 - [x] Question tool (agent can ask user mid-task)
 
+Remote test execution is deliberately narrower than the Phase 5 worker daemon
+below: `test_runner` can sync the workspace with rsync and run the suite on a
+dedicated full VM over SSH (`[remote_test_vm]`), falling back to local execution
+only when the VM is unreachable. Only test execution is routed; no general remote
+tool is exposed to the model, and the model-facing tool contract stays unchanged.
+
 ### Phase 5: Local Workstation Daemon (planned)
 - [ ] Worker registry on server
 - [ ] `worker.py` daemon with tool execution

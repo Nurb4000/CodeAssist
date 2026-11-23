@@ -40,7 +40,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `read` to examine files before modifying them
 - Use `edit` for surgical string replacements (preferred over write)
 - Use `write` only for new files or complete rewrites (existing files are backed up to .bak automatically)
-- Use `shell` to run commands, tests, build tools, etc.
+- Use `test_runner` to run the project test suite. It defaults to the configured remote test VM and falls back to local execution only when the VM is unavailable; use `shell` for ad-hoc commands, not the test suite
 - Use `glob` to find files by pattern
 - Use `grep` to search file contents within a directory (`path` must be a directory, not a file path; supports `exclude` patterns and `context` lines)
 - Use `webfetch` to retrieve specific web content
@@ -62,7 +62,8 @@ You have access to tools that let you read files, write files, edit files, run s
 - **Plugins**: Custom tools may be available from installed plugins
 - **Git Worktrees**: Use git worktree operations for parallel development
 - **Session Management**: Fork sessions to explore alternatives without losing progress
-- **Parallel Execution**: Multiple independent tool calls may execute simultaneously for faster results"""
+- **Parallel Execution**: Multiple independent tool calls may execute simultaneously for faster results
+- **Remote Test VM**: When `<env>` shows a remote test VM, `test_runner` syncs the workspace and runs tests there; results identify the target and any local fallback"""
 
 TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Always use absolute file paths
@@ -73,7 +74,8 @@ TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Git operations require confirmation by default
 - File write/edit operations require confirmation unless workspace is trusted
 - Write tool automatically backs up existing files to .bak before overwriting
-- Grep searches directories only (`path` must be a directory, not a file path); it supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)"""
+- Grep searches directories only (`path` must be a directory, not a file path); it supports `exclude` (e.g. '*.log', 'node_modules') and `context` (lines before/after match)
+- `test_runner` reports whether results came from the remote VM or a local fallback; mention the target when it changes how a result should be interpreted"""
 
 SUMMARY_TEMPLATE = """You are summarizing a conversation so the NEXT turn of this same assistant can continue without losing track. The reader sees only this summary plus recent context, so anything you omit is lost forever. Mimic OpenCode's checkpoint: progress-anchored, terse single-line bullets (not prose), and every section filled or explicitly "(none)".
 
@@ -144,6 +146,7 @@ def build_system_prompt(workspace: Path, model_id: str, features: dict | None = 
   Model: {model_id}
   Today's date: {today_str}
   Features: MCP={features.get('mcp_enabled', False)}, Skills={features.get('skills_enabled', False)}, Plugins={features.get('plugins_enabled', False)}, LSP={features.get('lsp_enabled', False)}, Git={features.get('git_enabled', False)}
+  Remote Test VM: {features.get('remote_test_vm', 'off')}
 </env>"""
 
     parts = [BASE_PROMPT, env_block, TOOL_INSTRUCTIONS]

@@ -78,6 +78,45 @@ class ToolConfig:
 
 
 @dataclass
+class RemoteTestVMConfig:
+    """SSH target used by ``test_runner`` for tests needing a full VM.
+
+    ``enabled`` is true by default but an empty ``host`` makes the target
+    unavailable, so an unconfigured install simply falls back to local tests.
+    All values can be overridden at launch with ``CODEASSIST_REMOTE_TEST_VM_*``
+    environment variables; empty env values are ignored so TOML stays the
+    source of truth unless an override is explicitly supplied.
+    """
+
+    enabled: bool = True
+    host: str = ""
+    port: int = 22
+    user: str = ""
+    remote_dir: str = "/tmp/codeassist-tests"
+    # Empty => use the SSH client's default identity/known_hosts locations.
+    key_path: str = ""
+    known_hosts: str = ""
+    # Prefer key auth. If set (plain text or "env:VAR"), sshpass -e is used.
+    password: str = ""
+    # "rsync" syncs the current workspace before running; "none" uses the
+    # checkout already present at remote_dir.
+    sync: str = "rsync"
+    rsync_excludes: list[str] = field(default_factory=lambda: [
+        ".git", ".venv", "node_modules", "__pycache__", ".pytest_cache",
+        "*.egg-info", "runtime/tool-output",
+    ])
+    connect_timeout: int = 5
+    test_timeout: int = 300
+    # Only VM-unavailable errors trigger this; a failing remote suite is a result.
+    fallback_to_local: bool = True
+    # false => StrictHostKeyChecking=no with UserKnownHostsFile=/dev/null.
+    strict_host_key_checking: bool = True
+    # Trusted shell preamble run in remote_dir before the test command, e.g.
+    # "source /opt/venv/bin/activate". Never populated from model input.
+    remote_env: str = ""
+
+
+@dataclass
 class MCPConfig:
     enabled: bool = False
     servers: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -189,6 +228,62 @@ def _deep_merge(base: dict, override: Any) -> dict:
         else:
             base[key] = value
     return base
+
+
+def _parse_env_bool(value: str) -> bool | None:
+    """Parse a boolean env override, returning None when it is not recognisable."""
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _remote_test_vm_config(raw: dict) -> RemoteTestVMConfig:
+    """Build ``RemoteTestVMConfig`` from a raw ``[remote_test_vm]`` TOML table."""
+
+    def _positive_int(name: str, default: int) -> int:
+        try:
+            value = int(raw.get(name, default))
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    def _string_list(name: str, default: list[str]) -> list[str]:
+        value = raw.get(name, default)
+        if not isinstance(value, list):
+            return list(default)
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    sync = str(raw.get("sync", "rsync") or "rsync").strip().lower()
+    if sync not in {"rsync", "none"}:
+        raise ValueError(
+            f"Invalid remote_test_vm.sync={raw.get('sync')!r} in config.toml; "
+            "must be 'rsync' or 'none'"
+        )
+
+    password = str(raw.get("password", "") or "")
+    if password.startswith("env:"):
+        password = os.environ.get(password[4:], "")
+
+    return RemoteTestVMConfig(
+        enabled=bool(raw.get("enabled", True)),
+        host=str(raw.get("host", "") or "").strip(),
+        port=_positive_int("port", 22),
+        user=str(raw.get("user", "") or "").strip(),
+        remote_dir=str(raw.get("remote_dir", "/tmp/codeassist-tests") or "").strip(),
+        key_path=str(raw.get("key_path", "") or "").strip(),
+        known_hosts=str(raw.get("known_hosts", "") or "").strip(),
+        password=password,
+        sync=sync,
+        rsync_excludes=_string_list("rsync_excludes", RemoteTestVMConfig().rsync_excludes),
+        connect_timeout=_positive_int("connect_timeout", 5),
+        test_timeout=_positive_int("test_timeout", 300),
+        fallback_to_local=bool(raw.get("fallback_to_local", True)),
+        strict_host_key_checking=bool(raw.get("strict_host_key_checking", True)),
+        remote_env=str(raw.get("remote_env", "") or ""),
+    )
 
 
 @dataclass
@@ -303,6 +398,7 @@ class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
+    remote_test_vm: RemoteTestVMConfig = field(default_factory=RemoteTestVMConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     plugins: PluginConfig = field(default_factory=PluginConfig)
@@ -334,6 +430,74 @@ class Config:
         """
         raw = getattr(self.server, "workspace", ".")
         self.workspace = Path(os.environ.get("CODEASSIST_WORKSPACE", raw)).resolve()
+
+    def _apply_remote_vm_env_overrides(self) -> None:
+        """Apply ``CODEASSIST_REMOTE_TEST_VM_*`` launch overrides.
+
+        Empty values are deliberately ignored: compose templates pass every
+        variable through with an empty default, and an empty host would otherwise
+        wipe a perfectly good TOML endpoint. This keeps config.toml authoritative
+        unless the operator actually supplies an override.
+        """
+        rvm = self.remote_test_vm
+        original_sync = rvm.sync
+        string_overrides = {
+            "CODEASSIST_REMOTE_TEST_VM_HOST": "host",
+            "CODEASSIST_REMOTE_TEST_VM_USER": "user",
+            "CODEASSIST_REMOTE_TEST_VM_REMOTE_DIR": "remote_dir",
+            "CODEASSIST_REMOTE_TEST_VM_KEY_PATH": "key_path",
+            "CODEASSIST_REMOTE_TEST_VM_KNOWN_HOSTS": "known_hosts",
+            "CODEASSIST_REMOTE_TEST_VM_PASSWORD": "password",
+            "CODEASSIST_REMOTE_TEST_VM_SYNC": "sync",
+        }
+        for env_name, attr in string_overrides.items():
+            value = os.environ.get(env_name)
+            if value:
+                setattr(rvm, attr, value.strip() if attr != "password" else value)
+
+        int_overrides = {
+            "CODEASSIST_REMOTE_TEST_VM_PORT": "port",
+            "CODEASSIST_REMOTE_TEST_VM_CONNECT_TIMEOUT": "connect_timeout",
+            "CODEASSIST_REMOTE_TEST_VM_TEST_TIMEOUT": "test_timeout",
+        }
+        for env_name, attr in int_overrides.items():
+            value = os.environ.get(env_name)
+            if not value:
+                continue
+            try:
+                parsed = int(value)
+            except ValueError:
+                log.warning("%s='%s' is not an integer; keeping config value %s", env_name, value, getattr(rvm, attr))
+                continue
+            if parsed > 0:
+                setattr(rvm, attr, parsed)
+            else:
+                log.warning("%s='%s' must be positive; keeping config value %s", env_name, value, getattr(rvm, attr))
+
+        bool_overrides = {
+            "CODEASSIST_REMOTE_TEST_VM_ENABLED": "enabled",
+            "CODEASSIST_REMOTE_TEST_VM_FALLBACK_TO_LOCAL": "fallback_to_local",
+            "CODEASSIST_REMOTE_TEST_VM_STRICT_HOST_KEY_CHECKING": "strict_host_key_checking",
+        }
+        for env_name, attr in bool_overrides.items():
+            value = os.environ.get(env_name)
+            if not value:
+                continue
+            parsed = _parse_env_bool(value)
+            if parsed is None:
+                log.warning("%s='%s' is not a boolean; keeping config value %s", env_name, value, getattr(rvm, attr))
+                continue
+            setattr(rvm, attr, parsed)
+
+        # A bad sync value from env would break the tool at call time; validate
+        # it here with the same rule as TOML so config failures stay at boot.
+        if rvm.sync not in {"rsync", "none"}:
+            log.warning(
+                "CODEASSIST_REMOTE_TEST_VM_SYNC='%s' is invalid (use rsync|none); "
+                "keeping TOML value",
+                rvm.sync,
+            )
+            rvm.sync = original_sync
 
     @property
     def overrides_path(self) -> Path:
@@ -414,6 +578,7 @@ class Config:
                 websearch_engine=raw.get("tools", {}).get("websearch_engine", "duckduckgo"),
                 tool_output_max_tokens=raw.get("tools", {}).get("tool_output_max_tokens", 2000),
             ),
+            remote_test_vm=_remote_test_vm_config(raw.get("remote_test_vm", {})),
             mcp=MCPConfig(
                 enabled=raw.get("mcp", {}).get("enabled", False),
                 servers=raw.get("mcp", {}).get("servers", {}),
@@ -483,6 +648,7 @@ class Config:
             ),
         )
         config.refresh_workspace()
+        config._apply_remote_vm_env_overrides()
         # Allow env overrides for Docker / containerized deployments
         if os.environ.get("CODEASSIST_HOST"):
             config.server.host = os.environ["CODEASSIST_HOST"]
