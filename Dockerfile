@@ -2,7 +2,9 @@ FROM python:3.13-slim AS base
 
 # System dependencies. Minimal, non-recommends set for the app itself. libatomic1
 # is required by the Playwright driver's bundled Node before `playwright install
-# --with-deps` can run (notably for Firefox/WebKit).
+# --with-deps` can run (notably for Firefox/WebKit). The ssh/scp/sftp, sshpass
+# and rsync group supports handing code tests off to a dedicated VM; nc/ping/dig
+# check reachability and jq parses results from remote test APIs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         gh \
@@ -12,6 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         sshpass \
         openssh-client \
+        rsync \
+        netcat-openbsd \
+        iputils-ping \
+        dnsutils \
+        jq \
         libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
