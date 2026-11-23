@@ -75,6 +75,8 @@ git ls-files -s | awk '$1=="100644"{print $4}' | xargs -r chmod 644
 git ls-files -s | awk '$1=="100755"{print $4}' | xargs -r chmod 755
 ```
 
+GitHub CLI/git credentials are kept outside the image in a per-developer host directory (`AUTH_DIR`, default `$HOME/.codeassist/auth`, with a `USERPROFILE` fallback on Windows). Bootstrap it once with the commands in the README's Docker section. The token lives on your workstation and survives rebuilds — never commit it or point `AUTH_DIR` inside the repository.
+
 ## Running Tests
 
 ```bash

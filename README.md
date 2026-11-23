@@ -43,6 +43,21 @@ Environment variable overrides:
 - `CODEASSIST_WORKSPACE` -- override the workspace path inside the container
 - `HOST_PORT` -- host port to expose (default: 8090)
 - `SERVER_PORT` -- container port (must match config.toml)
+- `AUTH_DIR` -- host directory for GitHub auth config (default: `$HOME/.codeassist/auth`, or `%USERPROFILE%` on Windows)
+
+#### GitHub access (one-time per developer)
+
+The container includes `git` and the GitHub CLI (`gh`). To let the agent use private repos or commands like `gh pr diff`, authorize once after starting the container:
+
+```bash
+mkdir -p "$HOME/.codeassist/auth" && chmod 700 "$HOME/.codeassist/auth"
+docker compose up -d
+docker compose exec -it codeassist gh auth login --web --git-protocol https --insecure-storage
+docker compose exec codeassist gh auth setup-git
+docker compose exec codeassist gh auth status
+```
+
+`gh auth login` stores the token in `$HOME/.codeassist/auth/gh/hosts.yml` on your **host** (not in the image or repo), and `gh auth setup-git` writes the git credential helper into the same directory. It survives restarts, container recreations, and image rebuilds; remove that directory or run `gh auth logout` to revoke it locally. Set `AUTH_DIR` to use a different host directory.
 
 ### With conda (local development)
 

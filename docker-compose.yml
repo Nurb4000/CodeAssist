@@ -19,9 +19,17 @@ services:
       # settings persisted in the DB. This avoids Docker's bind-mount trap of
       # creating an empty ./config.toml directory when the file is absent.
       - ${DATA_VOLUME}:/app/data
+      # GitHub CLI / git auth config lives on the host, never in the image.
+      # Defaults to $HOME/.codeassist/auth (USERPROFILE on Windows) and survives
+      # container recreations and image rebuilds. No credentials are baked in.
+      - ${AUTH_DIR:-${HOME:-${USERPROFILE}}/.codeassist/auth}:/auth
     environment:
       - CODEASSIST_WORKSPACE=/workspace
       - CODEASSIST_DATA_DIR=/app/data
+      # Keep gh/git config in the mounted host dir instead of the container's
+      # ephemeral /root so `gh auth login` persists across container recreation.
+      - GH_CONFIG_DIR=/auth/gh
+      - GIT_CONFIG_GLOBAL=/auth/gitconfig
       - SERVER_PORT=${SERVER_PORT}
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - TZ=UTC
