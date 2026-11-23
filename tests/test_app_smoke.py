@@ -1114,6 +1114,64 @@ def test_ws_turn_writes_the_plan_to_its_own_session(live_client, monkeypatch):
     assert asyncio.run(_rows()) == ["Plan item"]
 
 
+def test_ws_turn_keeps_the_active_plan_item_in_sync(live_client, monkeypatch):
+    """The first pending item starts when work runs; the next one takes over.
+
+    The model almost always writes `completed` but rarely writes `in_progress`.
+    The panel must still follow the work: a real tool call starts task 1, and a
+    todo update completing it immediately starts task 2.
+    """
+    import asyncio
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist import server as server_mod
+    from codeassist.llm import Finish, TextDelta, ToolCall, Usage
+
+    sid = f"plan-auto-{uuid.uuid4()}"
+
+    async def _seed():
+        tool = server_mod.tools.get("todo")
+        tool.bind(sid)
+        await tool.load_session(sid)
+        await tool.execute("add", content="Do the work")
+        await tool.execute("add", content="Follow up")
+
+    asyncio.run(_seed())
+
+    calls = {"n": 0}
+
+    async def _stream(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield ToolCall(id="g1", name="glob", arguments={"pattern": "*"})
+        elif calls["n"] == 2:
+            yield ToolCall(id="t1", name="todo", arguments={
+                "action": "update", "task_id": 1, "status": "completed",
+            })
+        else:
+            yield TextDelta("Done.")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "work through the plan"})
+        events = []
+        for _ in range(80):
+            data = ws.receive_json()
+            events.append(data)
+            if data.get("type") == "done":
+                break
+
+    updates = [e for e in events if e.get("type") == "plan_update"]
+    assert updates, f"no plan_update event, got {[e.get('type') for e in events]}"
+    # The first update starts real work; the model never wrote `in_progress`.
+    assert [t["status"] for t in updates[0]["tasks"]] == ["in_progress", "pending"]
+    # Completing task 1 hands off to task 2 in the same turn.
+    assert [t["status"] for t in updates[-1]["tasks"]] == ["completed", "in_progress"]
+
+
 def test_approve_tool_rejects_out_of_workspace_path(live_client, monkeypatch):
     """approve_tool must refuse a client-supplied path outside the workspace.
 

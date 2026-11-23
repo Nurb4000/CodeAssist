@@ -1329,6 +1329,24 @@ class Agent:
         if question_tool and hasattr(question_tool, "set_answer"):
             question_tool.set_answer(question_id, answer)
 
+    async def _promote_plan_task(self) -> list[dict] | None:
+        """Mark the first pending plan item in progress, if nothing is active.
+
+        The model almost always marks *completed* items but frequently leaves
+        the current one at ``pending``, so the panel looked idle while work was
+        underway. Starting the item here -- when a tool actually runs, or after
+        a plan update finishes a step -- makes the blue in-progress cue reliable
+        without asking the model to manage another field.
+        """
+        todo_tool = self.tools.get("todo")
+        if todo_tool is None or not hasattr(todo_tool, "promote_next_in_progress"):
+            return None
+        task = await todo_tool.promote_next_in_progress()
+        if task is None:
+            return None
+        log.debug("Auto-marked plan task #%s as in_progress", task.get("id"))
+        return todo_tool.get_tasks(self.session.id)
+
     async def run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         """Run one turn, bound to this agent's session.
 
@@ -2482,6 +2500,15 @@ class Agent:
                     )
                     return
 
+                # The model reliably ticks off finished work but often never
+                # writes `in_progress`. Start the first pending item as soon as
+                # real work is about to run, so the panel shows the active step
+                # instead of a row of gray "pending" items.
+                if any(tc.name != "todo" for tc in confirmed_tool_calls):
+                    tasks = await self._promote_plan_task()
+                    if tasks is not None:
+                        yield AgentEvent("plan_update", {"tasks": tasks})
+
                 # Phase 2: Execute confirmed tools in parallel
                 async def _exec_tool(tc):
                     start = time.monotonic()
@@ -2556,6 +2583,7 @@ class Agent:
                             "id": tc.id, "name": tc.name, "output": truncated_err,
                         })
 
+                    plan_mutated = False
                     for tc, result, truncated, duration_ms in completed:
                         await self.session.add_message("tool", content=truncated, tool_call_id=tc.id)
                         self._messages_dirty = True
@@ -2584,6 +2612,16 @@ class Agent:
                                     "plan_update",
                                     {"tasks": todo_tool.get_tasks(self.session.id)},
                                 )
+                                # A finished step should hand off to the next one
+                                # immediately, even when the model did not set a
+                                # new in_progress status in its update call.
+                                if not result.error and tc.arguments.get("action") in ("add", "update"):
+                                    plan_mutated = True
+
+                    if plan_mutated:
+                        tasks = await self._promote_plan_task()
+                        if tasks is not None:
+                            yield AgentEvent("plan_update", {"tasks": tasks})
 
                 continue
 

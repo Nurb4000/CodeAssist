@@ -107,18 +107,19 @@ test('checkbox status colors survive status aliases and keep the text status', a
           { id: 1, content: 'First task — DONE', status: 'done' },
           { id: 2, content: 'Second task — in progress', status: 'In Progress' },
           { id: 3, content: 'Third task', status: 'pending' },
+          { id: 4, content: 'Fourth task', status: 'IN PROCESS' },
         ],
       },
     },
   });
 
   assert.deepStrictEqual(
-    planStatuses(env.document), ['completed', 'in_progress', 'pending'],
+    planStatuses(env.document), ['completed', 'in_progress', 'pending', 'in_progress'],
     'aliases are rendered with canonical status classes'
   );
   assert.deepStrictEqual(
     planItems(env.document),
-    ['First task — DONE', 'Second task — in progress', 'Third task'],
+    ['First task — DONE', 'Second task — in progress', 'Third task', 'Fourth task'],
     'the text status is left untouched'
   );
 
@@ -127,13 +128,14 @@ test('checkbox status colors survive status aliases and keep the text status', a
     'plan-checkbox status-completed',
     'plan-checkbox status-in_progress',
     'plan-checkbox status-pending',
+    'plan-checkbox status-in_progress',
   ]);
-  assert.deepStrictEqual(boxes.map((b) => b.textContent), ['✓', '⌛', '']);
+  assert.deepStrictEqual(boxes.map((b) => b.textContent), ['✓', '⌛', '', '⌛']);
   assert.deepStrictEqual(boxes.map((b) => b.getAttribute('aria-label')), [
-    'Complete', 'In progress', 'Pending',
+    'Complete', 'In progress', 'Pending', 'In progress',
   ]);
   assert.deepStrictEqual(boxes.map((b) => b.title), [
-    'Complete', 'In progress', 'Pending',
+    'Complete', 'In progress', 'Pending', 'In progress',
   ]);
 });
 
@@ -154,16 +156,17 @@ test('textual status tags in task content drive the status cue', async () => {
           { id: 4, content: '#9 Pin dependencies — MEDIUM [completed] requirements synced', status: 'pending' },
           { id: 5, content: 'Task — IN PROGRESS', status: 'completed' },
           { id: 6, content: 'Fix the DONE handler', status: 'pending' },
+          { id: 7, content: 'Gap #9: scheduler — IN PROCESS', status: 'pending' },
         ],
       },
     },
   });
 
   assert.deepStrictEqual(planStatuses(env.document), [
-    'in_progress', 'in_progress', 'completed', 'completed', 'completed', 'pending',
+    'in_progress', 'in_progress', 'completed', 'completed', 'completed', 'pending', 'in_progress',
   ]);
   assert.deepStrictEqual(planCheckboxes(env.document).map((b) => b.textContent), [
-    '⌛', '⌛', '✓', '✓', '✓', '',
+    '⌛', '⌛', '✓', '✓', '✓', '', '⌛',
   ]);
   assert.deepStrictEqual(planItems(env.document), [
     'Gap #8: cron validation — IN PROGRESS',
@@ -172,6 +175,7 @@ test('textual status tags in task content drive the status cue', async () => {
     '#9 Pin dependencies — MEDIUM [completed] requirements synced',
     'Task — IN PROGRESS',
     'Fix the DONE handler',
+    'Gap #9: scheduler — IN PROCESS',
   ], 'text tags are read but never stripped from the task');
 });
 

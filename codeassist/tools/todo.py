@@ -41,7 +41,9 @@ STATUS_ALIASES = {
     "backlog": "pending",
     "in_progress": "in_progress",
     "in progress": "in_progress",
-    "inprogress": "in_progress",
+    "in_process": "in_progress",
+    "in process": "in_progress",
+    "inprocess": "in_progress",
     "wip": "in_progress",
     "active": "in_progress",
     "started": "in_progress",
@@ -77,14 +79,14 @@ def _normalize_status(status: str) -> str | None:
 # count: a bracketed word, an uppercase label after a dash/colon, or one at the
 # very end. Ordinary prose ("done by Friday", "a DONE handler") is left alone.
 _BRACKETED_STATUS_RE = re.compile(
-    r"[\[(]\s*(done|complete|completed|finished|closed|in[ -]?progress|wip)\s*[\])]",
+    r"[\[(]\s*(done|complete|completed|finished|closed|in[ -]?(?:progress|process)|wip)\s*[\])]",
     re.IGNORECASE,
 )
 _BARE_STATUS_RE = re.compile(
-    r"(?:^|[—–:;|]\s*|\s+-\s+)(DONE|COMPLETE|COMPLETED|FINISHED|CLOSED|COMMITTED|PUSHED|IN[ -]?PROGRESS|WIP)"
+    r"(?:^|[—–:;|]\s*|\s+-\s+)(DONE|COMPLETE|COMPLETED|FINISHED|CLOSED|COMMITTED|PUSHED|IN[ -]?(?:PROGRESS|PROCESS)|WIP)"
     r"(?=$|[\s—–:;,.!|)])"
 )
-_TAIL_STATUS_RE = re.compile(r"\s+(DONE|COMPLETED|IN[ -]?PROGRESS|WIP)\s*[.!]?$")
+_TAIL_STATUS_RE = re.compile(r"\s+(DONE|COMPLETED|IN[ -]?(?:PROGRESS|PROCESS)|WIP)\s*[.!]?$")
 
 
 def _status_from_content(content: str | None) -> str | None:
@@ -132,7 +134,7 @@ class TodoTool(Tool):
             "action": {"type": "string", "enum": ["add", "update", "list", "clear"], "description": "Action to perform"},
             "task_id": {"type": "integer", "description": "Task ID (for update). May be a numeric string."},
             "content": {"type": "string", "description": "Task description (for add/update)"},
-            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Task status (for update). Aliases like done/complete/active are accepted."},
+            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Task status (for update). Aliases like done/complete/active/in process are accepted."},
         },
         "required": ["action"],
     }
@@ -266,6 +268,29 @@ class TodoTool(Tool):
                 await db.commit()
         except Exception as e:  # noqa: BLE001
             log.warning("Could not persist plan tasks for session %s: %s", key, e)
+
+    async def promote_next_in_progress(self) -> dict | None:
+        """Start the first pending task when the plan has no active one.
+
+        The model is reliable about ticking off finished work but often never
+        writes ``in_progress`` at all, which left every unfinished row gray
+        until the final tick. The agent calls this when real tool work begins and
+        again after a plan mutation, so the panel follows the work without
+        depending on the model remembering the status field.
+
+        Text tags count as active too: a legacy row already saying "IN PROGRESS"
+        must not be followed by a second in-progress row.
+        """
+        key = self._key()
+        tasks = self._list(key)
+        if any(_effective_status(t) == "in_progress" for t in tasks):
+            return None
+        for task in tasks:
+            if _effective_status(task) == "pending":
+                task["status"] = "in_progress"
+                await self.save_session(key)
+                return task
+        return None
 
     async def clear_tasks(self, session_id: str | None = None):
         """Empty a session's plan, in memory and on disk."""

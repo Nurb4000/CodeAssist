@@ -2669,6 +2669,7 @@ const PLAN_STATUS_ALIASES = {
     'not started': 'pending',
     backlog: 'pending',
     'in progress': 'in_progress',
+    'in process': 'in_progress',
     inprogress: 'in_progress',
     wip: 'in_progress',
     active: 'in_progress',
@@ -2699,9 +2700,9 @@ function normalizePlanStatus(status) {
 // pending. Read those explicit tags so the visual cue matches what the task says.
 // Keep the match narrow -- a bracketed word, an uppercase label after a
 // dash/colon, or one at the end -- so ordinary prose is not mistaken for status.
-const CONTENT_BRACKETED_STATUS_RE = /[\[(]\s*(done|complete|completed|finished|closed|in[-\s]?progress|wip)\s*[\])]/gi;
-const CONTENT_BARE_STATUS_RE = /(?:^|[—–:;|]\s*|\s+-\s+)(DONE|COMPLETE|COMPLETED|FINISHED|CLOSED|COMMITTED|PUSHED|IN[ -]?PROGRESS|WIP)(?=$|[\s—–:;,.!|)])/g;
-const CONTENT_TAIL_STATUS_RE = /\s+(DONE|COMPLETED|IN[ -]?PROGRESS|WIP)\s*[.!]?$/g;
+const CONTENT_BRACKETED_STATUS_RE = /[\[(]\s*(done|complete|completed|finished|closed|in[-\s]?(?:progress|process)|wip)\s*[\])]/gi;
+const CONTENT_BARE_STATUS_RE = /(?:^|[—–:;|]\s*|\s+-\s+)(DONE|COMPLETE|COMPLETED|FINISHED|CLOSED|COMMITTED|PUSHED|IN[ -]?(?:PROGRESS|PROCESS)|WIP)(?=$|[\s—–:;,.!|)])/g;
+const CONTENT_TAIL_STATUS_RE = /\s+(DONE|COMPLETED|IN[ -]?(?:PROGRESS|PROCESS)|WIP)\s*[.!]?$/g;
 
 function statusFromContent(content) {
     if (!content) return null;

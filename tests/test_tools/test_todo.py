@@ -47,6 +47,8 @@ class TestTodoTool:
             ("DONE", "completed"),
             ("active", "in_progress"),
             ("in progress", "in_progress"),
+            ("in process", "in_progress"),
+            ("in-process", "in_progress"),
             ("started", "in_progress"),
             ("todo", "pending"),
         ]:
@@ -65,7 +67,8 @@ class TestTodoTool:
             ("Gap #8: cron validation — IN PROGRESS", "in_progress"),
             ("Task E: end-to-end checks IN PROGRESS", "in_progress"),
             ("Task F - IN PROGRESS", "in_progress"),
-            ("[in progress] investigate regression", "in_progress"),
+            ("Gap #9: scheduler — IN PROCESS", "in_progress"),
+            ("[in process] investigate regression", "in_progress"),
             ("#27 Audit IDOR — DONE: both endpoints gated", "completed"),
             ("#9 Pin dependencies — MEDIUM [completed] requirements synced", "completed"),
             ("Fix the DONE handler", "pending"),  # prose, not a status tag
@@ -93,6 +96,50 @@ class TestTodoTool:
         assert todo.get_tasks()[0]["status"] == "completed"
         result = await todo.execute("list")
         assert "[x] Task — IN PROGRESS" in result.output
+
+    @pytest.mark.asyncio
+    async def test_promote_next_in_progress_starts_the_first_pending_item(self, todo):
+        # The agent calls this instead of trusting the model to set in_progress.
+        await todo.execute("add", content="First")
+        await todo.execute("add", content="Second")
+
+        changed = await todo.promote_next_in_progress()
+
+        assert changed["id"] == 1
+        assert [t["status"] for t in todo.get_tasks()] == ["in_progress", "pending"]
+
+    @pytest.mark.asyncio
+    async def test_promote_next_in_progress_does_not_start_a_second_item(self, todo):
+        await todo.execute("add", content="First")
+        await todo.execute("update", task_id=1, status="in_progress")
+        await todo.execute("add", content="Second")
+
+        assert await todo.promote_next_in_progress() is None
+        assert [t["status"] for t in todo.get_tasks()] == ["in_progress", "pending"]
+
+    @pytest.mark.asyncio
+    async def test_promote_next_in_progress_advances_after_a_completion(self, todo):
+        # The model marks the finished item but not the next one. One call from
+        # the agent after the update must hand off to the following task.
+        await todo.execute("add", content="First")
+        await todo.execute("add", content="Second")
+        await todo.execute("update", task_id=1, status="in_progress")
+        await todo.execute("update", task_id=1, status="completed")
+
+        changed = await todo.promote_next_in_progress()
+
+        assert changed["id"] == 2
+        assert [t["status"] for t in todo.get_tasks()] == ["completed", "in_progress"]
+
+    @pytest.mark.asyncio
+    async def test_promote_next_in_progress_skips_items_finished_in_their_text(self, todo):
+        await todo.execute("add", content="First — DONE")
+        await todo.execute("add", content="Second")
+
+        changed = await todo.promote_next_in_progress()
+
+        assert changed["id"] == 2
+        assert [t["status"] for t in todo.get_tasks()] == ["completed", "in_progress"]
 
     @pytest.mark.asyncio
     async def test_numeric_string_task_id_is_accepted(self, todo):
