@@ -1172,6 +1172,79 @@ def test_ws_turn_keeps_the_active_plan_item_in_sync(live_client, monkeypatch):
     assert [t["status"] for t in updates[-1]["tasks"]] == ["completed", "in_progress"]
 
 
+def test_ws_turn_asks_the_model_to_sync_a_stale_plan(live_client, monkeypatch):
+    """A long tool stretch with no todo call must not strand the active cue.
+
+    The model is the only one that knows it moved to another task; the runtime
+    cannot derive that from tool arguments. After a threshold of ordinary tool
+    calls it asks the model to refresh the plan exactly once, instead of
+    guessing a new in-progress row (which would put the cue on the wrong task).
+    """
+    import asyncio
+    import uuid
+
+    import codeassist.agent as agent_mod
+    import codeassist.llm as llm_mod
+    from codeassist import server as server_mod
+    from codeassist.llm import Finish, TextDelta, ToolCall, Usage
+
+    sid = f"plan-heartbeat-{uuid.uuid4()}"
+
+    async def _seed():
+        tool = server_mod.tools.get("todo")
+        tool.bind(sid)
+        await tool.load_session(sid)
+        await tool.execute("add", content="First item")
+        await tool.execute("add", content="Second item")
+
+    asyncio.run(_seed())
+
+    calls = {"n": 0}
+    seen_messages = []
+
+    async def _stream(self, *args, **kwargs):
+        messages = args[0] if args else kwargs.get("messages", [])
+        seen_messages.append(messages)
+        calls["n"] += 1
+        if calls["n"] <= agent_mod.PLAN_HEARTBEAT_TOOL_CALLS:
+            # Distinct arguments so the repeated-call loop detector stays quiet.
+            yield ToolCall(
+                id=f"g{calls['n']}",
+                name="glob",
+                arguments={"pattern": f"step-{calls['n']}-*"},
+            )
+        else:
+            yield TextDelta("Done.")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "work through the plan"})
+        events = []
+        for _ in range(120):
+            data = ws.receive_json()
+            events.append(data)
+            if data.get("type") == "done":
+                break
+
+    nudge_steps = [
+        i for i, messages in enumerate(seen_messages)
+        if any(
+            m.get("role") == "user" and "Plan check" in (m.get("content") or "")
+            for m in messages
+        )
+    ]
+    assert nudge_steps, "no plan heartbeat was sent to the model"
+    # Request-only and one-shot: once the model has seen it, later steps and a
+    # later turn must not replay it.
+    assert len(nudge_steps) == 1, f"heartbeat was repeated: {nudge_steps}"
+
+    updates = [e for e in events if e.get("type") == "plan_update"]
+    assert updates, f"no plan_update event, got {[e.get('type') for e in events]}"
+    assert [t["status"] for t in updates[-1]["tasks"]] == ["in_progress", "pending"]
+
+
 def test_approve_tool_rejects_out_of_workspace_path(live_client, monkeypatch):
     """approve_tool must refuse a client-supplied path outside the workspace.
 

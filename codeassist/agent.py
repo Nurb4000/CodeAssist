@@ -275,6 +275,19 @@ CONTINUATION_NUDGE_FIRM = (
     "or restate your previous message; state only what is new.]"
 )
 
+# The model reliably ticks off finished work but often moves to the next task
+# without ever calling `todo`, which leaves the in-progress cue stranded on the
+# old row. The runtime cannot infer *which* task it moved to from tool arguments
+# (one task may take 20+ calls and the next only 3), so after a stretch of real
+# work ask the model to sync the plan itself. One-shot and only while unfinished
+# work remains, so it does not nag on every step or after the plan is complete.
+PLAN_HEARTBEAT_TOOL_CALLS = 8
+PLAN_HEARTBEAT_NUDGE = (
+    "[Plan check: update your task list now. Mark any item you have finished as "
+    "completed, and set the item you are working on right now to in_progress. "
+    "If you have moved to a different task, do this before continuing your work.]"
+)
+
 # Injected (as a user turn) when the agent reaches its per-agent step budget.
 # Tools are disabled for this final turn so the model cannot keep going; instead
 # it produces a structured wrap-up — what was accomplished, what remains, and
@@ -843,6 +856,11 @@ class Agent:
         # restates that answer (reset per run in run()).
         self._nudge_answer: str | None = None
         self._defer_nudge_text: bool = False
+        # Plan heartbeat: count real tool calls since the last `todo` mutation
+        # and queue a one-shot request for the model to sync the plan. Reset per
+        # run in _run() so a new user turn starts with a clean slate.
+        self._tools_since_plan_update: int = 0
+        self._plan_nudge_pending: bool = False
         # The assistant placeholder row for the step currently streaming, if it
         # has not yet been finalized. Set when the row is created and cleared
         # once it is persisted or deleted. A turn that unwinds on an exception
@@ -1347,6 +1365,21 @@ class Agent:
         log.debug("Auto-marked plan task #%s as in_progress", task.get("id"))
         return todo_tool.get_tasks(self.session.id)
 
+    def _plan_has_pending_work(self) -> bool:
+        """Whether this session's plan still has work the model could move to.
+
+        Used only to decide if a plan heartbeat is worth sending: once every row
+        is completed there is nothing for the model to sync, and nagging it to
+        update a finished plan just adds noise.
+        """
+        todo_tool = self.tools.get("todo")
+        if todo_tool is None or not hasattr(todo_tool, "get_tasks"):
+            return False
+        return any(
+            task.get("status") == "pending"
+            for task in todo_tool.get_tasks(self.session.id)
+        )
+
     async def run(self, user_message: str, attachments: list[dict] | None = None) -> AsyncIterator[AgentEvent]:
         """Run one turn, bound to this agent's session.
 
@@ -1415,6 +1448,8 @@ class Agent:
         self._continuation_nudges = 0
         self._nudge_answer = None
         self._defer_nudge_text = False
+        self._tools_since_plan_update = 0
+        self._plan_nudge_pending = False
         # A nudge belongs to the turn that earned it. Clearing the overlay here
         # is what stops one turn's instruction to "carry on with the task" from
         # becoming the newest thing the model sees when the user has moved on.
@@ -1815,6 +1850,15 @@ class Agent:
                             "continuing to the hard stop", pct,
                         )
 
+            # A heartbeat queued by the previous step's tool work is injected
+            # once, into this step's request. Keep it in a local so a compaction
+            # retry inside the same step still carries it. Like the continuation
+            # nudge it is request-only: it never reaches the session rows.
+            plan_nudge = None
+            if self._plan_nudge_pending:
+                plan_nudge = {"role": "user", "content": PLAN_HEARTBEAT_NUDGE}
+                self._plan_nudge_pending = False
+
             # ── Phase 0: Build messages (with compaction if needed) ──────
             # Fetch messages once, then track incrementally
             if self._messages is None or self._messages_dirty:
@@ -2050,6 +2094,8 @@ class Agent:
             # the real rows, so the model reads them as the most recent turns
             # rather than as part of the persisted history.
             messages.extend(self._pending_nudges)
+            if plan_nudge is not None:
+                messages.append(plan_nudge)
 
             # On the final allowed step, disable tools and ask the model for a
             # structured wrap-up instead of stopping abruptly. This mirrors
@@ -2229,6 +2275,8 @@ class Agent:
                             "content": "[Context was compacted to save space. Continue with your next steps if the task is not yet complete.]",
                         })
                     messages.extend(self._pending_nudges)
+                    if plan_nudge is not None:
+                        messages.append(plan_nudge)
                     _cached_messages = list(base)
                     self._compaction_count += 1
                     yield AgentEvent("compacted", {
@@ -2617,6 +2665,28 @@ class Agent:
                                 # new in_progress status in its update call.
                                 if not result.error and tc.arguments.get("action") in ("add", "update"):
                                     plan_mutated = True
+                                    # The model just synced the plan itself, so
+                                    # this stretch of work needs no heartbeat.
+                                    self._tools_since_plan_update = 0
+                        else:
+                            # The model is the only source of truth for which
+                            # task it moved to. After a stretch of real work
+                            # with no plan update, ask it to refresh the plan
+                            # instead of guessing from tool arguments (one task
+                            # can take 20+ calls and the next only 3).
+                            self._tools_since_plan_update += 1
+                            if (
+                                self._tools_since_plan_update >= PLAN_HEARTBEAT_TOOL_CALLS
+                                and not self._plan_nudge_pending
+                                and self._plan_has_pending_work()
+                            ):
+                                self._plan_nudge_pending = True
+                                self._tools_since_plan_update = 0
+                                log.debug(
+                                    "Queued plan heartbeat after %d tool calls "
+                                    "without a plan update",
+                                    PLAN_HEARTBEAT_TOOL_CALLS,
+                                )
 
                     if plan_mutated:
                         tasks = await self._promote_plan_task()

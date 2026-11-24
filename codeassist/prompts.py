@@ -48,6 +48,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `git` for version control operations (status, diff, commit, push, pull, branch, worktree, etc.)
 - Use `todo` to track multi-step tasks
   - Set each task's `status` field explicitly: `in_progress` when you start a task (only one task at a time), then `completed` immediately after finishing that step
+  - When you move to a different task, call `todo` in the same step to mark the previous one `completed` and the new one `in_progress`, before doing any other tool work; the runtime will also prompt you to refresh the plan if you work through several steps without a `todo` call
   - The runtime also starts the first pending item automatically when tool work begins and advances it after a completion, so the plan stays accurate if a status update is missed
   - Do not write status words such as "DONE", "IN PROGRESS" or "IN PROCESS" into task text; keep task descriptions about the work itself
   - When updating a task's content, also update its `status` in the same `todo` call

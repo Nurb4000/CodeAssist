@@ -487,7 +487,7 @@ See `docs/knowledge-base-quickref.md` for full API reference.
 | `grep` | Search file contents with regex, supports `exclude` patterns and `context` lines (uses ripgrep if available) |
 | `webfetch` | Fetch and return content from a URL |
 | `websearch` | Search the web for information |
-| `todo` | Manage a task list across multi-step work (statuses `pending` / `in_progress` / `completed`; the runtime starts the first pending item when work begins and advances it after completions; text tags like `— IN PROGRESS`, `— IN PROCESS` or `[DONE]` are also recognised) |
+| `todo` | Manage a task list across multi-step work (statuses `pending` / `in_progress` / `completed`; the runtime starts the first pending item when work begins and advances it after completions, and asks the model to refresh the plan after a long stretch of tool work with no status update; text tags like `— IN PROGRESS`, `— IN PROCESS` or `[DONE]` are also recognised) |
 | `git` | Full git operations: status, diff, log, commit, push, pull, branch, clone, worktree, apply patch |
 | `fossil` | Fossil VCS operations: status, diff, log, commit, checkout, branch, tag |
 | `database` | Execute SQL queries against SQLite databases |
