@@ -235,9 +235,30 @@ async def _ssh_exec(remote: RemoteTestVMConfig, script: str, *, timeout: int) ->
     return await _run_process(cmd, timeout=timeout, env=env)
 
 
-def _rsync_command(workspace: Path, remote: RemoteTestVMConfig) -> tuple[list[str], dict[str, str] | None]:
+async def _resolve_remote_dir(remote: RemoteTestVMConfig) -> str:
+    """Expand a leading ``~`` against the remote user's home directory.
+
+    ``remote_dir`` defaults to ``~/codeassist-tests`` on the dedicated VM, not
+    ``/tmp``: the latter is typically a small tmpfs that gets wiped. The VM's
+    ``$HOME`` has to be queried over SSH -- local ``expanduser()`` would return
+    the CodeAssist container's home, which is a different machine.
+    """
+    remote_dir = remote.remote_dir
+    if remote_dir != "~" and not remote_dir.startswith("~/"):
+        return remote_dir
+    rc, output = await _ssh_exec(remote, 'printf %s "$HOME"', timeout=remote.connect_timeout)
+    if rc != 0 or not output.strip():
+        raise RemoteVMUnavailable(
+            f"could not resolve remote home for remote_dir {remote_dir!r}: {_output_tail(output, 400)}"
+        )
+    home = output.strip().rstrip("/")
+    return home if remote_dir == "~" else f"{home}/{remote_dir[2:]}"
+
+
+def _rsync_command(workspace: Path, remote: RemoteTestVMConfig, remote_dir: str | None = None) -> tuple[list[str], dict[str, str] | None]:
     source = str(workspace).rstrip("/") + "/"
-    destination = f"{_remote_target(remote)}:{shlex.quote(remote.remote_dir)}/"
+    remote_dir = remote_dir if remote_dir is not None else remote.remote_dir
+    destination = f"{_remote_target(remote)}:{shlex.quote(remote_dir)}/"
     cmd = ["rsync", "-az"]
     cmd.extend(f"--exclude={pattern}" for pattern in remote.rsync_excludes)
     cmd.extend(["-e", shlex.join(_ssh_options(remote)), source, destination])
@@ -252,20 +273,21 @@ async def _run_remote(workspace: Path, cmd: list[str], remote: RemoteTestVMConfi
     rc, output = await _ssh_exec(remote, "true", timeout=remote.connect_timeout)
     if rc != 0:
         raise RemoteVMUnavailable(f"SSH preflight failed (exit {rc}): {_output_tail(output, 400)}")
+    remote_dir = await _resolve_remote_dir(remote)
 
     if remote.sync == "rsync":
-        quoted_dir = shlex.quote(remote.remote_dir)
+        quoted_dir = shlex.quote(remote_dir)
         rc, output = await _ssh_exec(remote, f"mkdir -p {quoted_dir}", timeout=remote.connect_timeout)
         if rc != 0:
             raise RemoteVMUnavailable(f"could not create remote dir (exit {rc}): {_output_tail(output, 400)}")
 
-        rsync_cmd, rsync_env = _rsync_command(workspace, remote)
-        log.info("Syncing workspace to %s:%s", target, remote.remote_dir)
+        rsync_cmd, rsync_env = _rsync_command(workspace, remote, remote_dir)
+        log.info("Syncing workspace to %s:%s", target, remote_dir)
         rc, output = await _run_process(rsync_cmd, timeout=remote.test_timeout, env=rsync_env)
         if rc != 0:
             raise RemoteVMUnavailable(f"rsync failed (exit {rc}): {_output_tail(output, 400)}")
 
-    script_parts = [f"cd {shlex.quote(remote.remote_dir)}"]
+    script_parts = [f"cd {shlex.quote(remote_dir)}"]
     if remote.remote_env:
         script_parts.append(remote.remote_env)  # admin-controlled config, not model input
     script_parts.append(shlex.join(cmd))

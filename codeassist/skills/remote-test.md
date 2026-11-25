@@ -1,6 +1,6 @@
 ---
 name: remote-test
-description: Run and troubleshoot the test suite on a dedicated remote VM over SSH
+description: Run or troubleshoot test suites on the configured dedicated remote VM (the default when a host is set, local only as a fallback)
 slash: remote-test
 ---
 
@@ -19,6 +19,8 @@ is always done by `test_runner`; this skill is guidance only.
   includes a `Fallback reason`. A failing remote suite is **not** a fallback
   condition — it is a real test failure.
 - `<env>` in the system prompt shows `Remote Test VM: ssh(user@host)` or `off`.
+- The synced workspace lives in `[remote_test_vm].remote_dir` (default
+  `~/codeassist-tests` on the VM), never `/tmp` — that is a small, wiped tmpfs.
 
 ## Steps
 

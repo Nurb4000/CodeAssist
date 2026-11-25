@@ -21,4 +21,4 @@ You are generating comprehensive tests. Follow these steps:
    - Well-named (describe the behavior being tested)
    - Self-documenting
 
-After writing tests, run them with `test_runner` to verify they pass (remote test VM when configured, local fallback otherwise).
+After writing tests, run them with `test_runner` (default target: remote VM when configured; local only if the VM is unreachable). Never use `shell` for the suite or stage work in `/tmp`.

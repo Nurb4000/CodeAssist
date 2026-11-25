@@ -263,7 +263,7 @@ enabled = true                       # false = always local
 host = "10.0.1.50"                   # or a resolvable name; blank = local fallback
 port = 22
 user = "tester"
-remote_dir = "/tmp/codeassist-tests"
+remote_dir = "~/codeassist-tests"   # remote user's home; expanded on the VM, not locally
 key_path = "/auth/ssh/id_ed25519"    # container path; blank = SSH defaults
 known_hosts = "/auth/ssh/known_hosts"
 password = ""                        # prefer key auth; "env:VAR" also works
@@ -275,6 +275,11 @@ fallback_to_local = true
 strict_host_key_checking = true
 remote_env = "source /opt/venv/bin/activate"  # trusted preamble in remote_dir
 ```
+
+`remote_dir` defaults to `~/codeassist-tests`. A leading `~` is expanded against
+the remote SSH user's `$HOME` (not the container's), so synced work lands on the
+VM's regular filesystem. Avoid `/tmp` here: on current Linux it is commonly a
+small tmpfs and is cleared between boots — too small for a workspace sync.
 
 **Docker note:** `docker-entrypoint.sh` overwrites `config.toml` from
 `config.docker.toml` at boot, so put this table there (or use the Settings UI /

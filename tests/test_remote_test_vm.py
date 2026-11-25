@@ -1,5 +1,7 @@
 """Tests for the SSH-backed remote test VM path in test_runner."""
 
+from pathlib import Path
+
 import pytest
 
 from codeassist.config import Config, RemoteTestVMConfig
@@ -24,6 +26,7 @@ class TestRemoteTestVMConfig:
         assert cfg.remote_test_vm.sync == "rsync"
         assert cfg.remote_test_vm.fallback_to_local is True
         assert cfg.remote_test_vm.strict_host_key_checking is True
+        assert cfg.remote_test_vm.remote_dir == "~/codeassist-tests"
 
     def test_toml_table_is_loaded(self, tmp_path):
         config_file = tmp_path / "config.toml"
@@ -133,6 +136,48 @@ class TestRemoteCommandConstruction:
 
     def test_relative_test_path_is_allowed(self):
         assert test_runner._validate_test_path("tests/test_api.py") == "tests/test_api.py"
+
+
+class TestRemoteDirResolution:
+    @pytest.mark.asyncio
+    async def test_absolute_dir_needs_no_home_lookup(self, monkeypatch):
+        async def unexpected(*args, **kwargs):
+            pytest.fail("absolute remote_dir must not trigger a home lookup")
+
+        monkeypatch.setattr(test_runner, "_ssh_exec", unexpected)
+        resolved = await test_runner._resolve_remote_dir(
+            RemoteTestVMConfig(remote_dir="/srv/tests")
+        )
+        assert resolved == "/srv/tests"
+
+    @pytest.mark.asyncio
+    async def test_tilde_expands_against_remote_home(self, monkeypatch):
+        scripts = []
+
+        async def fake_ssh(remote, script, *, timeout):
+            scripts.append(script)
+            return 0, "/home/tester\n"
+
+        monkeypatch.setattr(test_runner, "_ssh_exec", fake_ssh)
+        resolved = await test_runner._resolve_remote_dir(
+            RemoteTestVMConfig(remote_dir="~/codeassist-tests")
+        )
+        assert resolved == "/home/tester/codeassist-tests"
+        assert scripts == ['printf %s "$HOME"']
+
+    @pytest.mark.asyncio
+    async def test_failed_home_lookup_is_unavailable_error(self, monkeypatch):
+        async def fake_ssh(remote, script, *, timeout):
+            return 1, "sh: HOME: not set"
+
+        monkeypatch.setattr(test_runner, "_ssh_exec", fake_ssh)
+        with pytest.raises(test_runner.RemoteVMUnavailable, match="could not resolve remote home"):
+            await test_runner._resolve_remote_dir(RemoteTestVMConfig(remote_dir="~/codeassist-tests"))
+
+    def test_rsync_uses_resolved_dir(self):
+        remote = _config_with_host().remote_test_vm
+        cmd, _ = test_runner._rsync_command(Path("/workspace"), remote, "/home/tester/codeassist-tests")
+        assert any(arg.endswith(":/home/tester/codeassist-tests/") for arg in cmd)
 
 
 class TestRunnerDispatch:

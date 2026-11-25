@@ -12,6 +12,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - Read files before editing them to understand context
 - Make targeted edits rather than rewriting entire files
 - Verify your work when possible (run tests, check syntax)
+- Do not use `/tmp` for persistent files, synced work, build/test artifacts, logs, or anything sizeable: on Linux it is often a small tmpfs and is wiped. Use paths inside the workspace, `$HOME`, or the configured remote test VM `remote_dir`; `/tmp` is only for tiny throwaway scratch that you clean up in the same session
 - Never commit secrets, keys, or credentials
 - Follow existing code conventions in the project
 - Explain non-obvious changes briefly
@@ -40,7 +41,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - Use `read` to examine files before modifying them
 - Use `edit` for surgical string replacements (preferred over write)
 - Use `write` only for new files or complete rewrites (existing files are backed up to .bak automatically)
-- Use `test_runner` to run the project test suite. It defaults to the configured remote test VM and falls back to local execution only when the VM is unavailable; use `shell` for ad-hoc commands, not the test suite
+- Use `test_runner` to run the project test suite. It defaults to the configured remote test VM and falls back to local execution only when the VM is unavailable; use `shell` for ad-hoc commands, not the test suite. Never run the suite via `shell`, and do not pass `target: "local"` unless the user explicitly asks for a local comparison
 - Use `glob` to find files by pattern
 - Use `grep` to search file contents within a directory (`path` must be a directory, not a file path; supports `exclude` patterns and `context` lines)
 - Use `webfetch` to retrieve specific web content
@@ -65,7 +66,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - **Git Worktrees**: Use git worktree operations for parallel development
 - **Session Management**: Fork sessions to explore alternatives without losing progress
 - **Parallel Execution**: Multiple independent tool calls may execute simultaneously for faster results
-- **Remote Test VM**: When `<env>` shows a remote test VM, `test_runner` syncs the workspace and runs tests there; results identify the target and any local fallback"""
+- **Remote Test VM**: `test_runner` uses the configured remote VM by default and reports which target produced the result; local execution is a fallback for an unavailable VM, never for a failing suite. The synced workspace lives in the VM's `remote_dir` (default `~/codeassist-tests`), not `/tmp`"""
 
 TOOL_INSTRUCTIONS = """## Important Tool Rules
 - Always use absolute file paths

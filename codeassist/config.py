@@ -92,7 +92,9 @@ class RemoteTestVMConfig:
     host: str = ""
     port: int = 22
     user: str = ""
-    remote_dir: str = "/tmp/codeassist-tests"
+    # A leading ~ is expanded against the *remote* user's $HOME by test_runner.
+    # /tmp is deliberately not used: it is often a small tmpfs and gets wiped.
+    remote_dir: str = "~/codeassist-tests"
     # Empty => use the SSH client's default identity/known_hosts locations.
     key_path: str = ""
     known_hosts: str = ""
@@ -272,7 +274,7 @@ def _remote_test_vm_config(raw: dict) -> RemoteTestVMConfig:
         host=str(raw.get("host", "") or "").strip(),
         port=_positive_int("port", 22),
         user=str(raw.get("user", "") or "").strip(),
-        remote_dir=str(raw.get("remote_dir", "/tmp/codeassist-tests") or "").strip(),
+        remote_dir=str(raw.get("remote_dir", RemoteTestVMConfig().remote_dir) or "").strip(),
         key_path=str(raw.get("key_path", "") or "").strip(),
         known_hosts=str(raw.get("known_hosts", "") or "").strip(),
         password=password,

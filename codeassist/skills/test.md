@@ -17,7 +17,7 @@ Create comprehensive tests for the specified code.
    - Error conditions
    - Boundary values
 3. **Write tests** following the project's test framework
-4. **Run tests** with `test_runner` to verify they pass (remote test VM when configured, local fallback otherwise)
+4. **Run tests** with `test_runner` (default target: remote VM when configured; local only if the VM is unreachable). Never use `shell` for the suite or stage work in `/tmp`
 
 ## Test Structure
 
