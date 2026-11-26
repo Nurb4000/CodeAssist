@@ -257,6 +257,45 @@ async def test_manual_checkpoint_is_non_destructive():
 
 
 @pytest.mark.asyncio
+async def test_manual_compact_handles_raw_db_tool_calls():
+    """Raw DB rows store ``tool_calls`` as a JSON string. Manual compaction
+    summarizes those rows directly, so it must parse them instead of raising
+    ``AttributeError: 'str' object has no attribute 'get'``.
+    """
+    await init_db()
+    session = await Session.create()
+    for i in range(3):
+        await session.add_message("user", f"question {i}")
+        await session.add_message(
+            "assistant", "working",
+            tool_calls=[{
+                "id": f"c{i}",
+                "type": "function",
+                "function": {"name": "read", "arguments": '{"file_path":"a.py"}'},
+            }],
+        )
+        await session.add_message("tool", f"result {i}", tool_call_id=f"c{i}")
+
+    captured: list[str] = []
+
+    async def fake_summary(head_text, **kwargs):
+        captured.append(head_text)
+        return FILLED_SUMMARY
+
+    agent = _agent(_config(), session)
+    with (
+        patch("codeassist.agent._summarize_head", new=fake_summary),
+        patch("codeassist.agent.effective_context_window", new=AsyncMock(return_value=8000)),
+    ):
+        result = await agent.checkpoint_now()
+
+    assert result["saved"] is True
+    assert captured, "summarizer should have received the head text"
+    assert "read(" in captured[0], "the tool call should be rendered, not skipped"
+    assert await session.load_context_checkpoint() is not None
+
+
+@pytest.mark.asyncio
 async def test_manual_compact_on_fresh_agent_reuses_previous_summary():
     """A reconnect followed by a manual compact must build on the saved summary.
 

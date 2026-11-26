@@ -442,10 +442,24 @@ def _extract_conversation_text(
             parts.append(f"[Tool Result ({tool_call_id})]: {content}")
         elif role == "assistant":
             tool_calls = msg.get("tool_calls", [])
+            if isinstance(tool_calls, str):
+                # Raw DB rows store tool_calls as JSON; OpenAI-format messages
+                # already carry a list of dicts. Manual compaction and budget
+                # rollover summarize raw rows, so normalize here instead of
+                # failing on `str.get`. A malformed value is skipped, never
+                # allowed to fail summarization.
+                try:
+                    tool_calls = json.loads(tool_calls) or []
+                except (json.JSONDecodeError, TypeError):
+                    tool_calls = []
             if tool_calls:
                 call_summary = []
                 for tc in tool_calls:
-                    func = tc.get("function", {})
+                    if not isinstance(tc, dict):
+                        continue
+                    func = tc.get("function") or {}
+                    if not isinstance(func, dict):
+                        func = {}
                     name = func.get("name", "?")
                     args = func.get("arguments", "{}")
                     try:

@@ -1367,7 +1367,15 @@ def test_ws_compact_saves_non_destructive_checkpoint(live_client, monkeypatch):
         session = Session(sid)
         for i in range(4):
             await session.add_message("user", f"question {i}")
-            await session.add_message("assistant", f"answer {i}")
+            await session.add_message(
+                "assistant", f"answer {i}",
+                tool_calls=[{
+                    "id": f"c{i}",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"file_path":"a.py"}'},
+                }],
+            )
+            await session.add_message("tool", f"result {i}", tool_call_id=f"c{i}")
         return await session.get_messages()
 
     before = asyncio.run(_seed())
