@@ -20,7 +20,7 @@ is always done by `test_runner`; this skill is guidance only.
   condition — it is a real test failure.
 - `<env>` in the system prompt shows `Remote Test VM: ssh(user@host)` or `off`.
 - The synced workspace lives in `[remote_test_vm].remote_dir` (default
-  `~/codeassist-tests` on the VM), never `/tmp` — that is a small, wiped tmpfs.
+  `~/codeassist-tests` on the VM), not shared scratch under `/tmp`.
 
 ## Steps
 

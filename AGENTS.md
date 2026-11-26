@@ -9,6 +9,6 @@
 
 ## Storage paths
 
-- Do not use `/tmp` for persistent storage, synced work, build/test artifacts, logs, or anything sizeable. On current Linux it is commonly a small tmpfs and is wiped between boots.
+- Do not use `/tmp` for persistent storage, synced work, build/test artifacts, logs, or anything sizeable. It is shared scratch space — commonly size-limited or tmpfs-backed, and periodically cleaned — not a durable location.
 - Work inside the workspace. On the dedicated test VM, use its regular filesystem: `$HOME/codeassist-tests` (the configured `remote_test_vm.remote_dir`, default `~/codeassist-tests`) or another explicit path under `$HOME` / `/var/lib`. The VM is dedicated, so persistent directories are fine.
 - `/tmp` is acceptable only for tiny throwaway scratch that you delete in the same session.

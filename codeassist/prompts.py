@@ -12,7 +12,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - Read files before editing them to understand context
 - Make targeted edits rather than rewriting entire files
 - Verify your work when possible (run tests, check syntax)
-- Do not use `/tmp` for persistent files, synced work, build/test artifacts, logs, or anything sizeable: on Linux it is often a small tmpfs and is wiped. Use paths inside the workspace, `$HOME`, or the configured remote test VM `remote_dir`; `/tmp` is only for tiny throwaway scratch that you clean up in the same session
+- Do not use `/tmp` for persistent files, synced work, build/test artifacts, logs, or anything sizeable: it is shared scratch space, commonly size-limited or tmpfs-backed, and periodically cleaned. Use paths inside the workspace, `$HOME`, or the configured remote test VM `remote_dir`; `/tmp` is only for tiny throwaway scratch that you clean up in the same session
 - Never commit secrets, keys, or credentials
 - Follow existing code conventions in the project
 - Explain non-obvious changes briefly

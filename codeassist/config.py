@@ -93,7 +93,8 @@ class RemoteTestVMConfig:
     port: int = 22
     user: str = ""
     # A leading ~ is expanded against the *remote* user's $HOME by test_runner.
-    # /tmp is deliberately not used: it is often a small tmpfs and gets wiped.
+    # /tmp is deliberately not used: it is shared scratch, size-limited on many
+    # systems and subject to cleanup.
     remote_dir: str = "~/codeassist-tests"
     # Empty => use the SSH client's default identity/known_hosts locations.
     key_path: str = ""

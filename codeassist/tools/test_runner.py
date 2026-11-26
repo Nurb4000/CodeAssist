@@ -239,7 +239,8 @@ async def _resolve_remote_dir(remote: RemoteTestVMConfig) -> str:
     """Expand a leading ``~`` against the remote user's home directory.
 
     ``remote_dir`` defaults to ``~/codeassist-tests`` on the dedicated VM, not
-    ``/tmp``: the latter is typically a small tmpfs that gets wiped. The VM's
+    ``/tmp``: the latter is shared scratch that is subject to cleanup and is
+    not a durable home for synced work. The VM's
     ``$HOME`` has to be queried over SSH -- local ``expanduser()`` would return
     the CodeAssist container's home, which is a different machine.
     """

@@ -93,7 +93,7 @@ enabled = true
 host = ""                       # "10.0.1.50" or a resolvable VM name
 port = 22
 user = ""                       # e.g. "tester"
-remote_dir = "~/codeassist-tests" # remote user's home on the VM (expanded there); avoid /tmp: small tmpfs, wiped
+remote_dir = "~/codeassist-tests" # remote user's home on the VM (expanded there); avoid /tmp scratch space
 # Container-side paths; in Docker put keys under ${AUTH_DIR}/ssh on the host.
 key_path = ""                   # e.g. "/auth/ssh/id_ed25519"
 known_hosts = ""                # e.g. "/auth/ssh/known_hosts"
