@@ -2044,6 +2044,14 @@ function connectWS() {
     thisWs.onopen = () => {
         wsConnected = true;
         reconnectAttempt = 0; // connection succeeded: start the next backoff sequence fresh
+        // A checkpoint save can outlive its socket (proxy idle timeout, refresh,
+        // network blip). The terminal frame went to the old socket, so clear the
+        // stale compacting UI here instead of leaving the spinner up forever.
+        if (compactingActive) {
+            hideProgress();
+            clearCompacting();
+            if (compactBtn) compactBtn.disabled = false;
+        }
         updateConnectionStatus('connected');
         // (Re)arm the keepalive; clear any stale timer first.
         if (pingTimer) clearInterval(pingTimer);

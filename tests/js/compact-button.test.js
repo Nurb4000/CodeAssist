@@ -42,6 +42,27 @@ test('checkpoint_saved re-arms the button and confirms what was covered', async 
   assert.deepEqual(env.errors, []);
 });
 
+test('reconnect clears a stale compacting indicator', async () => {
+  const env = await boot();
+  const btn = env.document.getElementById('compact-btn');
+  btn.click();
+  env.feed({ type: 'compacting', message: 'Saving a context checkpoint...', reason: 'manual' });
+
+  assert.ok(env.document.getElementById('compacting-status'));
+  assert.equal(btn.disabled, true);
+
+  // The socket dropped mid-summary, so the terminal frame went to a dead
+  // socket. Reopening must not leave the spinner up forever. The keepalive
+  // interval is not under test here and would keep jsdom's loop alive.
+  env.window.setInterval = () => 0;
+  env.socket.onopen();
+
+  assert.equal(env.document.getElementById('compacting-status'), null);
+  assert.equal(env.document.querySelector('.progress-bar'), null);
+  assert.equal(btn.disabled, false, 'the button is usable again after reconnect');
+  assert.deepEqual(env.errors, []);
+});
+
 test('an error re-arms the button so the user can retry', async () => {
   const env = await boot();
   const btn = env.document.getElementById('compact-btn');

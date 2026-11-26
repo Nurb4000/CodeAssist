@@ -1402,3 +1402,60 @@ def test_ws_compact_saves_non_destructive_checkpoint(live_client, monkeypatch):
     row = asyncio.run(Session(sid).load_context_checkpoint())
     assert row is not None, "a checkpoint should have been persisted"
     assert row["covered_count"] == len(before)
+
+
+def test_ws_compact_keeps_receive_loop_responsive(live_client, monkeypatch):
+    """A slow checkpoint save must not block the WebSocket receive loop.
+
+    Awaiting the summary inline stopped pings/disconnects from being read; an
+    idle socket could be dropped before `checkpoint_saved` was sent, leaving the
+    UI stuck on "compacting" with no terminal frame. The summary now runs in a
+    background task, so a second frame is answered immediately.
+    """
+    import asyncio
+    import uuid
+
+    from codeassist import agent as agent_mod
+
+    gate = threading.Event()
+    started = threading.Event()
+
+    async def _blocking_checkpoint(self):
+        started.set()
+        while not gate.is_set():
+            await asyncio.sleep(0.01)
+        return {"saved": True, "covered": 1, "summary_chars": 10}
+
+    monkeypatch.setattr(agent_mod.Agent, "checkpoint_now", _blocking_checkpoint)
+
+    sid = f"compact-responsive-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "compact"})
+        first = []
+        while True:
+            frame = _receive_json(ws)
+            first.append(frame["type"])
+            if frame["type"] == "compacting":
+                break
+        assert "compacting" in first, first
+        assert started.wait(timeout=10), "checkpoint_now was never started"
+
+        # The receive loop must still answer while the summary runs.
+        ws.send_json({"type": "compact"})
+        second = None
+        while True:
+            frame = _receive_json(ws, timeout=5)
+            if frame["type"] in ("error", "checkpoint_saved"):
+                second = frame
+                break
+        assert second["type"] == "error", second
+        assert "already in progress" in second["message"].lower()
+
+        gate.set()
+        done = None
+        while True:
+            frame = _receive_json(ws, timeout=10)
+            if frame["type"] in ("checkpoint_saved", "error"):
+                done = frame
+                break
+        assert done["type"] == "checkpoint_saved", done

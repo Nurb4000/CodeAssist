@@ -939,6 +939,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     agent = build_agent(current_agent_name)
     agent_task: asyncio.Task | None = None
+    # A manual checkpoint can keep the compaction model busy for minutes. Run it
+    # off the receive loop: awaiting it inline stops pings and disconnects from
+    # being read, and an idle socket can be dropped before the result is sent --
+    # leaving the UI stuck on "compacting" with no terminal frame ever arriving.
+    compact_task: asyncio.Task | None = None
     # User messages that arrive while a turn is running are queued here and run
     # in order once the current turn finishes, instead of being rejected with
     # "Agent is busy" (which silently dropped them -- see §2 FRAGILE item).
@@ -1092,6 +1097,43 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             slot_busy = False
             end_turn(session_id)
 
+    async def _run_manual_compact():
+        """Save a checkpoint without blocking the WebSocket receive loop.
+
+        The terminal frame is best-effort: if the client went away mid-summary
+        the checkpoint is still saved to the DB, and the next connection will
+        restore it. The UI clears its stale indicator on reconnect.
+        """
+        nonlocal compact_task
+        try:
+            result = await agent.checkpoint_now()
+            if result.get("saved"):
+                await websocket.send_json({
+                    "type": "checkpoint_saved",
+                    "message": "Context checkpoint saved. Reopening this session will reuse it.",
+                    **result,
+                })
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": result.get("reason") or "Nothing to compact yet.",
+                })
+        except asyncio.CancelledError:
+            raise
+        except WebSocketDisconnect:
+            log.debug("Client disconnected during manual compaction for session %s", session_id)
+        except Exception:
+            log.exception("Manual compaction failed for session %s", session_id)
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Could not save a context checkpoint.",
+                })
+            except Exception:  # noqa: BLE001, S110
+                pass
+        finally:
+            compact_task = None
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -1220,31 +1262,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if agent_task and not agent_task.done():
                     await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
                     continue
+                if compact_task and not compact_task.done():
+                    await websocket.send_json({"type": "error", "message": "Compaction already in progress"})
+                    continue
                 await websocket.send_json({
                     "type": "compacting",
                     "message": "Saving a context checkpoint for this session...",
                     "reason": "manual",
                     "mode": "llm",
                 })
-                try:
-                    result = await agent.checkpoint_now()
-                    if result.get("saved"):
-                        await websocket.send_json({
-                            "type": "checkpoint_saved",
-                            "message": "Context checkpoint saved. Reopening this session will reuse it.",
-                            **result,
-                        })
-                    else:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": result.get("reason") or "Nothing to compact yet.",
-                        })
-                except Exception:
-                    log.exception("Manual compaction failed for session %s", session_id)
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Could not save a context checkpoint.",
-                    })
+                compact_task = asyncio.create_task(_run_manual_compact())
 
             elif data.get("type") == "rollback":
                 if agent_task and not agent_task.done():
