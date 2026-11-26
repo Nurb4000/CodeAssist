@@ -63,5 +63,9 @@ test('compacting keeps the button disabled until the result arrives', async () =
 
   env.feed({ type: 'checkpoint_saved', message: 'Context checkpoint saved.', covered: 2 });
   assert.equal(btn.disabled, false);
+  // Manual compaction is not a turn. The compacting spinner must be gone,
+  // not restored to a stale "Thinking..." label.
+  assert.equal(env.document.querySelector('.progress-bar'), null);
+  assert.equal(env.document.getElementById('compacting-status'), null);
   assert.deepEqual(env.errors, []);
 });

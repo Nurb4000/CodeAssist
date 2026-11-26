@@ -2103,8 +2103,13 @@ function connectWS() {
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
         } else if (data.type === 'checkpoint_saved') {
-            // Manual compaction finished: re-arm the button and confirm that
-            // the saved transcript will be reused on the next resume.
+            // Manual compaction is not a turn: the `compacting` frame installed
+            // a progress bar outside any run, and clearCompacting() above
+            // restored its cached "Thinking..." label. Remove it so the UI does
+            // not look like the agent is continuing without a prompt.
+            hideProgress();
+            // Re-arm the button and confirm that the saved transcript will be
+            // reused on the next resume.
             if (compactBtn) compactBtn.disabled = false;
             showStatus(
                 `${data.message || 'Context checkpoint saved.'}` +

@@ -16,6 +16,7 @@ FRAMEWORK_MARKERS = {
     "pytest": ["pytest.ini", "pyproject.toml", "setup.cfg"],
     "jest": ["jest.config.js", "jest.config.ts", "jest.config.json"],
     "vitest": ["vitest.config.ts", "vitest.config.js"],
+    "node_test": ["package.json"],
     "go_test": ["go.mod"],
     "cargo_test": ["Cargo.toml"],
     "maven": ["pom.xml"],
@@ -38,6 +39,7 @@ def get_test_command(framework: str, test_path: str | None, extra_args: str | No
     """Build the test command for the detected framework."""
     commands = {
         "pytest": ["python", "-m", "pytest", "-v", "--tb=short"],
+        "node_test": ["node", "--test", "tests/js"],
         "jest": ["npx", "jest", "--verbose"],
         "vitest": ["npx", "vitest", "run"],
         "go_test": ["go", "test", "-v", "./..."],
@@ -51,6 +53,8 @@ def get_test_command(framework: str, test_path: str | None, extra_args: str | No
             cmd.append(test_path)
         elif framework == "jest":
             cmd.extend(["--testPathPattern", test_path])
+        elif framework == "node_test":
+            cmd = ["node", "--test", test_path]
         elif framework == "go_test":
             cmd = ["go", "test", "-v", f"./{test_path}..."]
     if extra_args:
@@ -103,6 +107,28 @@ def parse_jest_output(output: str) -> dict:
     return result
 
 
+def parse_node_output(output: str) -> dict:
+    """Parse Node's built-in test runner (``node --test``) output."""
+    result = {"framework": "node_test", "raw": output}
+
+    def count(label: str) -> int:
+        match = re.search(rf"(?:#|\u2139)\s+{label}\s+(\d+)", output)
+        return int(match.group(1)) if match else 0
+
+    passed = count("pass")
+    failed = count("fail")
+    skipped = count("skipped")
+    result.update({
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "errors": 0,
+        "total": passed + failed + skipped,
+        "success": failed == 0,
+    })
+    return result
+
+
 def parse_go_output(output: str) -> dict:
     """Parse go test output for structured results."""
     result = {"framework": "go_test", "raw": output}
@@ -123,6 +149,7 @@ def parse_output(framework: str, output: str) -> dict:
     parsers = {
         "pytest": parse_pytest_output,
         "jest": parse_jest_output,
+        "node_test": parse_node_output,
         "go_test": parse_go_output,
     }
     parser = parsers.get(framework)
@@ -314,7 +341,7 @@ class TestRunnerTool(Tool):
     name = "test_runner"
     description = (
         "Run tests for the project with automatic framework detection. "
-        "Supports pytest, jest, vitest, go test, cargo test, maven, and gradle. "
+        "Supports pytest, Node's built-in test runner, jest, vitest, go test, cargo test, maven, and gradle. "
         "By default runs on the configured remote test VM (SSH + rsync) and "
         "falls back to local execution only when the VM is unavailable. "
         "Returns structured results with pass/fail counts, failure details, "
