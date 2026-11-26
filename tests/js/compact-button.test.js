@@ -61,6 +61,15 @@ test('compacting keeps the button disabled until the result arrives', async () =
   env.feed({ type: 'compacting', message: 'Saving a context checkpoint...', reason: 'manual' });
   assert.equal(btn.disabled, true, 'the in-progress frame does not re-arm the button');
 
+  // Metadata frames can land while the compaction model is still generating.
+  // They must not flip the label back to the stale pre-compaction "Thinking...".
+  env.feed({ type: 'context', tokens: 10, usage_pct: 1 });
+  assert.equal(
+    env.document.querySelector('.progress-bar .status-text').textContent,
+    'Saving a context checkpoint...',
+  );
+  assert.ok(env.document.getElementById('compacting-status'));
+
   env.feed({ type: 'checkpoint_saved', message: 'Context checkpoint saved.', covered: 2 });
   assert.equal(btn.disabled, false);
   // Manual compaction is not a turn. The compacting spinner must be gone,

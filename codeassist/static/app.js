@@ -2072,10 +2072,14 @@ function connectWS() {
             return;
         }
 
-        // Any other frame means the pause is over. Clearing here rather than
-        // waiting for `compacted` matters: that event is deliberately not sent
-        // when summarization made nothing smaller, so the indicator would stick.
-        if (data.type !== 'compacting') clearCompacting();
+        // Most frames mean the pause is over, but a few (agent metadata,
+        // context usage, plan/title updates) can arrive while the compaction
+        // model is still generating. Clearing on those used to flip the label
+        // from "Saving a context checkpoint..." to a stale "Thinking...".
+        if (data.type !== 'compacting'
+            && !(compactingActive && compactingManual && COMPACTING_PASSTHROUGH.has(data.type))) {
+            clearCompacting();
+        }
 
         if (data.type === 'active_agent') {
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
@@ -2357,8 +2361,19 @@ function showError(msg) {
 // Remember the label we replaced so clearing restores it exactly, whatever the
 // server chose to put in `message`.
 let compactingPreviousLabel = null;
+let compactingActive = false;
+let compactingManual = false;
+
+// Frames that can arrive while a manual compaction is still running. They must
+// not be mistaken for "the pause is over" and flip the progress label back to
+// a generic "Thinking...".
+const COMPACTING_PASSTHROUGH = new Set([
+    'active_agent', 'agent_switched', 'context', 'plan_update', 'session_title',
+]);
 
 function showCompacting(data) {
+    compactingActive = true;
+    compactingManual = data.reason === 'manual';
     const label = data.message || 'Compacting context...';
     if (progressEl) {
         // A second compacting frame can arrive with no progress frame in between
@@ -2388,6 +2403,8 @@ function showCompacting(data) {
 }
 
 function clearCompacting() {
+    compactingActive = false;
+    compactingManual = false;
     const el = document.getElementById('compacting-status');
     if (el) el.remove();
     // Restore the spinner's prior label if it is still up; the next progress
