@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from codeassist import instruction_discovery
 from codeassist.instruction_discovery import (
     InstructionDiscoverer,
     load_file_instructions,
@@ -16,6 +17,14 @@ from codeassist.system_context import (
     SystemContextManager,
 )
 from codeassist.tools.apply_patch import is_gpt_model
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_instructions(monkeypatch, tmp_path):
+    """Keep discovery tests independent of the user's real global AGENTS.md."""
+    monkeypatch.setattr(
+        instruction_discovery, "GLOBAL_CONFIG_DIR", tmp_path / "no-global-config"
+    )
 
 
 class TestInstructionDiscovery:

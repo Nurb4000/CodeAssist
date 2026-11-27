@@ -11,6 +11,7 @@ Two concerns:
 
 import pytest
 
+from codeassist import instruction_discovery
 from codeassist.instruction_discovery import (
     InstructionDiscoverer,
     InstructionSource,
@@ -18,7 +19,16 @@ from codeassist.instruction_discovery import (
 
 
 @pytest.fixture
-def discoverer():
+def discoverer(monkeypatch, tmp_path):
+    """Isolate discovery from the real user-level config dir.
+
+    A global AGENTS.md may legitimately exist on the machine running the tests;
+    scope tests must not depend on it. Individual tests can override this with
+    their own monkeypatch when they specifically exercise global discovery.
+    """
+    monkeypatch.setattr(
+        instruction_discovery, "GLOBAL_CONFIG_DIR", tmp_path / "no-global-config"
+    )
     return InstructionDiscoverer()
 
 
@@ -105,3 +115,45 @@ class TestRemoteLabeling:
         block = discoverer.get_instruction_block(label_remote=True)
         assert "Untrusted Remote Instructions" not in block
         assert "Instructions from AGENTS.md" in block
+
+
+class TestGlobalInstructions:
+    @pytest.mark.asyncio
+    async def test_global_instructions_loaded_for_unrelated_workspace(self, discoverer, tmp_path, monkeypatch):
+        """User-level instructions apply even when the workspace has no AGENTS.md."""
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("global policy")
+        monkeypatch.setattr(instruction_discovery, "GLOBAL_CONFIG_DIR", global_dir)
+
+        ws = tmp_path / "unrelated" / "project"
+        ws.mkdir(parents=True)
+
+        loaded = await discoverer.discover(workspace=ws, disable_project_config=False)
+
+        assert [s.path for s in loaded] == [str(global_dir / "AGENTS.md")]
+        block = discoverer.get_instruction_block(loaded)
+        assert "global policy" in block
+        assert "Instructions from AGENTS.md" in block
+
+    @pytest.mark.asyncio
+    async def test_global_and_workspace_instructions_both_loaded(self, discoverer, tmp_path, monkeypatch):
+        """Project instructions come first, then user-level instructions."""
+        global_dir = tmp_path / "global-config"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("global policy")
+        monkeypatch.setattr(instruction_discovery, "GLOBAL_CONFIG_DIR", global_dir)
+
+        ws = tmp_path / "project"
+        ws.mkdir()
+        (ws / "AGENTS.md").write_text("project policy")
+
+        loaded = await discoverer.discover(workspace=ws, disable_project_config=False)
+
+        assert [s.path for s in loaded] == [
+            str(ws / "AGENTS.md"),
+            str(global_dir / "AGENTS.md"),
+        ]
+        block = discoverer.get_instruction_block(loaded)
+        assert "project policy" in block
+        assert "global policy" in block
