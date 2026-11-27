@@ -5,6 +5,8 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 MAX_SESSION_NAME_LEN = 200
 MAX_MESSAGE_LEN = 100_000
+MAX_SEARCH_QUERY_LEN = 500
+MAX_SEARCH_LIMIT = 200
 
 
 @router.get("")
@@ -53,6 +55,31 @@ async def get_messages(session_id: str):
     from codeassist.session import Session
     session = Session(session_id)
     return await session.get_messages()
+
+
+@router.get("/{session_id}/messages/search")
+async def search_messages(
+    session_id: str,
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Search messages in one session. Read-only, so no mid-turn guard."""
+    query = q.strip()
+    if not query or len(query) > MAX_SEARCH_QUERY_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"q must be 1-{MAX_SEARCH_QUERY_LEN} characters",
+        )
+    if limit < 1 or limit > MAX_SEARCH_LIMIT or offset < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be 1-{MAX_SEARCH_LIMIT} and offset >= 0",
+        )
+    from codeassist.knowledge import KnowledgeBase
+    return await KnowledgeBase.fulltext_search_messages(
+        session_id, query, limit=limit, offset=offset
+    )
 
 
 @router.post("/{session_id}/fork")

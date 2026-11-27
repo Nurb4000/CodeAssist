@@ -513,6 +513,82 @@ class TestFullTextSearch:
             assert r["entry_type"] == "bug_fix"
 
     @pytest.mark.asyncio
+    async def test_fulltext_search_messages_scoped_to_session(self):
+        """A message search only returns hits from the requested session."""
+        await init_db()
+        first = await Session.create("Search A")
+        other = await Session.create("Search B")
+        await first.add_message("user", "remember the purple orchestrator")
+        await other.add_message("user", "purple is a color elsewhere")
+
+        results = await KnowledgeBase.fulltext_search_messages(
+            first.id, "purple orchestrator"
+        )
+        assert len(results) == 1
+        assert results[0]["session_id"] == first.id
+        assert "purple orchestrator" in results[0]["content"]
+        assert not await KnowledgeBase.fulltext_search_messages(first.id, "elsewhere")
+
+    @pytest.mark.asyncio
+    async def test_message_search_triggers_keep_index_in_sync(self):
+        """INSERT/UPDATE/DELETE on messages must keep message_search current."""
+        from codeassist.session import get_db
+
+        await init_db()
+        async with get_db() as db:
+            cur = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'message_search_%'"
+            )
+            triggers = {r[0] for r in await cur.fetchall()}
+        assert triggers == {
+            "message_search_ai",
+            "message_search_ad",
+            "message_search_au",
+        }
+
+        session = await Session.create("Triggers")
+        message_id = await session.add_message("user", "trigger alpha content")
+        async with get_db() as db:
+            cur = await db.execute("SELECT COUNT(*) FROM message_search")
+            assert (await cur.fetchone())[0] == 1
+
+        await session.update_message(message_id, content="trigger beta content")
+        assert len(await KnowledgeBase.fulltext_search_messages(session.id, "beta")) == 1
+        assert not await KnowledgeBase.fulltext_search_messages(session.id, "alpha")
+
+        await session.delete_message(message_id)
+        async with get_db() as db:
+            cur = await db.execute("SELECT COUNT(*) FROM message_search")
+            assert (await cur.fetchone())[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_message_search_treats_fts_syntax_as_literal(self):
+        """User punctuation must not raise FTS5 syntax errors."""
+        await init_db()
+        session = await Session.create("Syntax")
+        await session.add_message("user", "literal colon: and quote \" value")
+        for query in ("colon:", "quote \"", "he\"llo", "*", "unbalanced ("):
+            results = await KnowledgeBase.fulltext_search_messages(session.id, query)
+            assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_message_search_fallback_keeps_query(self):
+        """A broken FTS table falls back to LIKE without dropping the term."""
+        from codeassist.session import get_db
+
+        await init_db()
+        session = await Session.create("Fallback")
+        await session.add_message("user", "needle in haystack")
+        async with get_db() as db:
+            await db.execute("DROP TABLE message_search")
+            await db.commit()
+
+        results = await KnowledgeBase.fulltext_search_messages(session.id, "needle")
+        assert len(results) == 1
+        assert results[0]["content"] == "needle in haystack"
+
+    @pytest.mark.asyncio
     async def test_fulltext_search_sessions(self):
         await init_db()
         session = await Session.create("FTS Test")

@@ -1010,6 +1010,36 @@ class TestPinning:
             )
             assert (await cur.fetchone())[0] == str(smod.SCHEMA_VERSION)
 
+    @pytest.mark.asyncio
+    async def test_schema_v16_to_v17_migration_backfills_message_index(self):
+        """Upgrading a pre-v17 database indexes messages written before FTS existed."""
+        await init_db()
+        session = await Session.create("Legacy Search")
+        message_id = await session.add_message("user", "ancient indexed phrase")
+
+        from codeassist import session as smod
+
+        async with smod.get_db() as db:
+            await db.execute("DROP TABLE message_search")
+            await db.execute(
+                "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', '16')"
+            )
+            await db.commit()
+
+        await init_db()
+
+        from codeassist.knowledge import KnowledgeBase
+
+        results = await KnowledgeBase.fulltext_search_messages(
+            session.id, "ancient indexed"
+        )
+        assert any(r["id"] == message_id for r in results)
+        async with smod.get_db() as db:
+            cur = await db.execute(
+                "SELECT value FROM schema_info WHERE key = 'version'"
+            )
+            assert (await cur.fetchone())[0] == str(smod.SCHEMA_VERSION)
+
 
 @pytest.mark.asyncio
 async def test_db_path_honours_runtime_data_dir_override(tmp_path, monkeypatch):

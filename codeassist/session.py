@@ -50,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class _DBPool:
@@ -249,6 +249,10 @@ async def init_db():
         if current_version < 16:
             await _add_v16_tables(db)
             current_version = 16
+
+        if current_version < 17:
+            await _add_v17_tables(db)
+            current_version = 17
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -773,6 +777,55 @@ async def _add_v16_tables(db):
             tokens INTEGER,
             created_at TEXT,
             updated_at TEXT
+        )
+    """)
+    await db.commit()
+
+
+async def _add_v17_tables(db):
+    """FTS5 index over message content for in-session full-text search.
+
+    Triggers keep the index in sync for every write path (add/update/delete,
+    fork and import all go through the ``messages`` table). The backfill is
+    idempotent so a partially populated index can be upgraded safely.
+    """
+    await db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
+            message_id UNINDEXED,
+            session_id UNINDEXED,
+            role UNINDEXED,
+            content,
+            reasoning_content,
+            created_at UNINDEXED
+        )
+    """)
+    await db.execute("""
+        CREATE TRIGGER IF NOT EXISTS message_search_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO message_search(message_id, session_id, role, content, reasoning_content, created_at)
+            VALUES (new.id, new.session_id, new.role, coalesce(new.content, ''),
+                    coalesce(new.reasoning_content, ''), new.created_at);
+        END
+    """)
+    await db.execute("""
+        CREATE TRIGGER IF NOT EXISTS message_search_ad AFTER DELETE ON messages BEGIN
+            DELETE FROM message_search WHERE message_id = old.id;
+        END
+    """)
+    await db.execute("""
+        CREATE TRIGGER IF NOT EXISTS message_search_au AFTER UPDATE ON messages BEGIN
+            DELETE FROM message_search WHERE message_id = old.id;
+            INSERT INTO message_search(message_id, session_id, role, content, reasoning_content, created_at)
+            VALUES (new.id, new.session_id, new.role, coalesce(new.content, ''),
+                    coalesce(new.reasoning_content, ''), new.created_at);
+        END
+    """)
+    await db.execute("""
+        INSERT INTO message_search(message_id, session_id, role, content, reasoning_content, created_at)
+        SELECT m.id, m.session_id, m.role, coalesce(m.content, ''),
+               coalesce(m.reasoning_content, ''), m.created_at
+        FROM messages m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM message_search ms WHERE ms.message_id = m.id
         )
     """)
     await db.commit()

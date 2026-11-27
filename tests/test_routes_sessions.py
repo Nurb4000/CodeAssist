@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from codeassist import turn_state
-from codeassist.routes.sessions import rollback_session, undo_session
+from codeassist.routes.sessions import rollback_session, search_messages, undo_session
 from codeassist.session import Session, init_db
 
 
@@ -55,6 +55,35 @@ async def test_rollback_allowed_when_idle():
     session = await Session.create(name="rollback-idle")
     # Unknown message id deletes nothing, but must not be rejected while idle.
     assert await rollback_session(session.id, "0" * 32) == {"deleted": 0}
+
+
+@pytest.mark.asyncio
+async def test_search_messages_validates_query_and_pagination():
+    """Search input is bounded so a huge q or bad paging cannot hit FTS."""
+    await init_db()
+    session = await Session.create("route-validation")
+    with pytest.raises(HTTPException) as excinfo:
+        await search_messages(session.id, q="")
+    assert excinfo.value.status_code == 400
+    with pytest.raises(HTTPException) as excinfo:
+        await search_messages(session.id, q="x" * 501)
+    assert excinfo.value.status_code == 400
+    with pytest.raises(HTTPException) as excinfo:
+        await search_messages(session.id, q="ok", limit=0)
+    assert excinfo.value.status_code == 400
+    with pytest.raises(HTTPException) as excinfo:
+        await search_messages(session.id, q="ok", offset=-1)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_search_messages_returns_matches_while_idle():
+    await init_db()
+    session = await Session.create("route-search")
+    await session.add_message("user", "findable phrase here")
+    results = await search_messages(session.id, q="findable")
+    assert len(results) == 1
+    assert results[0]["session_id"] == session.id
 
 
 def test_end_turn_is_idempotent_when_never_started():

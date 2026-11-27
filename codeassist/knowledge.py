@@ -98,6 +98,16 @@ def _note_fts_error(exc: BaseException) -> None:
         log.warning("FTS5 search failed, falling back to LIKE search: %s", exc)
 
 
+def _message_search_terms(query: str, max_terms: int = 20) -> list[str]:
+    """Bound and extract literal terms from a user query for FTS5 MATCH."""
+    return [term for term in query.split() if term][:max_terms]
+
+
+def _fts_match_expression(terms: list[str]) -> str:
+    """Quote terms so FTS5 syntax in user input is treated as literal text."""
+    return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
 class KnowledgeBase:
     """Manages knowledge base operations for CodeAssist."""
 
@@ -708,6 +718,65 @@ class KnowledgeBase:
             )
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+    @staticmethod
+    async def fulltext_search_messages(
+        session_id: str,
+        query: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Full-text search over one session's messages, with a LIKE fallback.
+
+        Steers and tool rows stay untouched: this is read-only. Results use the
+        same row shape as ``Session.get_messages()`` so callers can render them.
+        """
+        terms = _message_search_terms(query)
+        if not terms:
+            return []
+        match = _fts_match_expression(terms)
+        try:
+            async with get_db() as db:
+                cursor = await db.execute(
+                    """SELECT m.* FROM message_search ms
+                       JOIN messages m ON m.id = ms.message_id
+                       WHERE message_search MATCH ? AND ms.session_id = ?
+                       ORDER BY rank, m.created_at, m.rowid
+                       LIMIT ? OFFSET ?""",
+                    (match, session_id, limit, offset),
+                )
+                rows = await cursor.fetchall()
+            _note_fts_ok()
+            return [dict(r) for r in rows]
+        except Exception as e:  # noqa: BLE001
+            _note_fts_error(e)
+            return await KnowledgeBase._like_search_messages(
+                session_id, terms, limit, offset
+            )
+
+    @staticmethod
+    async def _like_search_messages(
+        session_id: str, terms: list[str], limit: int, offset: int
+    ) -> list[dict]:
+        """Fallback used when FTS5 is unavailable or rejects a query."""
+        conditions = []
+        params: list = [session_id]
+        for term in terms:
+            escaped = (
+                term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            conditions.append(
+                "(content LIKE ? ESCAPE '\\' OR coalesce(reasoning_content, '') LIKE ? ESCAPE '\\')"
+            )
+            params.extend((f"%{escaped}%", f"%{escaped}%"))
+        where = " AND ".join(conditions)
+        async with get_db() as db:
+            cursor = await db.execute(
+                f"""SELECT * FROM messages WHERE session_id = ? AND {where}
+                    ORDER BY created_at, rowid LIMIT ? OFFSET ?""",
+                (*params, limit, offset),
+            )
+            return [dict(r) for r in await cursor.fetchall()]
 
     # ── Tool Executions ────────────────────────────────────────────────
 
