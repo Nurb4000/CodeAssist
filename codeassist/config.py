@@ -126,6 +126,17 @@ class MCPConfig:
 
 
 @dataclass
+class AutomationsConfig:
+    """Unattended jobs. Disabled by default: a scheduled shell command runs with
+    the server's privileges, so enabling this is an explicit admin decision."""
+
+    enabled: bool = False
+    allow_shell: bool = True
+    tick_seconds: float = 1.0
+    timeout_seconds: int = 300
+
+
+@dataclass
 class SkillsConfig:
     enabled: bool = True
     directories: list[str] = field(
@@ -403,6 +414,7 @@ class Config:
     tools: ToolConfig = field(default_factory=ToolConfig)
     remote_test_vm: RemoteTestVMConfig = field(default_factory=RemoteTestVMConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    automations: AutomationsConfig = field(default_factory=AutomationsConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     plugins: PluginConfig = field(default_factory=PluginConfig)
     lsp: LSPConfig = field(default_factory=LSPConfig)
@@ -585,6 +597,12 @@ class Config:
             mcp=MCPConfig(
                 enabled=raw.get("mcp", {}).get("enabled", False),
                 servers=raw.get("mcp", {}).get("servers", {}),
+            ),
+            automations=AutomationsConfig(
+                enabled=raw.get("automations", {}).get("enabled", False),
+                allow_shell=raw.get("automations", {}).get("allow_shell", True),
+                tick_seconds=float(raw.get("automations", {}).get("tick_seconds", 1.0)),
+                timeout_seconds=int(raw.get("automations", {}).get("timeout_seconds", 300)),
             ),
             skills=SkillsConfig(
                 enabled=raw.get("skills", {}).get("enabled", True),

@@ -129,6 +129,15 @@ async def broadcast_message(message: dict, session_id: str | None = None):
         _ws_sessions.pop(ws, None)
 
 
+async def deliver_automation_result(message: dict):
+    """Push a finished prompt automation to the admin/chat UI.
+
+    Jobs pinned to a session are delivered only to that session's sockets; the
+    rest are workspace notifications, matching the existing broadcast rules.
+    """
+    await broadcast_message(message, session_id=message.get("session_id"))
+
+
 def register_websocket(ws: WebSocket, session_id: str | None = None):
     """Register a WebSocket connection, tagging it with its session id so
     session-scoped broadcasts can reach only the right clients."""
@@ -475,9 +484,24 @@ async def lifespan(app: FastAPI):
     await init_mcp()
     await init_skills()
     await init_plugins()
+    # Unattended jobs start last: they need the tool registry and DB ready, and
+    # no job may tick before the subsystems it calls exist. Disabled installs get
+    # an engine object (so CRUD still works) but no tick loop.
+    from . import automations as automations_mod
+    engine = automations_mod.AutomationEngine(
+        cfg,
+        tools=tools,
+        hook_runner=plugin_registry.fire_hook if plugin_registry else None,
+        deliver=deliver_automation_result,
+    )
+    automations_mod.automation_engine = engine
+    if cfg.automations.enabled:
+        engine.start()
     log.info("CodeAssist starting | model=%s workspace=%s", cfg.llm.model, cfg.workspace)
 
     yield
+    await engine.stop()
+    automations_mod.automation_engine = None
     if mcp_client:
         await mcp_client.close()
     from .tools.browser import shutdown_browser

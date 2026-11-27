@@ -50,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 class _DBPool:
@@ -253,6 +253,10 @@ async def init_db():
         if current_version < 17:
             await _add_v17_tables(db)
             current_version = 17
+
+        if current_version < 18:
+            await _add_v18_tables(db)
+            current_version = 18
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -827,6 +831,51 @@ async def _add_v17_tables(db):
         WHERE NOT EXISTS (
             SELECT 1 FROM message_search ms WHERE ms.message_id = m.id
         )
+    """)
+    await db.commit()
+
+
+async def _add_v18_tables(db):
+    """Unattended automations and their run history.
+
+    Run rows are append-only records: a failed run must stay inspectable and must
+    never prevent the next scheduled run. Scheduling state lives on the automation
+    row so a server restart simply picks up the persisted ``next_run_at``.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS automations (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            schedule TEXT NOT NULL,
+            action TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            session_id TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            max_runs INTEGER NOT NULL DEFAULT 0,
+            run_count INTEGER NOT NULL DEFAULT 0,
+            next_run_at TEXT,
+            last_run_at TEXT,
+            last_status TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS automation_runs (
+            id TEXT PRIMARY KEY,
+            automation_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            output TEXT,
+            error TEXT
+        )
+    """)
+    await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_automation_runs_automation
+        ON automation_runs(automation_id, started_at DESC)
     """)
     await db.commit()
 

@@ -2561,6 +2561,8 @@ function connectWS() {
         } else if (data.type === 'confirm_request') {
             hideProgress();
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
+        } else if (data.type === 'automation_result') {
+            showAutomationResult(data);
         } else if (data.type === 'error') {
             hideProgress();
             if (compactBtn) compactBtn.disabled = false;
@@ -2893,6 +2895,23 @@ function hideError() {
 }
 
 let statusTimers = [];
+// Automation notifications are their own message rows: they must not reuse
+// showStatus(), which hides the progress indicator and would make a concurrent
+// turn look finished just because a job completed in the background.
+function showAutomationResult(data) {
+    removeWelcome();
+    const ok = data.status === 'ok';
+    const color = ok ? 'var(--green)' : 'var(--red)';
+    const body = ok ? (data.output || '(no output)') : (data.error || 'Automation failed');
+    const div = document.createElement('div');
+    div.className = `message system-status automation-result ${ok ? '' : 'automation-error'}`;
+    div.innerHTML =
+        `<div class="message-role" style="color:${color}">Automation · ${escapeHtml(data.name || 'job')}</div>` +
+        `<div class="message-content"><pre style="white-space:pre-wrap;color:${color}">${escapeHtml(body)}</pre></div>`;
+    messagesEl.appendChild(div);
+    scrollToBottom();
+}
+
 function showStatus(msg, kind = 'info') {
     removeWelcome();
     hideProgress();

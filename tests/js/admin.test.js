@@ -22,6 +22,7 @@ const SECTION_IDS = [
   'custom-tools',
   'agents',
   'settings',
+  'automations',
 ];
 
 const sections = (doc) => Array.from(doc.querySelectorAll('.admin-section'));

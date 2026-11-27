@@ -187,6 +187,8 @@ class PluginRegistry:
         - tool.definition: modify tool definitions
         - session.compacting: inject context during compaction
         - chat.system.transform: modify system prompt
+        - automation.trigger: observe an automation event; return event names
+          (or dicts with an ``event`` key) to fan out follow-up automations
         """
         results = []
         for hook_fn in self.get_all_hooks(hook_name):

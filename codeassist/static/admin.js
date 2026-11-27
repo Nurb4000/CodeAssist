@@ -318,6 +318,63 @@ async function loadMcp() {
     }
 }
 
+async function loadAutomations() {
+    const data = await api('GET', '/api/automations');
+    const tbody = document.getElementById('automation-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    for (const a of data.automations || []) {
+        const next = a.next_run_at ? String(a.next_run_at).slice(0, 19).replace('T', ' ') : '—';
+        const tr = row(
+            `<td class="cell-em">${escapeHtml(a.name || '')}</td>` +
+            `<td>${escapeHtml(a.kind || '')}</td>` +
+            `<td><code>${escapeHtml(a.schedule || '')}</code></td>` +
+            `<td>${escapeHtml(a.action || '')}</td>` +
+            `<td>${escapeHtml(next)}</td>` +
+            `<td>${escapeHtml(a.last_status || 'never')}</td>` +
+            `<td></td>`);
+        const actions = tr.lastElementChild;
+        const run = document.createElement('button');
+        run.className = 'admin-btn';
+        run.textContent = 'Run now';
+        run.addEventListener('click', async () => {
+            try {
+                await api('POST', `/api/automations/${encodeURIComponent(a.id)}/run`);
+                setStatus('Automation queued');
+                await loadAutomations();
+            } catch (e) { setStatus(e.message, true); }
+        });
+        actions.appendChild(run);
+        const history = document.createElement('button');
+        history.className = 'admin-btn';
+        history.textContent = 'Runs';
+        history.addEventListener('click', async () => {
+            const existing = tr.nextElementSibling;
+            if (existing && existing.classList.contains('automation-runs-row')) {
+                existing.remove();
+                return;
+            }
+            const detail = document.createElement('tr');
+            detail.className = 'automation-runs-row';
+            detail.innerHTML = '<td colspan="7"><pre>Loading runs…</pre></td>';
+            tr.after(detail);
+            try {
+                const data = await api('GET', `/api/automations/${encodeURIComponent(a.id)}/runs?limit=20`);
+                const lines = (data.runs || []).map((r) =>
+                    `${r.started_at}  ${r.status}${r.error ? '  ' + r.error : ''}` +
+                    (r.output ? '\n' + r.output : '')
+                );
+                detail.querySelector('pre').textContent = lines.length ? lines.join('\n\n') : 'No runs yet';
+            } catch (e) {
+                detail.querySelector('pre').textContent = e.message;
+            }
+        });
+        actions.appendChild(history);
+        actions.appendChild(delButton(a.id, 'Delete', (id) => api('DELETE', `/api/automations/${id}`)));
+        tbody.appendChild(tr);
+    }
+}
+
 async function loadLsp() {
     const data = await api('GET', '/api/lsp/servers');
     const tbody = document.getElementById('lsp-body');
@@ -445,7 +502,7 @@ function stepChip(a) {
 
 async function loadAll() {
     try {
-        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings()]);
+        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings(), loadAutomations()]);
         updateCounts();
         setStatus('Updated');
     } catch (e) {
@@ -884,6 +941,30 @@ bindCreate('lsp', () => ({
     { id: 'lsp-name', label: 'Name' },
     { id: 'lsp-command', label: 'Command' },
 ]);
+
+document.getElementById('automation-create').onclick = async () => {
+    const name = document.getElementById('automation-name').value.trim();
+    const schedule = document.getElementById('automation-schedule').value.trim();
+    const payload = document.getElementById('automation-payload').value;
+    if (!name || !schedule || !payload.trim()) {
+        setStatus('Name, schedule and payload are required', true);
+        return;
+    }
+    try {
+        await api('POST', '/api/automations', {
+            name,
+            kind: document.getElementById('automation-kind').value,
+            schedule,
+            action: document.getElementById('automation-action').value,
+            payload,
+            session_id: document.getElementById('automation-session').value.trim() || null,
+        });
+        setStatus('Automation created');
+        ['automation-name', 'automation-schedule', 'automation-payload', 'automation-session']
+            .forEach((id) => { document.getElementById(id).value = ''; });
+        await loadAutomations();
+    } catch (e) { setStatus(e.message, true); }
+};
 
 document.getElementById('agent-create').onclick = async () => {
     const name = document.getElementById('agent-name').value.trim();

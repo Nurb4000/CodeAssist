@@ -164,6 +164,7 @@ const ADMIN_FIXTURES = {
   '/api/custom-tools': { tools: [] },
   '/api/agents': [{ id: 'default', name: 'CodeAssist', builtin: true, steps: 20 }],
   '/api/settings': { settings: [] },
+  '/api/automations': { automations: [], enabled: false },
 };
 
 /**

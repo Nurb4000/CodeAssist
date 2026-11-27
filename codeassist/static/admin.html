@@ -35,6 +35,7 @@
                     <a href="#custom-tools" class="kb-link">Custom tools</a>
                     <a href="#agents" class="kb-link">Agents</a>
                     <a href="#settings" class="kb-link">Settings</a>
+                    <a href="#automations" class="kb-link">Automations</a>
                 </nav>
             </div>
             <div class="sidebar-footer">
@@ -143,6 +144,34 @@
                 <span class="admin-muted">Changes flagged &quot;restart required&quot; apply after the server restarts.</span>
             </div>
             <div id="settings-body"></div>
+
+            <h2 id="automations">Automations</h2>
+            <div class="admin-toolbar">
+                <span class="admin-muted">Unattended jobs. Cron uses 5 fields (minute hour day month weekday); interval is seconds; event is a name. Shell commands run with server privileges.</span>
+            </div>
+            <table class="admin-table">
+                <thead><tr><th>Name</th><th>Kind</th><th>Schedule</th><th>Action</th><th>Next run</th><th>Last status</th><th></th></tr></thead>
+                <tbody id="automation-body"></tbody>
+            </table>
+            <details class="admin-create">
+                <summary>Add automation</summary>
+                <div class="admin-form">
+                    <input id="automation-name" placeholder="name (required)">
+                    <select id="automation-kind">
+                        <option value="cron">cron</option>
+                        <option value="interval">interval</option>
+                        <option value="event">event</option>
+                    </select>
+                    <input id="automation-schedule" placeholder="cron: */5 * * * *  |  interval: 300  |  event: name">
+                    <select id="automation-action">
+                        <option value="prompt">prompt</option>
+                        <option value="shell">shell</option>
+                    </select>
+                    <textarea id="automation-payload" placeholder="prompt text or shell command"></textarea>
+                    <input id="automation-session" placeholder="session id (optional, prompt only)">
+                    <button class="admin-btn" id="automation-create">Add</button>
+                </div>
+            </details>
         </main>
     </div>
     <script src="/static/shared/escapeHtml.js"></script>

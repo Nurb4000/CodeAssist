@@ -5,6 +5,7 @@ from fastapi import FastAPI
 def register_routes(app: FastAPI):
     """Register all API route routers with the FastAPI app."""
     from .agents import router as agents_router
+    from .automations import router as automations_router
     from .config import router as config_router
     from .custom_tools import router as custom_tools_router
     from .git import router as git_router
@@ -24,6 +25,7 @@ def register_routes(app: FastAPI):
 
     app.include_router(sessions_router)
     app.include_router(config_router)
+    app.include_router(automations_router)
     app.include_router(agents_router)
     app.include_router(mcp_router)
     app.include_router(mcp_reload_router)

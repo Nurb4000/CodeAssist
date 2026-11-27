@@ -116,6 +116,14 @@ enabled = false
 #   headers = {}
 #   env = {}
 
+[automations]
+# Unattended prompt/shell jobs. Off by default: enabling this lets the server
+# run admin-configured commands and prompts without a user present.
+enabled = false
+allow_shell = true       # shell actions stay off when this is false
+tick_seconds = 1.0       # scheduler poll interval
+timeout_seconds = 300    # per-run shell timeout
+
 [skills]
 # Enable skills system
 enabled = true
