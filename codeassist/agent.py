@@ -275,17 +275,21 @@ CONTINUATION_NUDGE_FIRM = (
     "or restate your previous message; state only what is new.]"
 )
 
-# The model reliably ticks off finished work but often moves to the next task
-# without ever calling `todo`, which leaves the in-progress cue stranded on the
-# old row. The runtime cannot infer *which* task it moved to from tool arguments
-# (one task may take 20+ calls and the next only 3), so after a stretch of real
-# work ask the model to sync the plan itself. One-shot and only while unfinished
-# work remains, so it does not nag on every step or after the plan is complete.
+# The model reliably ticks off finished work but often moves on without calling
+# `todo`, leaving the in-progress cue stranded on an old row or omitting newly
+# discovered work entirely. The runtime cannot infer *which* task it moved to from
+# tool arguments (one task may take 20+ calls and the next only 3), so after a
+# stretch of real work ask the model to sync the plan itself. One-shot and only
+# while tracked work remains, so it does not nag on every step or after the plan
+# is legitimately complete.
 PLAN_HEARTBEAT_TOOL_CALLS = 8
 PLAN_HEARTBEAT_NUDGE = (
     "[Plan check: update your task list now. Mark any item you have finished as "
     "completed, and set the item you are working on right now to in_progress. "
-    "If you have moved to a different task, do this before continuing your work.]"
+    "If you started work not represented in the plan, add it with `todo` (and "
+    "mark it in_progress) before continuing. If the current in_progress item no "
+    "longer describes what you are doing, update it or replace it so the plan "
+    "matches reality.]"
 )
 
 # Injected (as a user turn) when the agent reaches its per-agent step budget.
@@ -1365,18 +1369,20 @@ class Agent:
         log.debug("Auto-marked plan task #%s as in_progress", task.get("id"))
         return todo_tool.get_tasks(self.session.id)
 
-    def _plan_has_pending_work(self) -> bool:
-        """Whether this session's plan still has work the model could move to.
+    def _plan_needs_heartbeat(self) -> bool:
+        """Whether the session's plan should be nudged back into sync.
 
-        Used only to decide if a plan heartbeat is worth sending: once every row
-        is completed there is nothing for the model to sync, and nagging it to
-        update a finished plan just adds noise.
+        The heartbeat fires when there is still tracked work (a pending or
+        in-progress row) — including the common case where everything looks
+        "complete" except a stale in-progress row while the model has moved on to
+        unplanned work. Once every row is completed there is nothing reliable for
+        the runtime to infer, so we stay quiet to avoid nagging at true end-of-task.
         """
         todo_tool = self.tools.get("todo")
         if todo_tool is None or not hasattr(todo_tool, "get_tasks"):
             return False
         return any(
-            task.get("status") == "pending"
+            task.get("status") in ("pending", "in_progress")
             for task in todo_tool.get_tasks(self.session.id)
         )
 
@@ -2678,7 +2684,7 @@ class Agent:
                             if (
                                 self._tools_since_plan_update >= PLAN_HEARTBEAT_TOOL_CALLS
                                 and not self._plan_nudge_pending
-                                and self._plan_has_pending_work()
+                                and self._plan_needs_heartbeat()
                             ):
                                 self._plan_nudge_pending = True
                                 self._tools_since_plan_update = 0
