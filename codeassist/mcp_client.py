@@ -113,7 +113,11 @@ def _transport_name(config: dict | None) -> str:
     config = config or {}
     if config.get("command"):
         return "stdio"
-    if str(config.get("transport", "")).strip().lower() == "sse":
+    transport = str(config.get("transport", "")).strip().lower()
+    url = str(config.get("url", "")).strip().lower()
+    if transport in {"ws", "wss", "websocket"} or url.startswith(("ws://", "wss://")):
+        return "websocket"
+    if transport == "sse":
         return "sse"
     return "http"
 
@@ -353,6 +357,123 @@ class _StdioMCPTransport:
         log.info("Stopped stdio MCP server '%s'", self.name)
 
 
+class _WebSocketMCPTransport:
+    """JSON-RPC over WebSocket, with the same post/aclose shape as stdio."""
+
+    def __init__(self, name: str, url: str, headers: dict | None = None, timeout: float = 30.0):
+        self.name = name
+        self.url = url
+        self.headers = dict(headers or {})
+        self.timeout = timeout
+        self._ws = None
+        self._pending: dict[Any, asyncio.Future] = {}
+        self._reader: asyncio.Task | None = None
+        self.notification_handler = None
+
+    def set_oauth_header(self, value: str | None) -> None:
+        if value:
+            self.headers["Authorization"] = value
+        else:
+            self.headers.pop("Authorization", None)
+
+    async def start(self):
+        try:
+            import websockets
+        except Exception as e:  # pragma: no cover - dependency declared in pyproject
+            raise RuntimeError("websockets package is required for MCP websocket transport") from e
+
+        # websockets>=12 uses additional_headers; keep compatibility simple.
+        kwargs: dict[str, Any] = {"open_timeout": self.timeout}
+        if self.headers:
+            kwargs["additional_headers"] = self.headers
+        self._ws = await websockets.connect(self.url, **kwargs)
+        self._reader = asyncio.create_task(self._read_loop(), name=f"mcp-ws-{self.name}")
+        log.info("Connected websocket MCP server '%s' at %s", self.name, self.url)
+
+    async def _read_loop(self):
+        ws = self._ws
+        if ws is None:  # pragma: no cover - defensive
+            return
+        try:
+            async for raw in ws:
+                text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                text = text.strip()
+                if not text:
+                    continue
+                try:
+                    message = jsonlib.loads(text)
+                except (TypeError, ValueError):
+                    log.warning("Ignoring non-JSON websocket message from MCP '%s': %s", self.name, text[:200])
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                message_id = message.get("id")
+                if message_id is not None:
+                    future = self._pending.get(message_id)
+                    if future is not None and not future.done():
+                        future.set_result(message)
+                    continue
+                method = message.get("method")
+                if method and self.notification_handler is not None:
+                    try:
+                        result = self.notification_handler(self.name, method, message.get("params") or {})
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("MCP websocket notification handler failed for '%s' %s: %s", self.name, method, e)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.error("WebSocket MCP reader for '%s' crashed: %s", self.name, e)
+        finally:
+            for message_id, future in list(self._pending.items()):
+                if not future.done():
+                    future.set_result({
+                        "jsonrpc": "2.0",
+                        "id": message_id,
+                        "error": {"code": -32000, "message": f"MCP websocket '{self.name}' closed"},
+                    })
+
+    async def post(self, _url, json):
+        ws = self._ws
+        if ws is None:
+            raise RuntimeError(f"MCP websocket '{self.name}' is not connected")
+        message_id = json.get("id")
+        future = None
+        if message_id is not None:
+            future = asyncio.get_running_loop().create_future()
+            self._pending[message_id] = future
+        await ws.send(jsonlib.dumps(json))
+        if future is None:
+            return _MCPResponse(202, {"accepted": True})
+        try:
+            response = await asyncio.wait_for(future, timeout=self.timeout)
+        finally:
+            self._pending.pop(message_id, None)
+        return _MCPResponse(200, response)
+
+    async def aclose(self):
+        if self._reader is not None:
+            self._reader.cancel()
+            try:
+                await self._reader
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._reader = None
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:  # pragma: no cover - best effort  # noqa: BLE001, S110
+                pass
+        for future in self._pending.values():
+            if not future.done():
+                future.cancel()
+        self._pending.clear()
+        log.info("Closed websocket MCP server '%s'", self.name)
+
+
 class MCPClient:
     def __init__(self):
         self._clients: dict[str, Any] = {}
@@ -481,7 +602,8 @@ class MCPClient:
         provider = _oauth_provider(self._configs.get(name))
         if not provider:
             return
-        headers = getattr(self._clients.get(name), "headers", None)
+        client = self._clients.get(name)
+        headers = getattr(client, "headers", None)
         if headers is None:
             return  # stdio transports carry no HTTP headers
         from .oauth import oauth_manager
@@ -491,9 +613,11 @@ class MCPClient:
             headers["Authorization"] = f"{token.token_type or 'Bearer'} {token.access_token}"
         else:
             headers.pop("Authorization", None)
+        if hasattr(client, "set_oauth_header"):
+            client.set_oauth_header(headers.get("Authorization"))
 
     async def _connect_server(self, name: str, config: dict):
-        """Connect to a single MCP server over stdio or HTTP/SSE."""
+        """Connect to a single MCP server over stdio, HTTP/SSE, or WebSocket."""
         command = config.get("command")
         url = config.get("url")
         transport_name = _transport_name(config)
@@ -517,6 +641,26 @@ class MCPClient:
                 await transport.start()
                 self._clients[name] = transport
                 self._urls[name] = ""
+            elif url and transport_name == "websocket":
+                headers = {
+                    str(key): str(value)
+                    for key, value in _resolve_env(config.get("headers", {})).items()
+                }
+                try:
+                    timeout = float(config.get("timeout", 30.0))
+                except (TypeError, ValueError):
+                    timeout = 30.0
+                headers.update(await self._oauth_headers(config))
+                transport = _WebSocketMCPTransport(
+                    name=name,
+                    url=str(url),
+                    headers=headers,
+                    timeout=timeout,
+                )
+                transport.notification_handler = self._handle_notification
+                await transport.start()
+                self._clients[name] = transport
+                self._urls[name] = str(url)
             elif url:
                 headers = {
                     str(key): str(value)
@@ -535,7 +679,7 @@ class MCPClient:
                 self._urls[name] = str(url)
             else:
                 raise ValueError(
-                    f"Server '{name}' needs either 'command' (stdio) or 'url' (HTTP/SSE)"
+                    f"Server '{name}' needs either 'command' (stdio) or 'url' (HTTP/SSE/WebSocket)"
                 )
 
             self._configs[name] = dict(config)

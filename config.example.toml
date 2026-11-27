@@ -130,6 +130,10 @@ enabled = false
 #   headers = {}
 #   env = {}
 #
+# [mcp.servers.remote_ws]
+#   url = "wss://mcp.example.com/ws"
+#   transport = "websocket"
+#
 # [mcp.servers.local_stdio]
 #   command = "npx"
 #   args = ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]

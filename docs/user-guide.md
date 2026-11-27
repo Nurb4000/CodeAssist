@@ -288,17 +288,21 @@ compact JSON and are validated on save.
 
 #### MCP transports and live status
 
-MCP server configs support two transports:
+MCP server configs support three transports:
 
 - **HTTP / streamable SSE** — provide `url`. Optional `transport = "sse"` tells CodeAssist to parse
   `text/event-stream` responses. Add `headers` (or `env:NAME` markers resolved from the process
   environment) for API-key servers.
+- **WebSocket** — provide `url` starting with `ws://`/`wss://`, or set `transport = "websocket"`.
+  JSON-RPC messages are exchanged over the socket; OAuth bearer headers are applied on connect.
 - **Local stdio** — provide `command` and `args` instead of `url`; no shell is used. `env` accepts
   `env:NAME` markers so secrets stay in the environment rather than the saved config.
 
 For an OAuth-protected remote server, set `oauth_provider` to a provider configured through the
 OAuth API. The bearer token is fetched and refreshed on each request from the OAuth token store; it
-is never written into the MCP config or shown in the status panel.
+is never written into the MCP config or shown in the status panel. In Admin, MCP servers with an
+`oauth_provider` show an **Authorize OAuth** action that opens the provider authorization URL;
+complete the existing OAuth callback flow, then use **Reload connections**.
 
 The **Live status** panel under the MCP table reports each server's transport, connection state,
 discovered tools, prompts, resources, server instructions, and any connection/discovery error.

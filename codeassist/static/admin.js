@@ -313,6 +313,26 @@ async function loadMcp() {
                     name: p.name, config: p.config, enabled: p.enabled,
                 });
             })));
+        const oauthProvider = (s.config && (s.config.oauth_provider || (s.config.auth && s.config.auth.provider))) || '';
+        if (oauthProvider) {
+            const authBtn = document.createElement('button');
+            authBtn.className = 'admin-btn';
+            authBtn.textContent = 'Authorize OAuth';
+            authBtn.addEventListener('click', async () => {
+                try {
+                    const res = await api('POST', `/api/mcp/servers/${encodeURIComponent(s.id)}/oauth/start`, {});
+                    if (res.authorization_url) {
+                        window.open(res.authorization_url, '_blank', 'noopener,noreferrer');
+                        setStatus(`Opened OAuth flow for ${oauthProvider}. Complete it, then reload MCP connections.`);
+                    } else {
+                        setStatus('OAuth start did not return an authorization URL', true);
+                    }
+                } catch (e) {
+                    setStatus(e.message, true);
+                }
+            });
+            actions.appendChild(authBtn);
+        }
         actions.appendChild(delButton(s.id, 'Delete', (id) => api('DELETE', `/api/mcp/servers/${id}`)));
         tbody.appendChild(tr);
     }
@@ -354,7 +374,9 @@ async function loadMcpStatus() {
         if (s.oauth_provider) {
             const auth = document.createElement('div');
             auth.className = 'admin-muted';
-            auth.textContent = `OAuth: ${s.oauth_provider}`;
+            const oauth = s.oauth || {};
+            const state = oauth.authenticated ? (oauth.expired ? 'expired' : 'authenticated') : (oauth.configured ? 'not authenticated' : 'not configured');
+            auth.textContent = `OAuth: ${s.oauth_provider} (${state})`;
             entry.appendChild(auth);
         }
         if (s.instructions) {

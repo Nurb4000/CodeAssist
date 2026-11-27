@@ -6,6 +6,7 @@ before discovery had happened, and never repaired the registry after a reload.
 These tests exercise each of those paths without requiring a real MCP server or
 network access.
 """
+import asyncio
 import json
 import sys
 import types
@@ -442,3 +443,112 @@ async def test_server_mcp_notification_hook_triggers_automation_event(monkeypatc
     await server._handle_mcp_notification("demo", "notifications/prompts/list_changed", {})
     assert "mcp:prompts_changed" in events
     assert "mcp:demo:prompts_changed" in events
+
+
+@pytest.mark.asyncio
+async def test_websocket_server_connects_discovers_and_calls(monkeypatch):
+    from codeassist.mcp_client import _WebSocketMCPTransport
+
+    sent = []
+
+    class FakeWS:
+        def __init__(self):
+            self._messages: asyncio.Queue[str] = asyncio.Queue()
+            self.closed = False
+
+        async def send(self, data):
+            msg = json.loads(data)
+            sent.append(msg)
+            method = msg.get("method")
+            msg_id = msg.get("id")
+            if msg_id is None:
+                return
+            if method == "initialize":
+                result = {"capabilities": {}, "instructions": "ws"}
+            elif method == "tools/list":
+                result = {"tools": [{"name": "ping", "description": "ping", "inputSchema": {"type": "object"}}]}
+            elif method == "prompts/list":
+                result = {"prompts": []}
+            elif method == "resources/list":
+                result = {"resources": []}
+            elif method == "tools/call":
+                result = {"content": [{"type": "text", "text": "ws-pong"}]}
+            else:
+                result = {}
+            await self._messages.put(json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": result}))
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.closed and self._messages.empty():
+                raise StopAsyncIteration
+            try:
+                return await asyncio.wait_for(self._messages.get(), timeout=30)
+            except asyncio.TimeoutError as exc:
+                if self.closed:
+                    raise StopAsyncIteration from exc
+                raise
+
+        async def close(self):
+            self.closed = True
+
+    fake_ws = FakeWS()
+
+    async def fake_connect(url, **kwargs):
+        assert url == "ws://example.test/mcp"
+        return fake_ws
+
+    import websockets
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+
+    client = MCPClient()
+    try:
+        connected = await client.initialize({"demo": {"url": "ws://example.test/mcp", "transport": "websocket"}})
+        assert connected == ["demo"]
+        status = client.get_status()[0]
+        assert status["transport"] == "websocket"
+        assert status["connected"] is True
+        output = await client.call_tool("mcp_demo_ping", {})
+        assert output == "ws-pong"
+        assert any(m.get("method") == "tools/call" for m in sent)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_oauth_start_route_returns_authorization_url(monkeypatch, tmp_path):
+    import codeassist.session as session_mod
+    from codeassist.oauth import OAuthProviderConfig, oauth_manager
+    from codeassist.routes.mcp import start_mcp_oauth
+    from codeassist.session import MCPServer
+
+    old_path = session_mod.DB_PATH
+    session_mod.DB_PATH = tmp_path / "test.db"
+    try:
+        await session_mod.init_db()
+
+        oauth_manager._providers.pop("github", None)
+        oauth_manager._tokens.pop("github", None)
+        oauth_manager._pending_states.clear()
+        oauth_manager.register_provider(OAuthProviderConfig(
+            name="github",
+            client_id="cid",
+            client_secret="secret",
+            auth_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+            redirect_uri="http://localhost:7878/api/oauth/callback",
+            default_scopes=["repo"],
+        ))
+
+        row = await MCPServer.create("gh-mcp", {"url": "https://example.test/mcp", "oauth_provider": "github"})
+        monkeypatch.setattr(server, "get_config", lambda: types.SimpleNamespace(mcp=types.SimpleNamespace(enabled=True)))
+
+        body = await start_mcp_oauth(row.id, {})
+        assert body["ok"] is True
+        assert body["provider"] == "github"
+        assert "github.com/login/oauth/authorize" in body["authorization_url"]
+        assert body["state"]
+    finally:
+        session_mod.DB_PATH = old_path
