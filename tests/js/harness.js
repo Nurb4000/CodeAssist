@@ -159,6 +159,7 @@ const ADMIN_FIXTURES = {
   '/api/status': { db_path: '/tmp/db', db_size_human: '1 KB', restart_needed: false },
   '/api/skills': { skills: [] },
   '/api/mcp/servers': { servers: [] },
+  '/api/mcp/status': { enabled: false, servers: [] },
   '/api/lsp/servers': { servers: [] },
   '/api/plugins': { plugins: [] },
   '/api/custom-tools': { tools: [] },

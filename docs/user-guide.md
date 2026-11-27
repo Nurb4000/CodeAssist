@@ -265,9 +265,9 @@ Use the **Profile** toolbar to manage reusable OpenAI-compatible provider config
 - Select **`(file / default)`** and activate it to return to `config.toml` values and ordinary UI
   overrides. The active profile must be deactivated before it can be **Delete**d.
 
-> Note: feature toggles (skills, plugins, MCP, LSP, git) are surfaced here, but enabling them still
-> requires a server restart — those subsystems boot once at startup. A live hot-reload for these is
-> a planned follow-up.
+> Note: feature toggles (skills, plugins, MCP, LSP, git) are surfaced here. **Save** applies a live
+> subsystem reload where possible; server bind settings (host/port/password) still need a process
+> restart.
 
 ### Registry tabs
 
@@ -276,7 +276,7 @@ Each registry tab lists items in a table with an **Add/Create** form and per-ite
 | Section | What you can do |
 |---------|-----------------|
 | **Skills** | View skills (name, description, slash command, source). Custom skills — the ones in `runtime/skills` — can be **Edit**ed or **Delete**d; base skills that ship with the app are read-only. **Reload skills from disk** picks up new/changed files without restart. **Create** writes a new custom skill into `runtime/skills`. |
-| **MCP servers** | **Add** a server (name + config JSON). **Edit** any server via a modal (name, config, enabled toggle). **Delete** with confirmation. Requires MCP enabled in config. |
+| **MCP servers** | **Add** a server (name + config JSON). **Edit** any server via a modal (name, config, enabled toggle). **Delete** with confirmation. **Reload connections** reconnects changed servers and refreshes the live status panel. Requires MCP enabled in config. |
 | **LSP servers** | **Add** a server (name, command, args JSON, languages JSON). **Edit** via modal (name, command, args, languages, enabled). **Delete** with confirmation. |
 | **Plugins** | Listing of plugins discovered on disk (name, version, enabled), each with a **Delete** action. Plugins are executable code, so add or change them by editing the files under `codeassist/plugins/` and restarting. |
 | **Custom tools** | Listing of tools discovered in `runtime/custom_tools/`. **Reload custom tools** to re-scan the directory without restart. |
@@ -285,6 +285,26 @@ Each registry tab lists items in a table with an **Add/Create** form and per-ite
 The edit modal is a reusable inline dialog: fill in the fields, click **Save**, and the registry
 reloads to reflect the change. JSON fields (MCP config, LSP args/languages) accept pretty-printed or
 compact JSON and are validated on save.
+
+#### MCP transports and live status
+
+MCP server configs support two transports:
+
+- **HTTP / streamable SSE** — provide `url`. Optional `transport = "sse"` tells CodeAssist to parse
+  `text/event-stream` responses. Add `headers` (or `env:NAME` markers resolved from the process
+  environment) for API-key servers.
+- **Local stdio** — provide `command` and `args` instead of `url`; no shell is used. `env` accepts
+  `env:NAME` markers so secrets stay in the environment rather than the saved config.
+
+For an OAuth-protected remote server, set `oauth_provider` to a provider configured through the
+OAuth API. The bearer token is fetched and refreshed on each request from the OAuth token store; it
+is never written into the MCP config or shown in the status panel.
+
+The **Live status** panel under the MCP table reports each server's transport, connection state,
+discovered tools, prompts, resources, server instructions, and any connection/discovery error.
+Connection failures no longer disappear into the server log. **Reload connections** reconciles the
+live set and re-registers discovered tools with the agent; a dynamic-tool reload also preserves
+those wrappers.
 
 ## Knowledge Base GUI
 

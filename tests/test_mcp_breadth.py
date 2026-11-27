@@ -1,0 +1,343 @@
+"""C3 MCP breadth: stdio transport, OAuth bearer tokens, discovery status and
+tool-registry synchronisation.
+
+The earlier client only spoke plain HTTP POST to one URL, registered wrappers
+before discovery had happened, and never repaired the registry after a reload.
+These tests exercise each of those paths without requiring a real MCP server or
+network access.
+"""
+import json
+import sys
+import types
+
+import pytest
+
+from codeassist import mcp_client as mcp_mod
+from codeassist import server
+from codeassist.mcp_client import MCPClient, MCPTool
+from codeassist.oauth import OAuthToken, oauth_manager
+from codeassist.tools import ToolRegistry
+
+# A tiny newline-delimited JSON-RPC MCP server. It answers the four discovery
+# methods plus tools/call, so stdio support is tested end-to-end (real process,
+# real pipes) rather than by mocking away the transport.
+_STDIO_SERVER = r"""
+import json, sys
+for line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    method, msg_id = msg.get('method'), msg.get('id')
+    if method == 'initialize':
+        result = {'protocolVersion': '2024-11-05', 'capabilities': {},
+                  'serverInfo': {'name': 'fake', 'version': '1'},
+                  'instructions': 'Use the fake tool'}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'ping', 'description': 'ping',
+                             'inputSchema': {'type': 'object', 'properties': {},
+                                             'required': []}}]}
+    elif method == 'prompts/list':
+        result = {'prompts': [{'name': 'hello', 'description': 'say hello',
+                               'arguments': []}]}
+    elif method == 'resources/list':
+        result = {'resources': [{'uri': 'file://fake/readme.md', 'name': 'readme',
+                                 'description': 'a doc', 'mimeType': 'text/markdown'}]}
+    elif method == 'tools/call':
+        result = {'content': [{'type': 'text',
+                               'text': 'pong:' + json.dumps(msg['params']['arguments'])}]}
+    elif method == 'notifications/initialized':
+        continue
+    else:
+        result = {}
+    if msg_id is not None:
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': msg_id,
+                                     'result': result}) + '\n')
+        sys.stdout.flush()
+"""
+
+
+def _response(method: str) -> types.SimpleNamespace:
+    if method == "initialize":
+        result = {"capabilities": {}, "instructions": "be helpful"}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "echo", "description": "echo",
+                             "inputSchema": {"type": "object"}}]}
+    elif method == "prompts/list":
+        result = {"prompts": [{"name": "summarize", "description": "summarize"}]}
+    elif method == "resources/list":
+        result = {"resources": [{"uri": "file://doc", "name": "doc"}]}
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": "ok"}]}
+    else:
+        result = {}
+    body = {"jsonrpc": "2.0", "id": 1, "result": result}
+    return types.SimpleNamespace(
+        status_code=200,
+        text=json.dumps(body),
+        headers={"content-type": "application/json"},
+        json=lambda: body,
+    )
+
+
+class _NoopClose:
+    async def aclose(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_stdio_server_connects_discovers_and_calls():
+    client = MCPClient()
+    config = {"command": sys.executable, "args": ["-u", "-c", _STDIO_SERVER], "env": {}}
+    try:
+        assert await client.initialize({"fake": config}) == ["fake"]
+
+        status = client.get_status()[0]
+        assert status["connected"] is True
+        assert status["transport"] == "stdio"
+        assert status["instructions"] == "Use the fake tool"
+        assert [p["name"] for p in status["prompts"]] == ["hello"]
+        assert [r["uri"] for r in status["resources"]] == ["file://fake/readme.md"]
+        assert [tool.name for tool in client.get_tools()] == ["mcp_fake_ping"]
+        assert client._urls["fake"] == "", "stdio servers have no HTTP URL"
+
+        output = await client.call_tool("mcp_fake_ping", {"value": 7})
+        assert output.startswith("pong:")
+        assert '"value": 7' in output
+        assert config["command"] == sys.executable  # config was not rewritten
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_is_fetched_per_request_and_never_exposed(monkeypatch):
+    issued = []
+
+    async def fake_get_token(provider):
+        token = OAuthToken(provider=provider, access_token=f"token-{len(issued) + 1}")
+        issued.append(token.access_token)
+        return token
+
+    monkeypatch.setattr(oauth_manager, "get_token", fake_get_token)
+
+    class FakeHTTPX:
+        instances = []
+
+        def __init__(self, headers=None, timeout=None):
+            self.headers = dict(headers or {})
+            self.timeout = timeout
+            self.instances.append(self)
+
+        async def post(self, url, json):
+            return _response(json["method"])
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(mcp_mod.httpx, "AsyncClient", FakeHTTPX)
+
+    client = MCPClient()
+    config = {"url": "https://mcp.example.test/mcp", "oauth_provider": "github"}
+    try:
+        assert await client.initialize({"remote": config}) == ["remote"]
+        http_client = FakeHTTPX.instances[0]
+        assert http_client.headers["Authorization"].startswith("Bearer token-")
+        assert len(issued) > 1, "token must be refreshed on later requests too"
+        assert await client.call_tool("mcp_remote_echo", {}) == "ok"
+
+        status = client.get_status()[0]
+        assert status["oauth_provider"] == "github"
+        assert "token-" not in json.dumps(status), "status must not leak bearer tokens"
+        assert config == {"url": "https://mcp.example.test/mcp",
+                          "oauth_provider": "github"}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_oauth_token_surfaces_actionable_error(monkeypatch):
+    async def no_token(provider):
+        return None
+
+    monkeypatch.setattr(oauth_manager, "get_token", no_token)
+    client = MCPClient()
+    assert await client.initialize({"remote": {
+        "url": "https://mcp.example.test/mcp", "oauth_provider": "github",
+    }}) == []
+    status = client.get_status()[0]
+    assert "github" in status["error"]
+    assert "access token" in status["error"]
+
+
+@pytest.mark.asyncio
+async def test_sse_responses_are_decoded(monkeypatch):
+    body = (
+        'event: message\n'
+        'data: {"jsonrpc":"2.0","id":1,"result":{"tools":[]}}\n\n'
+    )
+
+    class SSEResponse:
+        status_code = 200
+        text = body
+        headers = {"content-type": "text/event-stream"}
+
+        def json(self):
+            raise AssertionError("SSE bodies must be parsed from data: frames")
+
+    class FakeHTTPX:
+        def __init__(self, headers=None, timeout=None):
+            self.headers = dict(headers or {})
+
+        async def post(self, url, json):
+            return SSEResponse()
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(mcp_mod.httpx, "AsyncClient", FakeHTTPX)
+    client = MCPClient()
+    try:
+        assert await client.initialize({"stream": {
+            "url": "https://mcp.example.test/sse", "transport": "sse",
+        }}) == ["stream"]
+        assert client.get_status()[0]["transport"] == "sse"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reload_reconnects_when_stdio_args_change(monkeypatch):
+    client = MCPClient()
+    connected = []
+
+    async def fake_connect(name, config):
+        connected.append(name)
+        client._clients[name] = _NoopClose()
+
+    monkeypatch.setattr(client, "_connect_server", fake_connect)
+
+    await client.initialize({"local": {"command": "server", "args": ["--one"]}})
+    assert connected == ["local"]
+
+    assert await client.reload({"local": {"command": "server", "args": ["--two"]}}) == ["local"]
+    assert connected == ["local", "local"], "changed args must reconnect a stdio server"
+
+    assert await client.reload({"local": {"command": "server", "args": ["--two"]}}) == []
+    assert len(connected) == 2, "an unchanged stdio server must be left running"
+
+
+@pytest.mark.asyncio
+async def test_discovered_tools_are_registered_with_agent_registry(monkeypatch, tmp_path):
+    client = MCPClient()
+    client._tools["mcp_demo_ping"] = MCPTool(
+        name="mcp_demo_ping", description="ping", parameters={}, server_name="demo"
+    )
+    registry = ToolRegistry(tmp_path)
+    sentinel = types.SimpleNamespace(name="keep", parameters={})
+    registry.register(sentinel)
+
+    monkeypatch.setattr(server, "mcp_client", client)
+    monkeypatch.setattr(server, "tools", registry)
+
+    server.sync_mcp_tools()
+    assert "mcp_demo_ping" in registry.list_names()
+    assert "keep" in registry.list_names(), "sync must not clear built-in tools"
+
+    client._tools.clear()
+    server.sync_mcp_tools()
+    assert "mcp_demo_ping" not in registry.list_names()
+    assert "keep" in registry.list_names()
+
+
+@pytest.mark.asyncio
+async def test_init_mcp_registers_tools_discovered_after_registry_creation(monkeypatch, tmp_path):
+    class FakeMCPClient:
+        def __init__(self):
+            self.tools = [MCPTool(
+                name="mcp_late_ping", description="ping", parameters={},
+                server_name="late",
+            )]
+
+        async def initialize(self, servers):
+            return ["late"]
+
+        def get_tools(self):
+            return list(self.tools)
+
+    async def no_servers(cfg):
+        return {}
+
+    registry = ToolRegistry(tmp_path)
+    monkeypatch.setattr(server, "_config", server.get_config())
+    monkeypatch.setattr(server, "mcp_client", FakeMCPClient())
+    monkeypatch.setattr(server, "tools", registry)
+    monkeypatch.setattr(server, "_merged_mcp_servers", no_servers)
+
+    await server.init_mcp()
+    assert "mcp_late_ping" in registry.list_names()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tool_reload_preserves_mcp_wrappers(monkeypatch, tmp_path):
+    client = MCPClient()
+    client._tools["mcp_keep_ping"] = MCPTool(
+        name="mcp_keep_ping", description="ping", parameters={}, server_name="keep"
+    )
+    registry = ToolRegistry(tmp_path)
+    monkeypatch.setattr(server, "mcp_client", client)
+    monkeypatch.setattr(server, "tools", registry)
+    server.sync_mcp_tools()
+    assert "mcp_keep_ping" in registry.list_names()
+
+    from codeassist.dynamic_tools import DynamicToolLoader
+
+    def clear_only(self, reg):
+        reg.clear()
+
+    monkeypatch.setattr(DynamicToolLoader, "reload_registry", clear_only)
+    await server.reload_all_tools()
+    assert "mcp_keep_ping" in registry.list_names(), (
+        "dynamic-tool reload must re-add MCP wrappers after clearing the registry"
+    )
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_is_reported_in_status(monkeypatch):
+    class FailingHTTPX:
+        def __init__(self, headers=None, timeout=None):
+            self.headers = dict(headers or {})
+
+        async def post(self, url, json):
+            raise RuntimeError("connection refused")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(mcp_mod.httpx, "AsyncClient", FailingHTTPX)
+    client = MCPClient()
+    assert await client.initialize({"bad": {"url": "http://127.0.0.1:1/mcp"}}) == []
+    status = client.get_status()[0]
+    assert status["connected"] is False
+    assert "connection refused" in status["error"]
+
+
+def test_status_route_reports_live_client(live_client, monkeypatch):
+    # MCP is disabled in the test config, so the route must say so explicitly.
+    assert live_client.get("/api/mcp/status").json() == {"enabled": False, "servers": []}
+
+    class FakeClient:
+        def get_status(self):
+            return [{"name": "remote", "connected": False,
+                     "error": "handshake failed", "tools": [], "prompts": [],
+                     "resources": [], "instructions": "", "transport": "sse",
+                     "oauth_provider": ""}]
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(server, "mcp_client", FakeClient())
+    response = live_client.get("/api/mcp/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["servers"][0]["error"] == "handshake failed"

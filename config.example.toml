@@ -115,11 +115,25 @@ remote_env = ""                 # trusted preamble, e.g. "source /opt/venv/bin/a
 # Enable MCP (Model Context Protocol) client
 enabled = false
 
-# MCP server configurations
-# [mcp.servers.server_name]
-#   url = "http://localhost:3001/sse"
+# MCP server configurations. Two transports are supported:
+#   - HTTP/streamable SSE: set url; optional transport="sse" parses SSE replies.
+#     For OAuth-protected servers, set oauth_provider to a provider configured
+#     under /api/oauth; the bearer token is fetched/refreshed at request time
+#     and is never written to this file.
+#   - Local stdio: set command/args instead of url (no shell is used).
+# Both accept headers/env; env:NAME values are resolved from the process env
+# without rewriting this config.
+# [mcp.servers.remote]
+#   url = "https://mcp.example.com/mcp"
+#   transport = "sse"
+#   oauth_provider = "github"
 #   headers = {}
 #   env = {}
+#
+# [mcp.servers.local_stdio]
+#   command = "npx"
+#   args = ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+#   env = { API_TOKEN = "env:MY_MCP_TOKEN" }
 
 [automations]
 # Unattended prompt/shell jobs. Off by default: enabling this lets the server

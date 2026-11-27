@@ -231,6 +231,19 @@ class ToolRegistry:
         """Remove all registered tools."""
         self._tools.clear()
 
+    def sync_prefixed(self, prefix: str, replacements: dict[str, Tool]):
+        """Replace every registered tool under ``prefix`` with ``replacements``.
+
+        MCP wrappers are discovered after the registry is built, and dynamic-tool
+        reloads call ``clear()``, so both paths need a surgical resync that never
+        touches built-in tools from other namespaces.
+        """
+        for name in list(self._tools):
+            if name.startswith(prefix) and name not in replacements:
+                del self._tools[name]
+        for name, tool in replacements.items():
+            self._tools[name] = tool
+
 
 def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_registry=None, plugin_registry=None, lsp_client=None) -> ToolRegistry:
     """Create a tool registry with all tools registered."""

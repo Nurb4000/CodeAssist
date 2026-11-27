@@ -318,6 +318,61 @@ async function loadMcp() {
     }
 }
 
+function mcpNames(items, key) {
+    if (!Array.isArray(items) || !items.length) return '—';
+    const labels = items.map((item) =>
+        typeof item === 'string' ? item : (item && (item[key] || item.name || item.uri)) || ''
+    ).filter(Boolean);
+    return labels.length ? labels.join(', ') : '—';
+}
+
+async function loadMcpStatus() {
+    const el = document.getElementById('mcp-status');
+    if (!el) return;
+    const data = await api('GET', '/api/mcp/status');
+    el.innerHTML = '';
+    if (!data.enabled) {
+        el.textContent = 'MCP is disabled';
+        return;
+    }
+    const servers = data.servers || [];
+    if (!servers.length) {
+        el.textContent = 'No MCP servers configured';
+        return;
+    }
+    for (const s of servers) {
+        const entry = document.createElement('div');
+        const headline = document.createElement('div');
+        headline.textContent = `${s.name || 'unnamed'} · ${s.transport || 'http'} · ${s.connected ? 'connected' : 'disconnected'}`;
+        entry.appendChild(headline);
+
+        const details = document.createElement('div');
+        details.className = 'admin-muted';
+        details.textContent = `tools: ${mcpNames(s.tools)} | prompts: ${mcpNames(s.prompts)} | resources: ${mcpNames(s.resources, 'uri')}`;
+        entry.appendChild(details);
+
+        if (s.oauth_provider) {
+            const auth = document.createElement('div');
+            auth.className = 'admin-muted';
+            auth.textContent = `OAuth: ${s.oauth_provider}`;
+            entry.appendChild(auth);
+        }
+        if (s.instructions) {
+            const notes = document.createElement('div');
+            notes.className = 'admin-muted';
+            notes.textContent = `instructions: ${s.instructions}`;
+            entry.appendChild(notes);
+        }
+        if (s.error) {
+            const err = document.createElement('div');
+            err.style.color = 'var(--red, #e05252)';
+            err.textContent = `error: ${s.error}`;
+            entry.appendChild(err);
+        }
+        el.appendChild(entry);
+    }
+}
+
 async function loadAutomations() {
     const data = await api('GET', '/api/automations');
     const tbody = document.getElementById('automation-body');
@@ -502,7 +557,7 @@ function stepChip(a) {
 
 async function loadAll() {
     try {
-        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadProfiles(), loadSettings(), loadAutomations()]);
+        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadMcpStatus(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadProfiles(), loadSettings(), loadAutomations()]);
         updateCounts();
         setStatus('Updated');
     } catch (e) {
@@ -1007,7 +1062,7 @@ document.getElementById('mcp-reload').onclick = async () => {
         const res = await api('POST', '/api/mcp/reload');
         const n = (res.reconnected || []).length;
         setStatus(n ? `Reconnected ${n} MCP server(s)` : 'MCP connections up to date');
-        await loadMcp();
+        await Promise.all([loadMcp(), loadMcpStatus()]);
     } catch (e) { setStatus(e.message, true); }
 };
 document.getElementById('lsp-reload').onclick = async () => {

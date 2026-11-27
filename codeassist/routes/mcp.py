@@ -80,6 +80,19 @@ async def delete_mcp_server(server_id: str):
     return {"ok": True}
 
 
+@reload_router.get("/status")
+async def get_mcp_status():
+    """Report live connection/discovery state, including per-server errors.
+
+    OAuth tokens and header values are deliberately not part of this payload.
+    """
+    from ..server import mcp_client
+
+    if mcp_client is None:
+        return {"enabled": False, "servers": []}
+    return {"enabled": True, "servers": mcp_client.get_status()}
+
+
 @reload_router.post("/reload")
 async def reload_mcp_connections():
     """Manually re-sync live MCP connections with the DB+config server set."""

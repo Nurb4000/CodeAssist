@@ -78,11 +78,13 @@
                 <thead><tr><th>Name</th><th>Config</th><th>Enabled</th><th></th></tr></thead>
                 <tbody id="mcp-body"></tbody>
             </table>
+            <h3>Live status</h3>
+            <div id="mcp-status" class="admin-muted" aria-live="polite">Loading MCP status…</div>
             <details class="admin-create">
                 <summary>Add MCP server</summary>
                 <div class="admin-form">
                     <input id="mcp-name" placeholder="name (required)">
-                    <textarea id="mcp-config" placeholder='{"command": "...", "args": [...]}'></textarea>
+                    <textarea id="mcp-config" placeholder='{"url": "https://host/mcp", "oauth_provider": "github"} or {"command": "npx", "args": ["-y", "pkg"]}'></textarea>
                     <button class="admin-btn" id="mcp-create">Add</button>
                 </div>
             </details>

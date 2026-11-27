@@ -267,16 +267,40 @@ async def _start_lsp_servers(cfg: Config, lsp_client) -> None:
             log.error("Failed to start LSP server '%s': %s", name, e)
 
 
+def sync_mcp_tools() -> None:
+    """Mirror discovered MCP tools into the live agent tool registry.
+
+    MCP discovery happens *after* ``create_registry()`` and every tool reload
+    clears the registry, so wrappers must be resynced explicitly. Without this,
+    servers connect but the agent never sees their tools.
+    """
+    if tools is None:
+        return
+    from codeassist.mcp_client import MCPToolWrapper
+
+    if mcp_client is None:
+        tools.sync_prefixed("mcp_", {})
+        return
+    wrappers = {
+        mcp_tool.name: MCPToolWrapper(mcp_tool, mcp_client)
+        for mcp_tool in mcp_client.get_tools()
+    }
+    tools.sync_prefixed("mcp_", wrappers)
+
+
 async def reload_mcp_servers() -> list[str]:
     """Reconnect MCP servers after an admin edit, using the merged DB+config set.
 
     No-op when MCP is disabled (no live client). Returns names (re)connected.
     """
     if mcp_client is None:
+        sync_mcp_tools()
         return []
     cfg = get_config()
     servers = await _merged_mcp_servers(cfg)
-    return await mcp_client.reload(servers)
+    connected = await mcp_client.reload(servers)
+    sync_mcp_tools()
+    return connected
 
 
 async def reload_lsp_servers() -> None:
@@ -411,9 +435,11 @@ async def _merged_mcp_servers(cfg: Config) -> dict:
 
 async def init_mcp():
     if mcp_client is None or _config is None:
+        sync_mcp_tools()
         return
     servers = await _merged_mcp_servers(_config)
     await mcp_client.initialize(servers)
+    sync_mcp_tools()
 
 async def init_skills():
     if skill_registry:
@@ -435,6 +461,9 @@ async def reload_all_tools():
 
     loader = DynamicToolLoader(cfg.workspace, trust_registry=trust_registry)
     loader.reload_registry(tools)
+    # reload_registry() clears the registry; MCP wrappers must be re-added or
+    # the agent loses every discovered MCP tool after a dynamic-tool reload.
+    sync_mcp_tools()
     log.info("Tools reloaded successfully")
 
 
