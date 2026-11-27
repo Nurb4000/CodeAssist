@@ -30,6 +30,15 @@ document is the overview; this guide is the walkthrough.
 
 ---
 
+## Headless CLI and ACP
+
+CodeAssist also supports non-web entrypoints (Phase D2, Python-only):
+
+- `codeassist run "..."` runs a single prompt headlessly using the same agent/session/tool stack. Use `--continue` or `--session <id>` to continue a session, `--format text|final|json` for output, and pipe stdin when no message argument is provided.
+- `codeassist acp` starts an ACP stdio adapter (JSON-RPC 2.0 ndjson on stdin/stdout). It supports `initialize`, `session/new`, `session/load`, `session/list`, `session/prompt`, and `session/cancel`, streaming `session/update` notifications for text, reasoning, and tool calls.
+
+Both commands accept `--workspace`, `--config`, and LLM/server config overrides from the normal config path.
+
 ## First run and signing in
 
 Start the server (see the README Quick Start) and open the URL it prints, e.g.

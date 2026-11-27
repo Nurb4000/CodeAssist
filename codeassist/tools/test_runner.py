@@ -398,6 +398,9 @@ class TestRunnerTool(Tool):
                 )
 
             cmd = get_test_command(framework, test_path, extra_args)
+            if not use_remote and cmd and cmd[0] == "python":
+                import sys as _sys
+                cmd = [_sys.executable, *cmd[1:]]
             log.info("Running tests on %s: %s (framework=%s)", "VM" if use_remote else "local", " ".join(cmd), framework)
 
             fallback_reason = ""

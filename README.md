@@ -343,7 +343,7 @@ The `/remote-test` skill covers result interpretation and troubleshooting. See
 ## Usage
 
 ```bash
-# Always specify your project
+# Start web UI (default)
 codeassist --workspace ~/Projects/myapp
 
 # Custom port
@@ -351,6 +351,18 @@ codeassist --workspace ~/Projects/myapp --port 9000
 
 # Don't auto-open browser
 codeassist --workspace ~/Projects/myapp --no-browser
+
+# Headless single prompt (prints final answer by default format text)
+codeassist run --workspace ~/Projects/myapp "Summarize README.md"
+
+# Continue the most recent session
+codeassist run --workspace ~/Projects/myapp --continue "Run the tests"
+
+# JSON event output (ndjson-style, one event per line)
+codeassist run --workspace ~/Projects/myapp --format json "Fix the failing test"
+
+# ACP stdio adapter (Agent Client Protocol ndjson over stdin/stdout)
+codeassist acp --workspace ~/Projects/myapp
 ```
 
 For a screen-by-screen walkthrough of the chat, Admin, Knowledge Base, and Tool Manager interfaces,
