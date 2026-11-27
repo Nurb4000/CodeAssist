@@ -52,6 +52,8 @@ class ACPState:
     session_agents: dict[str, Any] = None
     writer: asyncio.StreamWriter | None = None
     write_lock: asyncio.Lock = None
+    pending_requests: dict[Any, asyncio.Future] = None
+    next_request_id: int = 0
 
     def __post_init__(self):
         if self.sessions is None:
@@ -62,6 +64,8 @@ class ACPState:
             self.session_agents = {}
         if self.write_lock is None:
             self.write_lock = asyncio.Lock()
+        if self.pending_requests is None:
+            self.pending_requests = {}
 
 
 def _json_dumps(obj: Any) -> str:
@@ -94,6 +98,19 @@ async def _respond_error(state: ACPState, req_id: Any, code: int, message: str, 
     if data is not None:
         err["data"] = data
     await _write(state, {"jsonrpc": "2.0", "id": req_id, "error": err})
+
+
+async def _request(state: ACPState, method: str, params: dict[str, Any], timeout: float = 120.0) -> Any:
+    """Send a JSON-RPC request to the client and await its response."""
+    state.next_request_id += 1
+    req_id = f"srv_{state.next_request_id}"
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    state.pending_requests[req_id] = fut
+    try:
+        await _write(state, {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+        return await asyncio.wait_for(fut, timeout=timeout)
+    finally:
+        state.pending_requests.pop(req_id, None)
 
 
 def _text_from_prompt(prompt: Any) -> tuple[str, list[dict]]:
@@ -255,11 +272,9 @@ async def _session_prompt(state: ACPState, req_id: Any, params: dict[str, Any]) 
                 },
             })
         elif et == "tool_result":
-            status = "completed"
             out = event.data.get("output")
-            if isinstance(out, str) and out.lower().startswith(("error", "denied", "tool '")):
-                # heuristic; keep simple
-                pass
+            out_text = str(out) if out is not None else ""
+            status = "failed" if out_text.lower().startswith(("error", "denied", "tool '")) else "completed"
             await _notify(state, "session/update", {
                 "sessionId": acp_sid,
                 "update": {
@@ -267,9 +282,34 @@ async def _session_prompt(state: ACPState, req_id: Any, params: dict[str, Any]) 
                     "toolCallId": event.data.get("id"),
                     "status": status,
                     "rawOutput": out,
-                    "content": [{"type": "content", "content": {"type": "text", "text": str(out)[:20000]}}] if out is not None else [],
+                    "content": [{"type": "content", "content": {"type": "text", "text": out_text[:20000]}}] if out is not None else [],
                 },
             })
+
+    async def confirm_handler(request: dict[str, Any]) -> bool:
+        """Bridge CodeAssist confirm_request to ACP session/request_permission."""
+        try:
+            resp = await _request(state, "session/request_permission", {
+                "sessionId": acp_sid,
+                "toolCall": {
+                    "toolCallId": request.get("id"),
+                    "title": request.get("tool"),
+                    "kind": "other",
+                    "status": "pending",
+                    "rawInput": request.get("arguments"),
+                },
+                "options": [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Allow once"},
+                    {"optionId": "reject_once", "kind": "reject_once", "name": "Reject"},
+                ],
+            }, timeout=300.0)
+            outcome = resp.get("outcome", {}) if isinstance(resp, dict) else {}
+            if outcome.get("outcome") == "selected":
+                return outcome.get("optionId") in {"allow_once", "allow_always"}
+            return False
+        except Exception:
+            log.warning("ACP permission request failed; denying for safety", exc_info=True)
+            return False
 
     agent_out: list = []
 
@@ -282,6 +322,7 @@ async def _session_prompt(state: ACPState, req_id: Any, params: dict[str, Any]) 
                 agent_name=agent_name,
                 sink=sink,
                 agent_out=agent_out,
+                confirm_handler=confirm_handler,
             )
             stop = "cancelled" if cancelled["value"] else result.stop_reason
             if stop == "error":
@@ -327,8 +368,18 @@ async def handle_message(state: ACPState, msg: dict[str, Any]) -> None:
     has_method = "method" in msg
     has_id = "id" in msg
 
+    # Response from client to our request
+    if not has_method and has_id:
+        req_id = msg.get("id")
+        fut = state.pending_requests.get(req_id)
+        if fut and not fut.done():
+            if "error" in msg:
+                fut.set_exception(ACPError(msg["error"].get("code", INTERNAL_ERROR), msg["error"].get("message", "Client error"), msg["error"].get("data")))
+            else:
+                fut.set_result(msg.get("result"))
+        return
+
     if not has_method:
-        # response from client; ignore for now
         return
 
     method = msg.get("method")

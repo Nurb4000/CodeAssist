@@ -286,3 +286,62 @@ async def test_acp_prompt_streams_text_and_returns_stop_reason(monkeypatch, tmp_
     assert notif
     assert notif[0]["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
     assert resp[0]["result"]["stopReason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_acp_permission_request_bridges_to_client(monkeypatch):
+    import codeassist.acp_adapter as acp
+    from codeassist.config import Config
+
+    cfg = Config()
+    state = acp.ACPState(config=cfg)
+    state.sessions["acp_sess1"] = {"id": "acp_sess1", "sessionId": "sess1", "cwd": None}
+
+    writes = []
+
+    class FakeWriter:
+        def write(self, data):
+            writes.append(data)
+            msg = json.loads(data.decode("utf-8"))
+            # Auto-respond to permission requests as allow_once
+            if msg.get("method") == "session/request_permission":
+                asyncio.get_running_loop().call_soon(
+                    lambda mid=msg["id"]: asyncio.create_task(
+                        acp.handle_message(state, {
+                            "jsonrpc": "2.0",
+                            "id": mid,
+                            "result": {"outcome": {"outcome": "selected", "optionId": "allow_once"}},
+                        })
+                    )
+                )
+
+        async def drain(self):
+            return None
+
+    state.writer = FakeWriter()
+
+    observed = {}
+
+    async def fake_run_prompt(**kwargs):
+        handler = kwargs["confirm_handler"]
+        observed["approved"] = await handler({"id": "c1", "tool": "shell", "arguments": {"command": "ls"}})
+        return SimpleNamespace(stop_reason="end_turn")
+
+    monkeypatch.setattr(acp, "run_prompt", fake_run_prompt)
+
+    await acp.handle_message(state, {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "session/prompt",
+        "params": {"sessionId": "acp_sess1", "prompt": [{"type": "text", "text": "run ls"}]},
+    })
+    for _ in range(50):
+        if any(json.loads(w.decode()).get("id") == 11 for w in writes):
+            break
+        await asyncio.sleep(0.01)
+
+    assert observed["approved"] is True
+    msgs = [json.loads(w.decode("utf-8")) for w in writes]
+    reqs = [m for m in msgs if m.get("method") == "session/request_permission"]
+    assert reqs
+    assert reqs[0]["params"]["toolCall"]["title"] == "shell"
