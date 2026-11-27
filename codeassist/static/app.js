@@ -32,6 +32,22 @@ function agentShortLabel(id) {
     return AGENT_SHORT[id] || id || 'Agent';
 }
 
+// Built-in slash commands are local actions: they use existing WebSocket frames
+// and deliberately produce no user bubble. Any other /name is left for the
+// server to expand through the skill registry.
+const BUILTIN_COMMANDS = [
+    { name: 'compact', description: 'Checkpoint this session for a faster resume' },
+    { name: 'undo', description: 'Undo the last turn' },
+    { name: 'stop', description: 'Stop the current turn' },
+    { name: 'agent', description: 'Switch agent — /agent <id>' },
+    { name: 'help', description: 'Show available commands' },
+];
+
+function parseSlashCommand(text) {
+    const match = /^\/([A-Za-z0-9_-]+)(?:\s+(.*))?$/.exec(String(text || '').trim());
+    return match ? { name: match[1], args: (match[2] || '').trim() } : null;
+}
+
 // Inline SVG icons (crisp + consistently rendered; inherit color via currentColor).
 const ICONS = {
     import: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V7"/><path d="M8 11l4-4 4 4"/><path d="M5 21h14"/></svg>`,
@@ -1677,6 +1693,8 @@ async function runMessageSearch() {
     }
 }
 
+const commandPaletteBtn = document.getElementById('command-palette-btn');
+if (commandPaletteBtn) commandPaletteBtn.addEventListener('click', openCommandPalette);
 if (searchMessagesBtn) searchMessagesBtn.addEventListener('click', openMessageSearch);
 if (messageSearchBtn) messageSearchBtn.addEventListener('click', runMessageSearch);
 if (messageSearchCloseBtn) messageSearchCloseBtn.addEventListener('click', resetMessageSearch);
@@ -2054,6 +2072,138 @@ function openModal(bodyHtml, actionsHtml) {
     return backdrop;
 }
 
+// ── Slash commands and the command palette ─────────────────────────────────
+// Built-ins stay in the browser: they reuse the same buttons/frames as the UI
+// controls, so a typed command and a click cannot drift apart.
+
+function showCommandHelp() {
+    const rows = BUILTIN_COMMANDS
+        .map((c) => `<li><code>/${escapeHtml(c.name)}</code> — ${escapeHtml(c.description)}</li>`)
+        .join('');
+    const bd = openModal(
+        `<h3 class="modal-title">Commands</h3>
+         <p class="modal-hint">Type a command in the chat box. Custom skills appear here too; arguments after the command are passed to the skill.</p>
+         <ul class="command-help-list">${rows}</ul>`,
+        `<button class="modal-btn primary" id="command-help-close">Close</button>`
+    );
+    bd.classList.add('command-palette');
+    bd.querySelector('#command-help-close').addEventListener('click', () => bd.remove());
+}
+
+function runBuiltinCommand(name, args = '') {
+    if (name === 'compact') {
+        if (compactBtn) compactBtn.click();
+        return true;
+    }
+    if (name === 'undo') {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            showStatus('Connect to a session before undoing a turn.', 'error');
+        } else {
+            ws.send(JSON.stringify({ type: 'undo' }));
+        }
+        return true;
+    }
+    if (name === 'stop') {
+        if (stopBtn) stopBtn.click();
+        return true;
+    }
+    if (name === 'agent') {
+        if (!args) {
+            showError('Usage: /agent <id>');
+        } else {
+            switchAgent(args);
+        }
+        return true;
+    }
+    if (name === 'help') {
+        showCommandHelp();
+        return true;
+    }
+    return false;
+}
+
+async function openCommandPalette() {
+    if (document.querySelector('.command-palette')) return;
+    let skills = [];
+    try {
+        const data = await api('GET', '/api/skills');
+        skills = data.skills || [];
+    } catch (e) {
+        // The built-ins still work when the skills API is unavailable.
+    }
+    const commands = [
+        ...BUILTIN_COMMANDS.map((c) => ({ ...c, isSkill: false })),
+        ...skills
+            .filter((s) => s.slash_command)
+            .map((s) => ({
+                name: s.slash_command,
+                description: s.description || s.name,
+                isSkill: true,
+            })),
+    ];
+
+    const bd = openModal(
+        `<h3 class="modal-title">Commands</h3>
+         <input type="text" id="command-palette-input" class="modal-input" placeholder="Type a command..." aria-label="Filter commands" autocomplete="off">
+         <div id="command-palette-list" class="command-palette-list" role="listbox" aria-label="Commands"></div>`,
+        `<button class="modal-btn" id="command-palette-cancel">Cancel</button>`
+    );
+    bd.classList.add('command-palette');
+    const filter = bd.querySelector('#command-palette-input');
+    const list = bd.querySelector('#command-palette-list');
+    let visible = [];
+    let selected = 0;
+
+    const choose = (command) => {
+        bd.remove();
+        if (command.isSkill) {
+            // Leave sending to the user so arguments can be typed first.
+            inputEl.value = `/${command.name} `;
+            inputEl.focus();
+        } else {
+            inputEl.value = '';
+            runBuiltinCommand(command.name, '');
+        }
+    };
+    const render = () => {
+        const query = filter.value.trim().toLowerCase().replace(/^\//, '');
+        visible = commands.filter((c) => (
+            !query || c.name.toLowerCase().includes(query)
+            || String(c.description).toLowerCase().includes(query)
+        ));
+        if (selected >= visible.length) selected = 0;
+        list.innerHTML = '';
+        visible.forEach((command, i) => {
+            const row = document.createElement('div');
+            row.className = 'command-palette-item' + (i === selected ? ' active' : '');
+            row.id = `command-palette-option-${i}`;
+            row.setAttribute('role', 'option');
+            row.setAttribute('aria-selected', String(i === selected));
+            row.textContent = `/${command.name} — ${command.description || ''}`;
+            row.addEventListener('click', () => choose(command));
+            list.appendChild(row);
+        });
+        filter.setAttribute('aria-activedescendant', visible.length ? `command-palette-option-${selected}` : '');
+    };
+    const move = (delta) => {
+        if (!visible.length) return;
+        selected = (selected + delta + visible.length) % visible.length;
+        render();
+    };
+
+    filter.addEventListener('input', () => { selected = 0; render(); });
+    filter.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+        else if (e.key === 'Home') { e.preventDefault(); selected = 0; render(); }
+        else if (e.key === 'End') { e.preventDefault(); selected = Math.max(0, visible.length - 1); render(); }
+        else if (e.key === 'Enter') { e.preventDefault(); if (visible[selected]) choose(visible[selected]); }
+    });
+    bd.querySelector('#command-palette-cancel').addEventListener('click', () => bd.remove());
+    render();
+    filter.focus();
+}
+
 async function downloadJSON(filename, data) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -2323,6 +2473,18 @@ function connectWS() {
             showCompacting(data);
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
+        } else if (data.type === 'undo_done') {
+            // Undo used to be a silent no-op in the GUI (the server replied but
+            // nothing re-rendered). Reload the transcript so the removed turn
+            // disappears from every view, including the Work section.
+            // loadMessages() clears #messages, so show the confirmation only
+            // after it has rebuilt the transcript -- otherwise the status is
+            // wiped with the old rows and undo still looks like a no-op.
+            hideProgress();
+            const deleted = !!data.deleted;
+            loadMessages().then(() => showStatus(
+                deleted ? 'Undid the last turn.' : 'Nothing to undo.', 'info'
+            ));
         } else if (data.type === 'checkpoint_saved') {
             // Manual compaction is not a turn: the `compacting` frame installed
             // a progress bar outside any run, and clearCompacting() above
@@ -2512,6 +2674,15 @@ function updateConnectionStatus(status) {
 
 function sendMessage() {
     const text = inputEl.value.trim();
+    // Built-in commands are local actions. Handle them before the streaming
+    // guard so /stop works during a run; they never create a user bubble or
+    // start a turn. Unknown slash commands fall through for server expansion.
+    const command = parseSlashCommand(text);
+    if (command && runBuiltinCommand(command.name, command.args)) {
+        inputEl.value = '';
+        inputEl.style.height = 'auto';
+        return;
+    }
     const hasImages = pendingImages.length > 0;
     const hasFiles = pendingFiles.length > 0;
     if ((!text && !hasImages && !hasFiles) || isStreaming) return;
@@ -3272,8 +3443,11 @@ function initSidebarToggle() {
             applySidebarHidden(hidden);
             localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(!hidden));
         }
-        // Avoid plain Ctrl+F (the browser's own find) and Ctrl+K (command palette).
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        // Avoid plain Ctrl+F (the browser's own find). Ctrl+K opens the palette.
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            openCommandPalette();
+        } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
             e.preventDefault();
             openMessageSearch();
         } else if (e.key === 'Escape' && messageSearchEl && !messageSearchEl.hidden) {
