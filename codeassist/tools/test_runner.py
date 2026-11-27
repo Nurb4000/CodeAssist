@@ -414,6 +414,10 @@ class TestRunnerTool(Tool):
                 returncode, output, target_label = await _run_local(workspace, cmd)
 
             results = parse_output(framework, output)
+            # Parsers only look for failure markers in the text. Collection/usage
+            # errors and "no tests ran" emit none, so a non-zero exit code must
+            # still be treated as a failure (otherwise status reads PASS).
+            results["success"] = bool(results.get("success")) and returncode == 0
             max_chars = getattr(getattr(cfg, "tools", None), "max_output_chars", 20000)
 
             lines = [f"**Test Results** ({framework}) — {target_label}\n"]

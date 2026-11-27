@@ -245,6 +245,33 @@ class TestRunnerDispatch:
         assert result.error is False
 
     @pytest.mark.asyncio
+    async def test_nonzero_exit_without_failure_markers_is_failure(self, tool, monkeypatch):
+        """A collection/usage error has no FAILED lines but must not read as PASS."""
+        monkeypatch.setattr(test_runner, "live_config", lambda: _config_with_host())
+
+        async def fake_local(workspace, cmd):
+            return 4, "ERROR: file or directory not found: tests/missing.py", "local container"
+
+        monkeypatch.setattr(test_runner, "_run_local", fake_local)
+        result = await tool.execute()
+        assert "Exit code: 4" in result.output
+        assert "Status: FAIL" in result.output
+        assert result.error is True
+
+    @pytest.mark.asyncio
+    async def test_no_tests_collected_is_failure(self, tool, monkeypatch):
+        """pytest exit 5 ('no tests ran') must also be reported as a failure."""
+        monkeypatch.setattr(test_runner, "live_config", lambda: _config_with_host())
+
+        async def fake_local(workspace, cmd):
+            return 5, "collected 0 items\nno tests ran", "local container"
+
+        monkeypatch.setattr(test_runner, "_run_local", fake_local)
+        result = await tool.execute()
+        assert "Status: FAIL" in result.output
+        assert result.error is True
+
+    @pytest.mark.asyncio
     async def test_local_target_bypasses_remote(self, tool, monkeypatch):
         monkeypatch.setattr(test_runner, "live_config", lambda: _config_with_host())
 
