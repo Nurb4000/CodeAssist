@@ -14,6 +14,25 @@
     --yellow: #d29922;
     --orange: #db6d28;
     --sidebar-width: 340px;
+    color-scheme: dark;
+}
+
+[data-theme="light"] {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f6f8fa;
+    --bg-tertiary: #eaeef2;
+    --bg-hover: #dfe3e8;
+    --text-primary: #1f2328;
+    --text-secondary: #59636e;
+    --text-muted: #6e7781;
+    --border: #d1d9e0;
+    --accent: #0969da;
+    --accent-dim: #0550ae;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --yellow: #9a6700;
+    --orange: #bc4c00;
+    color-scheme: light;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

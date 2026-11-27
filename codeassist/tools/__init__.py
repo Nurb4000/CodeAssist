@@ -272,6 +272,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from .package_manager import PackageManagerTool
     from .parse_json import ParseJsonTool
     from .process import ProcessTool
+    from .pty import PTYTool
     from .read import ReadTool
     from .screenshot import ScreenshotTool
     from .shell import ShellTool
@@ -280,6 +281,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from .todo import TodoTool
     from .tool_manager import ToolManagerTool
     from .webfetch import WebFetchTool
+    from .worktree import WorktreeTool
     from .write import WriteTool
 
     registry = ToolRegistry(workspace)
@@ -320,6 +322,16 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     process_tool = ProcessTool()
     process_tool.workspace = workspace
     registry.register(process_tool)
+
+    # Register Worktree tool
+    worktree_tool = WorktreeTool()
+    worktree_tool.workspace = workspace
+    registry.register(worktree_tool)
+
+    # Register PTY tool
+    pty_tool = PTYTool()
+    pty_tool.workspace = workspace
+    registry.register(pty_tool)
 
     # Register HTTP tool
     http_tool = HTTPTool()

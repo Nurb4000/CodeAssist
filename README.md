@@ -184,6 +184,8 @@ CodeAssist automatically manages context window limits during long sessions:
 - **Accurate telemetry**: The UI updates the gauge from the provider's reported prompt tokens, and `compacted` is emitted only when the request actually shrank
 - **Smart truncation**: Tool output truncation preserves error/traceback lines for debugging
 - **Staged revert / redo / per-message diff**: Revert can be staged non-destructively at any message, committed to a redo stack, cleared, or redone. Per-message diff shows recorded file snapshot previews; staged revert currently affects session history/context, not filesystem state.
+- **Worktree + persistent PTY tools**: Dedicated `worktree` tool for git worktree list/create/remove/prune, and `pty` tool for persistent interactive terminal sessions across tool calls.
+- **UI theming/keybinds**: Light/dark theme toggle and configurable keyboard shortcuts persisted in browser local storage.
 
 Configuration in `config.toml`:
 ```toml

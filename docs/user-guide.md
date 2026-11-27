@@ -406,19 +406,33 @@ CodeAssist. Add your own as markdown files in `runtime/skills/` — see the READ
 section for the frontmatter format. Custom and auto-created skills appear in the Admin page under
 **Skills**.
 
+## Worktrees and persistent PTY (agent tools)
+
+These are agent-facing tools available during coding turns (not separate GUI panels):
+
+- **`worktree`** — manage git worktrees for isolated parallel work: `list`, `create` (path + branch/new_branch/base), `remove` (optional force), `prune`. Created worktree paths must be inside the workspace.
+- **`pty`** — persistent pseudo-terminal sessions for interactive/long-running terminal workflows: `create`, `write`, `read`, `list`, `kill`, `resize`. Use `read` to poll output and `write` to send input across tool calls; `kill` cleans up the session.
+
+The existing `process` tool remains available for simpler background process management.
+
 ## Keyboard shortcuts & small behaviors
 
 | Action | How |
 |--------|-----|
-| Send a message | **Enter** in the input bar |
+| Send a message | **Enter** in the input bar (configurable) |
 | New line in the input | **Shift+Enter** |
 | Stop a running turn | The **■ Stop** button (replaces Send while streaming) |
+| Toggle sidebar | **Ctrl/Cmd+B** (configurable) |
+| Command palette | **Ctrl/Cmd+K** (configurable) |
+| Search messages | **Ctrl/Cmd+Shift+F** (configurable) |
 | Rename a session | Hover the row → click the **pencil** → Enter to save, Escape to cancel |
 | Pin / unpin a session | Hover the row → click the **pin** icon |
 | Export a session | Hover the row → click the **export** icon |
 | Delete a session | Hover the row → click the **trash** icon |
 | Switch agent | Click the **mode selector** in the input bar |
 | Show/hide all thinking | Sidebar footer **Show/Hide thinking** button |
+| Toggle theme | Sidebar footer **Light/Dark theme** button (persisted locally) |
+| Configure keybinds | Sidebar footer **Keybinds** button (persisted locally) |
 | Save a context checkpoint | Sidebar footer **Compact context** button (not while streaming) |
 | Refresh all admin data | Admin header **⟳** button |
 | Jump to an admin section | Click a link in the admin sidebar nav |

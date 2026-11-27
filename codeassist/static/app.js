@@ -1766,6 +1766,34 @@ async function runMessageSearch() {
 
 const commandPaletteBtn = document.getElementById('command-palette-btn');
 if (commandPaletteBtn) commandPaletteBtn.addEventListener('click', openCommandPalette);
+
+function openKeybindsDialog() {
+    if (document.querySelector('.keybinds-modal')) return;
+    const kb = getKeybinds();
+    const rows = Object.entries(DEFAULT_KEYBINDS).map(([name, def]) => {
+        const label = name.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase());
+        const val = escapeHtml(kb[name] || def);
+        return `<label class="modal-field"><span class="modal-label">${escapeHtml(label)}</span><input class="modal-input keybind-input" data-kb="${escapeHtml(name)}" value="${val}" placeholder="${escapeHtml(def)}"></label>`;
+    }).join('');
+    const bd = openModal(
+        `<h3 class="modal-title">Keyboard shortcuts</h3><p class="modal-hint">Use Mod for Ctrl/Cmd. Examples: Mod+K, Mod+Shift+F, Enter.</p>${rows}`,
+        `<button class="modal-btn" id="keybinds-reset">Reset defaults</button><button class="modal-btn" id="keybinds-cancel">Cancel</button><button class="modal-btn primary" id="keybinds-save">Save</button>`
+    );
+    bd.classList.add('keybinds-modal');
+    bd.querySelector('#keybinds-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#keybinds-reset').addEventListener('click', () => {
+        bd.querySelectorAll('.keybind-input').forEach((i) => { i.value = DEFAULT_KEYBINDS[i.dataset.kb] || ''; });
+    });
+    bd.querySelector('#keybinds-save').addEventListener('click', () => {
+        const next = { ...DEFAULT_KEYBINDS };
+        bd.querySelectorAll('.keybind-input').forEach((i) => { const n = normalizeKeybind(i.value); if (n) next[i.dataset.kb] = n; });
+        try { localStorage.setItem(KEYBINDS_KEY, JSON.stringify(next)); } catch {}
+        bd.remove();
+        showStatus('Keyboard shortcuts saved.', 'info');
+    });
+}
+const keybindsBtn = document.getElementById('keybinds-btn');
+if (keybindsBtn) keybindsBtn.addEventListener('click', openKeybindsDialog);
 if (searchMessagesBtn) searchMessagesBtn.addEventListener('click', openMessageSearch);
 if (messageSearchBtn) messageSearchBtn.addEventListener('click', runMessageSearch);
 if (messageSearchCloseBtn) messageSearchCloseBtn.addEventListener('click', resetMessageSearch);
@@ -3655,6 +3683,86 @@ if (importBtn) {
 
 // --- Sidebar show/hide toggle ---------------------------------------------
 const SIDEBAR_HIDDEN_KEY = 'codeassist:sidebarVisible';
+const THEME_KEY = 'codeassist:theme';
+const KEYBINDS_KEY = 'codeassist:keybinds';
+
+const DEFAULT_KEYBINDS = {
+    toggleSidebar: 'Mod+B',
+    commandPalette: 'Mod+K',
+    searchMessages: 'Mod+Shift+F',
+    sendMessage: 'Enter',
+};
+
+function getKeybinds() {
+    try {
+        const raw = localStorage.getItem(KEYBINDS_KEY);
+        if (!raw) return { ...DEFAULT_KEYBINDS };
+        const parsed = JSON.parse(raw);
+        return { ...DEFAULT_KEYBINDS, ...parsed };
+    } catch {
+        return { ...DEFAULT_KEYBINDS };
+    }
+}
+
+function setKeybind(name, value) {
+    const kb = getKeybinds();
+    kb[name] = value;
+    try { localStorage.setItem(KEYBINDS_KEY, JSON.stringify(kb)); } catch {}
+    return kb;
+}
+
+function normalizeKeybind(str) {
+    return String(str || '')
+        .split('+')
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .map((p) => {
+            const l = p.toLowerCase();
+            if (l === 'mod' || l === 'cmd' || l === 'ctrl' || l === 'control' || l === 'meta') return 'Mod';
+            if (l === 'shift') return 'Shift';
+            if (l === 'alt' || l === 'option') return 'Alt';
+            if (l === 'enter' || l === 'return') return 'Enter';
+            if (l === 'esc' || l === 'escape') return 'Escape';
+            return p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1).toLowerCase();
+        })
+        .join('+');
+}
+
+function eventToKeybind(e) {
+    const parts = [];
+    if (e.ctrlKey || e.metaKey) parts.push('Mod');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.altKey) parts.push('Alt');
+    const key = e.key;
+    if (!['Control', 'Meta', 'Shift', 'Alt'].includes(key)) {
+        parts.push(key.length === 1 ? key.toUpperCase() : (key === 'Escape' ? 'Escape' : key));
+    }
+    return normalizeKeybind(parts.join('+'));
+}
+
+function matchesKeybind(e, binding) {
+    return eventToKeybind(e) === normalizeKeybind(binding);
+}
+
+function applyTheme(theme) {
+    const t = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem(THEME_KEY, t); } catch {}
+    const hl = document.querySelector('link[href*="github-dark.min.css"], link[href*="github.min.css"]');
+    if (hl) hl.href = t === 'light' ? '/static/vendor/github.min.css' : '/static/vendor/github-dark.min.css';
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) btn.textContent = t === 'light' ? 'Dark theme' : 'Light theme';
+}
+
+function initTheme() {
+    let theme = 'dark';
+    try { theme = localStorage.getItem(THEME_KEY) || 'dark'; } catch {}
+    applyTheme(theme);
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) btn.addEventListener('click', () => {
+        applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+    });
+}
 
 function applySidebarHidden(hidden) {
     const app = document.getElementById('app');
@@ -3665,6 +3773,7 @@ function applySidebarHidden(hidden) {
 }
 
 function initSidebarToggle() {
+    initTheme();
     const app = document.getElementById('app');
     if (!app) return;
     const stored = localStorage.getItem(SIDEBAR_HIDDEN_KEY);
@@ -3686,20 +3795,25 @@ function initSidebarToggle() {
         });
     }
     window.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        const kb = getKeybinds();
+        if (matchesKeybind(e, kb.toggleSidebar)) {
             e.preventDefault();
             const hidden = !app.classList.contains('sidebar-hidden');
             applySidebarHidden(hidden);
             localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(!hidden));
+            return;
         }
-        // Avoid plain Ctrl+F (the browser's own find). Ctrl+K opens the palette.
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        if (matchesKeybind(e, kb.commandPalette)) {
             e.preventDefault();
             openCommandPalette();
-        } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+            return;
+        }
+        if (matchesKeybind(e, kb.searchMessages)) {
             e.preventDefault();
             openMessageSearch();
-        } else if (e.key === 'Escape' && messageSearchEl && !messageSearchEl.hidden) {
+            return;
+        }
+        if (e.key === 'Escape' && messageSearchEl && !messageSearchEl.hidden) {
             resetMessageSearch();
         }
     });
