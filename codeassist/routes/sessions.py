@@ -17,10 +17,25 @@ async def list_sessions():
 
 
 @router.post("")
-async def create_session():
-    """Create a new empty session."""
+async def create_session(body: dict | None = None):
+    """Create a new empty session. Optional body.workspace creates a worktree-bound session."""
+    from pathlib import Path
+    from codeassist.server import get_config
     from codeassist.session import Session
+
+    body = body or {}
     session = await Session.create()
+    workspace = body.get("workspace")
+    if isinstance(workspace, str) and workspace.strip():
+        cfg = get_config()
+        base = cfg.workspace.resolve()
+        candidate = Path(workspace).expanduser().resolve()
+        if candidate != base and base not in candidate.parents:
+            raise HTTPException(status_code=400, detail="Workspace must be inside the configured workspace")
+        if not candidate.exists() or not candidate.is_dir():
+            raise HTTPException(status_code=400, detail="Workspace directory does not exist")
+        await session.set_workspace(str(candidate))
+        return {"id": session.id, "workspace": str(candidate)}
     return {"id": session.id}
 
 
@@ -35,7 +50,9 @@ async def delete_session(session_id: str):
 
 @router.patch("/{session_id}")
 async def update_session(session_id: str, body: dict):
-    """Update a session. Body may contain 'name' (rename) and/or 'pinned' (bool)."""
+    """Update a session. Body may contain name, pinned, and/or workspace."""
+    from pathlib import Path
+    from codeassist.server import get_config
     from codeassist.session import Session
 
     session = Session(session_id)
@@ -46,6 +63,21 @@ async def update_session(session_id: str, body: dict):
         await session.rename(name)
     if "pinned" in body:
         await Session.set_pinned(session_id, bool(body.get("pinned")))
+    if "workspace" in body:
+        workspace = body.get("workspace")
+        if workspace in (None, ""):
+            await session.set_workspace(None)
+        else:
+            if not isinstance(workspace, str):
+                raise HTTPException(status_code=400, detail="workspace must be a string path or null")
+            cfg = get_config()
+            base = cfg.workspace.resolve()
+            candidate = Path(workspace).expanduser().resolve()
+            if candidate != base and base not in candidate.parents:
+                raise HTTPException(status_code=400, detail="Workspace must be inside the configured workspace")
+            if not candidate.exists() or not candidate.is_dir():
+                raise HTTPException(status_code=400, detail="Workspace directory does not exist")
+            await session.set_workspace(str(candidate))
     return {"ok": True}
 
 
@@ -278,6 +310,40 @@ async def import_session(body: dict):
 
 
 # ── Session Tags ────────────────────────────────────────────────
+
+@router.get("/worktrees")
+async def list_worktrees():
+    """List git worktrees for the configured workspace."""
+    import asyncio
+    from pathlib import Path
+    from codeassist.server import get_config
+
+    cfg = get_config()
+    cwd = Path(cfg.workspace)
+    proc = await asyncio.create_subprocess_exec(
+        "git", "worktree", "list", "--porcelain",
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=stderr.decode("utf-8", errors="replace").strip() or "git worktree list failed")
+    entries = []
+    cur: dict[str, str] = {}
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        if line.startswith("worktree "):
+            if cur:
+                entries.append(cur)
+            cur = {"path": line[9:].strip()}
+        elif line.startswith("branch "):
+            cur["branch"] = line[7:].strip().removeprefix("refs/heads/")
+        elif line == "detached":
+            cur["detached"] = "true"
+    if cur:
+        entries.append(cur)
+    return {"worktrees": entries, "workspace": str(cfg.workspace.resolve())}
+
 
 @router.get("/search/tags")
 async def search_sessions_by_tags(tags: str, match_all: bool = False, limit: int = 50):

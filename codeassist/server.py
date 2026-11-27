@@ -948,6 +948,27 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     session = await Session.get_or_create(session_id)
 
+    async def resolve_session_workspace() -> Path:
+        session_workspace = cfg.workspace
+        try:
+            ws_raw = await session.get_workspace()
+            if ws_raw:
+                candidate = Path(ws_raw).expanduser().resolve()
+                base = cfg.workspace.resolve()
+                if candidate == base or base in candidate.parents:
+                    session_workspace = candidate
+                else:
+                    log.warning("Ignoring out-of-workspace session workspace for %s: %s", session_id, candidate)
+        except Exception:  # noqa: BLE001
+            log.debug("Failed to resolve session workspace", exc_info=True)
+        return session_workspace
+
+    ws_state = {"workspace": await resolve_session_workspace()}
+
+    async def refresh_session_workspace() -> Path:
+        ws_state["workspace"] = await resolve_session_workspace()
+        return ws_state["workspace"]
+
     # Get current agent: per-session choice (agent switcher), defaulting to config.
     async def resolve_agent_name() -> str:
         """Re-read the session's agent choice. Called per turn so a mid-connection
@@ -964,7 +985,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # Discover and load project instructions (AGENTS.md, CLAUDE.md, etc.)
     discoverer = get_instruction_discoverer()
     instruction_sources = await discoverer.discover(
-        workspace=cfg.workspace,
+        workspace=ws_state["workspace"],
         config_paths=cfg.instructions.paths,
         disable_project_config=cfg.instructions.disable_project_config,
         scope=cfg.instructions.scope,
@@ -1019,6 +1040,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     if task_tool and hasattr(task_tool, "configure"):
         task_tool.configure(session_id, cfg, tools)
 
+    # Bind PTY tool to session and wire output streaming over websocket.
+    pty_tool = tools.get("pty")
+    if pty_tool and hasattr(pty_tool, "bind_session"):
+        pty_tool.bind_session(session_id)
+        if hasattr(pty_tool, "workspace"):
+            pty_tool.workspace = ws_state["workspace"]
+
+        async def _pty_sink(payload: dict):
+            try:
+                await broadcast_message(payload, session_id=session_id)
+            except Exception:  # noqa: BLE001
+                log.debug("PTY broadcast failed", exc_info=True)
+
+        if hasattr(pty_tool, "set_event_sink"):
+            pty_tool.set_event_sink(_pty_sink, session_id=session_id)
+
     def build_agent(agent_name: str):
         """Build a fresh Agent for `agent_name`.
 
@@ -1035,8 +1072,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         from codeassist.prompts import build_system_prompt
 
         config_obj = agent_manager.get_agent(agent_name)
+        session_workspace = ws_state["workspace"]
         prompt = build_system_prompt(
-            workspace=cfg.workspace,
+            workspace=session_workspace,
             model_id=cfg.llm.model,
             features=features,
             instructions=instructions_text or None,
@@ -1048,8 +1086,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         if skill_registry and cfg.skills.enabled:
             prompt += "\n\n" + skill_registry.get_instructions()
 
+        runtime_cfg = cfg
+        if session_workspace != cfg.workspace:
+            from dataclasses import replace
+            runtime_cfg = replace(cfg, workspace=session_workspace)
+
+        # Point workspace-scoped tools at this session's workspace for the turn.
+        for tool in tools._tools.values():
+            if hasattr(tool, "workspace"):
+                tool.workspace = session_workspace
+        if pty_tool and hasattr(pty_tool, "workspace"):
+            pty_tool.workspace = session_workspace
+
         return Agent(
-            cfg,
+            runtime_cfg,
             session,
             tools,
             prompt,
@@ -1552,6 +1602,30 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "agent": {**new_config.to_dict(), "id": agent_name},
                     })
 
+            elif data.get("type") == "set_workspace":
+                if agent_task and not agent_task.done() or slot_busy:
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, change workspace when idle"})
+                    continue
+                raw = data.get("workspace")
+                try:
+                    if raw in (None, ""):
+                        await session.set_workspace(None)
+                    else:
+                        base = cfg.workspace.resolve()
+                        candidate = Path(str(raw)).expanduser().resolve()
+                        if candidate != base and base not in candidate.parents:
+                            await websocket.send_json({"type": "error", "message": "Workspace must be inside configured workspace"})
+                            continue
+                        if not candidate.exists() or not candidate.is_dir():
+                            await websocket.send_json({"type": "error", "message": "Workspace directory does not exist"})
+                            continue
+                        await session.set_workspace(str(candidate))
+                    new_ws = await refresh_session_workspace()
+                    agent = build_agent(current_agent_name)
+                    await websocket.send_json({"type": "workspace_changed", "workspace": str(new_ws), "session_id": session_id})
+                except Exception as e:  # noqa: BLE001
+                    await websocket.send_json({"type": "error", "message": f"Failed to set workspace: {e}"})
+
             elif data.get("type") == "approve_tool":
                 file_path = data.get("file_path")
                 if not file_path:
@@ -1598,6 +1672,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         log.info("Client disconnected from session %s", session_id)
         unregister_websocket(websocket)
+        pty_tool = tools.get("pty") if tools else None
+        if pty_tool and hasattr(pty_tool, "clear_event_sink"):
+            pty_tool.clear_event_sink(session_id)
         if agent_task and not agent_task.done():
             agent.cancel()
         try:
@@ -1608,6 +1685,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     except Exception:
         log.exception("WebSocket error")
         unregister_websocket(websocket)
+        pty_tool = tools.get("pty") if tools else None
+        if pty_tool and hasattr(pty_tool, "clear_event_sink"):
+            pty_tool.clear_event_sink(session_id)
         if agent_task and not agent_task.done():
             agent.cancel()
         try:

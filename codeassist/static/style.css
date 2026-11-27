@@ -2018,3 +2018,48 @@ body.is-working .mode-dot {
 .diff-preview-block { margin:0; padding:10px; max-height:260px; overflow:auto; font-size:12px; white-space:pre-wrap; background: var(--bg-primary); }
 .diff-preview-empty { padding:10px; font-size:12px; color: var(--text-secondary); }
 .revert-pill { color:#d97706; font-weight:600; }
+
+/* Session worktree controls */
+.session-worktree-controls { display:flex; gap:6px; padding:0 12px 10px; }
+.session-worktree-select { flex:1; min-width:0; background:var(--bg-tertiary); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:12px; }
+.session-worktree-refresh { background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid var(--border); border-radius:6px; padding:0 8px; cursor:pointer; }
+.session-worktree-refresh:hover { color:var(--text); border-color:var(--accent); }
+.session-workspace-badge { font-size:11px; color:var(--text-muted); margin-left:6px; }
+
+/* --- PTY output panels --- */
+.pty-panel {
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    margin: 8px 16px;
+    border-radius: 8px;
+}
+.pty-panel-head {
+    cursor: pointer;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    user-select: none;
+}
+.pty-panel-title { color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pty-panel-status[data-state="running"] { color: var(--green); }
+.pty-panel-status[data-state="exited"] { color: var(--text-muted); }
+.pty-panel-body {
+    margin: 0;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    background: #0d1117;
+    color: #c9d1d9;
+    font-size: 12px;
+    line-height: 1.45;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+[data-theme="light"] .pty-panel-body { background: #f6f8fa; color: #24292f; }
+
+.keybinds-conflict { min-height: 1.2em; color: var(--red); font-size: 12px; margin-bottom: 8px; }
+.keybind-input.keybind-conflict { border-color: var(--red); outline-color: var(--red); }

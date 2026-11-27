@@ -6,6 +6,8 @@ const deliveryQueueBtn = document.getElementById('delivery-queue');
 const deliverySteerBtn = document.getElementById('delivery-steer');
 const sessionListEl = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
+const sessionWorktreeSelect = document.getElementById('session-worktree-select');
+const sessionWorktreeRefreshBtn = document.getElementById('session-worktree-refresh');
 const modelInfoEl = document.getElementById('model-info');
 const compactBtn = document.getElementById('compact-btn');
 const planDisplayEl = document.getElementById('plan-display');
@@ -574,7 +576,9 @@ async function loadSessions() {
         row.className = 'session-item-main';
 
         const nameSpan = document.createElement('span');
-        nameSpan.textContent = s.name || 'Untitled';
+        const ws = s.workspace ? ` [${s.workspace.split('/').slice(-2).join('/')}]` : '';
+        nameSpan.textContent = (s.name || 'Untitled') + ws;
+        nameSpan.title = s.workspace ? `Workspace: ${s.workspace}` : 'Default workspace';
         nameSpan.className = 'session-name';
         nameSpan.onclick = () => switchSession(s.id);
 
@@ -604,6 +608,13 @@ async function loadSessions() {
         exportBtn.setAttribute('aria-label', 'Export session');
         exportBtn.onclick = (e) => { e.stopPropagation(); openExportDialog(s.id); };
 
+        const moveWsBtn = document.createElement('button');
+        moveWsBtn.className = 'rename-btn';
+        moveWsBtn.textContent = 'WS';
+        moveWsBtn.title = 'Set session workspace from worktree selector';
+        moveWsBtn.setAttribute('aria-label', 'Set session workspace');
+        moveWsBtn.onclick = (e) => { e.stopPropagation(); setSessionWorkspace(s.id); };
+
         const delBtn = document.createElement('button');
         delBtn.className = 'delete-btn';
         delBtn.dataset.id = s.id;
@@ -616,6 +627,7 @@ async function loadSessions() {
         row.appendChild(pinBtn);
         row.appendChild(renameBtn);
         row.appendChild(exportBtn);
+        row.appendChild(moveWsBtn);
         row.appendChild(delBtn);
         div.appendChild(row);
 
@@ -674,10 +686,36 @@ function startRename(sessionId, nameSpan) {
     input.onblur = () => finish(true);
 }
 
+async function loadWorktreeOptions() {
+    if (!sessionWorktreeSelect) return;
+    const prev = sessionWorktreeSelect.value;
+    try {
+        const data = await api('GET', '/api/sessions/worktrees');
+        const items = Array.isArray(data.worktrees) ? data.worktrees : [];
+        sessionWorktreeSelect.innerHTML = '<option value="">Default workspace</option>';
+        for (const wt of items) {
+            const path = String(wt.path || '');
+            if (!path) continue;
+            const opt = document.createElement('option');
+            opt.value = path;
+            const branch = wt.branch ? ` (${wt.branch})` : (wt.detached === 'true' ? ' (detached)' : '');
+            opt.textContent = `${path}${branch}`;
+            sessionWorktreeSelect.appendChild(opt);
+        }
+        if ([...sessionWorktreeSelect.options].some(o => o.value === prev)) {
+            sessionWorktreeSelect.value = prev;
+        }
+    } catch (e) {
+        // Non-fatal: worktree flow is optional.
+    }
+}
+
 async function createSession() {
     if (isStreaming) return; // a live turn owns the socket; creating mid-run would strand it
     try {
-        const res = await api('POST', '/api/sessions');
+        const workspace = sessionWorktreeSelect ? sessionWorktreeSelect.value : '';
+        const payload = workspace ? { workspace } : {};
+        const res = await api('POST', '/api/sessions', payload);
         currentSessionId = res.id;
         // A brand-new session has no plan, and now has its own -- nothing to clear
         // server-side. Clearing the shared list here used to wipe the plan of
@@ -727,6 +765,22 @@ async function runSwitch(id) {
     await loadTodos();
     if (isStreaming || id !== currentSessionId) return;
     connectWS();
+}
+
+async function setSessionWorkspace(sessionId) {
+    const workspace = sessionWorktreeSelect ? sessionWorktreeSelect.value : '';
+    const payload = { workspace: workspace || null };
+    try {
+        await api('PATCH', `/api/sessions/${sessionId}`, payload);
+        await loadSessions();
+        if (sessionId === currentSessionId && ws && ws.readyState === WebSocket.OPEN && wsAuthenticated) {
+            ws.send(JSON.stringify({ type: 'set_workspace', workspace: workspace || null }));
+        } else if (sessionId === currentSessionId) {
+            showStatus('Workspace saved; reconnect session to apply runtime workspace.', 'info');
+        }
+    } catch (e) {
+        showError(e.message || 'Failed to set session workspace');
+    }
 }
 
 async function deleteSession(id) {
@@ -1773,24 +1827,47 @@ function openKeybindsDialog() {
     const rows = Object.entries(DEFAULT_KEYBINDS).map(([name, def]) => {
         const label = name.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase());
         const val = escapeHtml(kb[name] || def);
-        return `<label class="modal-field"><span class="modal-label">${escapeHtml(label)}</span><input class="modal-input keybind-input" data-kb="${escapeHtml(name)}" value="${val}" placeholder="${escapeHtml(def)}"></label>`;
+        return `<label class="modal-field"><span class="modal-label">${escapeHtml(label)}</span><input class="modal-input keybind-input" data-kb="${escapeHtml(name)}" value="${val}" placeholder="${escapeHtml(def)}" aria-label="${escapeHtml(label)} keyboard shortcut"></label>`;
     }).join('');
     const bd = openModal(
-        `<h3 class="modal-title">Keyboard shortcuts</h3><p class="modal-hint">Use Mod for Ctrl/Cmd. Examples: Mod+K, Mod+Shift+F, Enter.</p>${rows}`,
+        `<h3 class="modal-title" id="keybinds-title">Keyboard shortcuts</h3><p class="modal-hint" id="keybinds-hint">Use Mod for Ctrl/Cmd. Examples: Mod+K, Mod+Shift+F, Enter. Conflicts are highlighted.</p><div id="keybinds-conflict" class="keybinds-conflict" role="status" aria-live="polite"></div>${rows}`,
         `<button class="modal-btn" id="keybinds-reset">Reset defaults</button><button class="modal-btn" id="keybinds-cancel">Cancel</button><button class="modal-btn primary" id="keybinds-save">Save</button>`
     );
     bd.classList.add('keybinds-modal');
+    bd.setAttribute('role', 'dialog');
+    bd.setAttribute('aria-modal', 'true');
+    bd.setAttribute('aria-labelledby', 'keybinds-title');
+    const conflictEl = bd.querySelector('#keybinds-conflict');
+    const inputs = () => Array.from(bd.querySelectorAll('.keybind-input'));
+    function detectConflicts() {
+        const seen = new Map();
+        let conflicts = [];
+        inputs().forEach((i) => {
+            i.classList.remove('keybind-conflict');
+            const n = normalizeKeybind(i.value);
+            if (!n) return;
+            if (seen.has(n)) { conflicts.push(n); i.classList.add('keybind-conflict'); seen.get(n).classList.add('keybind-conflict'); }
+            else seen.set(n, i);
+        });
+        conflictEl.textContent = conflicts.length ? `Conflicting shortcut: ${[...new Set(conflicts)].join(', ')}` : '';
+        return conflicts.length === 0;
+    }
+    inputs().forEach((i) => i.addEventListener('input', detectConflicts));
+    detectConflicts();
     bd.querySelector('#keybinds-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#keybinds-reset').addEventListener('click', () => {
-        bd.querySelectorAll('.keybind-input').forEach((i) => { i.value = DEFAULT_KEYBINDS[i.dataset.kb] || ''; });
+        inputs().forEach((i) => { i.value = DEFAULT_KEYBINDS[i.dataset.kb] || ''; });
+        detectConflicts();
     });
     bd.querySelector('#keybinds-save').addEventListener('click', () => {
+        if (!detectConflicts()) { showStatus('Resolve keybind conflicts before saving.', 'error'); return; }
         const next = { ...DEFAULT_KEYBINDS };
-        bd.querySelectorAll('.keybind-input').forEach((i) => { const n = normalizeKeybind(i.value); if (n) next[i.dataset.kb] = n; });
+        inputs().forEach((i) => { const n = normalizeKeybind(i.value); if (n) next[i.dataset.kb] = n; });
         try { localStorage.setItem(KEYBINDS_KEY, JSON.stringify(next)); } catch {}
         bd.remove();
         showStatus('Keyboard shortcuts saved.', 'info');
     });
+    inputs()[0]?.focus();
 }
 const keybindsBtn = document.getElementById('keybinds-btn');
 if (keybindsBtn) keybindsBtn.addEventListener('click', openKeybindsDialog);
@@ -2680,6 +2757,14 @@ function connectWS() {
             // the current selection (currentAgentName = undefined, every option
             // un-highlighted). Ignore such events instead.
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
+        } else if (data.type === 'workspace_changed') {
+            if (data.workspace) {
+                configData.workspace = data.workspace;
+                const modelLabel = configData.effective_model || configData.detected_model || configData.model;
+                modelInfoEl.textContent = `${modelLabel} | ${configData.workspace}`;
+                showStatus(`Workspace set to ${data.workspace}`, 'info');
+                loadSessions();
+            }
         } else if (data.type === 'text_delta') {
             hideProgress();
             handleProse(data.content);
@@ -2760,6 +2845,8 @@ function connectWS() {
             showConfirmDialog(data.id, data.tool, data.arguments, data.in_workspace);
         } else if (data.type === 'automation_result') {
             showAutomationResult(data);
+        } else if (data.type === 'pty_output') {
+            handlePtyOutput(data);
         } else if (data.type === 'error') {
             hideProgress();
             if (compactBtn) compactBtn.disabled = false;
@@ -3107,6 +3194,67 @@ function showAutomationResult(data) {
         `<div class="message-content"><pre style="white-space:pre-wrap;color:${color}">${escapeHtml(body)}</pre></div>`;
     messagesEl.appendChild(div);
     scrollToBottom();
+}
+
+const ptyPanels = new Map();
+
+function ensurePtyPanel(ptyId, meta = {}) {
+    let panel = ptyPanels.get(ptyId);
+    if (panel && panel.isConnected) return panel;
+    panel = document.createElement('details');
+    panel.className = 'message pty-panel';
+    panel.open = true;
+    panel.dataset.ptyId = ptyId;
+    const summary = document.createElement('summary');
+    summary.className = 'pty-panel-head';
+    const title = document.createElement('span');
+    title.className = 'pty-panel-title';
+    const status = document.createElement('span');
+    status.className = 'pty-panel-status';
+    summary.appendChild(title);
+    summary.appendChild(status);
+    const pre = document.createElement('pre');
+    pre.className = 'pty-panel-body';
+    panel.appendChild(summary);
+    panel.appendChild(pre);
+    panel._title = title;
+    panel._status = status;
+    panel._body = pre;
+    panel._meta = {};
+    ptyPanels.set(ptyId, panel);
+    messagesEl.appendChild(panel);
+    updatePtyPanel(ptyId, meta);
+    return panel;
+}
+
+function updatePtyPanel(ptyId, meta = {}) {
+    const panel = ensurePtyPanel(ptyId, meta);
+    panel._meta = { ...panel._meta, ...meta };
+    const m = panel._meta;
+    const cmd = m.command ? ` · ${m.command}` : '';
+    panel._title.textContent = `PTY ${ptyId}${cmd}`;
+    const alive = m.alive !== false && m.event !== 'exit' && m.event !== 'killed';
+    const rc = m.returncode != null ? ` (${m.returncode})` : '';
+    panel._status.textContent = alive ? 'running' : `exited${rc}`;
+    panel._status.dataset.state = alive ? 'running' : 'exited';
+}
+
+function handlePtyOutput(data) {
+    const ptyId = data.pty_id;
+    if (!ptyId) return;
+    const panel = ensurePtyPanel(ptyId, data);
+    updatePtyPanel(ptyId, data);
+    if (data.output) {
+        panel._body.textContent += String(data.output);
+        const max = 12000;
+        if (panel._body.textContent.length > max) {
+            panel._body.textContent = panel._body.textContent.slice(-max);
+        }
+        scrollToBottom();
+    }
+    if (data.event === 'exit' || data.event === 'killed') {
+        updatePtyPanel(ptyId, { ...data, alive: false });
+    }
 }
 
 function showStatus(msg, kind = 'info') {
@@ -3653,6 +3801,7 @@ stopBtn.addEventListener('click', () => {
     ws.send(JSON.stringify({ type: 'cancel' }));
 });
 newSessionBtn.addEventListener('click', createSession);
+if (sessionWorktreeRefreshBtn) sessionWorktreeRefreshBtn.addEventListener('click', loadWorktreeOptions);
 
 if (compactBtn) {
     compactBtn.addEventListener('click', () => {
@@ -3840,6 +3989,7 @@ initSidebarToggle();
             connectWS();
         }
         await loadSessions();
+        await loadWorktreeOptions();
     } catch (e) {
         // The boot sequence has several awaits that can reject (loadConfig,
         // /api/sessions, loadTodos, loadSessions). Before this fix a failure

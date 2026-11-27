@@ -50,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 class _DBPool:
@@ -265,6 +265,10 @@ async def init_db():
         if current_version < 20:
             await _add_v20_tables(db)
             current_version = 20
+
+        if current_version < 21:
+            await _add_v21_tables(db)
+            current_version = 21
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -959,6 +963,19 @@ async def _add_v20_tables(db):
     await db.commit()
 
 
+async def _add_v21_tables(db):
+    """Per-session workspace path for worktree-aware sessions.
+
+    ``sessions.workspace`` is optional: NULL means use the server default
+    workspace. Existing sessions keep NULL so behavior is unchanged.
+    """
+    cursor = await db.execute("PRAGMA table_info(sessions)")
+    cols = {r["name"] for r in await cursor.fetchall()}
+    if "workspace" not in cols:
+        await db.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT")
+    await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -1253,6 +1270,23 @@ class Session:
             await db.execute(
                 "UPDATE sessions SET agent_name = ?, updated_at = ? WHERE id = ?",
                 (agent_name, now, self.id),
+            )
+            await db.commit()
+
+    async def get_workspace(self) -> str | None:
+        async with get_db() as db:
+            cursor = await db.execute("SELECT workspace FROM sessions WHERE id = ?", (self.id,))
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return str(row[0])
+        return None
+
+    async def set_workspace(self, workspace: str | None):
+        now = datetime.now(UTC).isoformat()
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE sessions SET workspace = ?, updated_at = ? WHERE id = ?",
+                (workspace, now, self.id),
             )
             await db.commit()
 

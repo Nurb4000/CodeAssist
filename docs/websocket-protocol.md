@@ -59,6 +59,11 @@ omit `delivery` are still treated as `queue`, so older clients keep working.
 // e.g. "default" or "research"; persisted per session across reconnects)
 {"type": "switch_agent", "agent_name": "research"}
 
+// Change this session's workspace/worktree while idle. `workspace` must be
+// inside the configured workspace, or null/"" to reset to default workspace.
+// Emits `workspace_changed` on success.
+{"type": "set_workspace", "workspace": "/abs/path/or/null"}
+
 // Approve a dynamically loaded custom tool
 {"type": "approve_tool", "file_path": "..."}
 
@@ -129,6 +134,13 @@ omit `delivery` are still treated as `queue`, so older clients keep working.
 // A staged steer reached the agent loop boundary and was written to the
 // transcript. The next model request sees it as the newest user message.
 {"type": "steered", "content": "..."}
+
+// Session workspace changed (emitted after set_workspace).
+{"type": "workspace_changed", "workspace": "/abs/path", "session_id": "..."}
+
+// Live PTY output from persistent PTY sessions. `event` is "output", "exit",
+// or "killed".
+{"type": "pty_output", "session_id": "...", "pty_id": "pty_...", "event": "output", "data": "..."}
 ```
 
 A steer is discarded if the turn is cancelled before its next loop boundary:

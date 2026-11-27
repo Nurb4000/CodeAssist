@@ -413,6 +413,12 @@ These are agent-facing tools available during coding turns (not separate GUI pan
 - **`worktree`** — manage git worktrees for isolated parallel work: `list`, `create` (path + branch/new_branch/base), `remove` (optional force), `prune`. Created worktree paths must be inside the workspace.
 - **`pty`** — persistent pseudo-terminal sessions for interactive/long-running terminal workflows: `create`, `write`, `read`, `list`, `kill`, `resize`. Use `read` to poll output and `write` to send input across tool calls; `kill` cleans up the session.
 
+D4 follow-up behavior:
+
+- **PTY output streaming**: active PTY output is broadcast as `pty_output` websocket events and rendered in the chat UI as live PTY panels.
+- **PTY restart persistence**: PTY session metadata and output buffers are persisted to `data/pty_sessions.json` (and `data/pty_buffers/`). Live PTY processes cannot be resumed after a CodeAssist server restart; recovered entries are marked as lost on restart and their saved buffer metadata is listed.
+- **Worktree-aware sessions**: sessions can be bound to a workspace/worktree path inside the configured workspace. New sessions can select a worktree from the sidebar selector; sessions expose `workspace` via session REST APIs. The active WebSocket session can also change workspace with a `set_workspace` message when idle.
+
 The existing `process` tool remains available for simpler background process management.
 
 ## Keyboard shortcuts & small behaviors

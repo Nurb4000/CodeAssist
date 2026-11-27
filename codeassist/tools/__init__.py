@@ -331,6 +331,12 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     # Register PTY tool
     pty_tool = PTYTool()
     pty_tool.workspace = workspace
+    try:
+        from ..paths import data_dir
+        pty_tool.set_state_path(data_dir() / "pty_sessions.json")
+        pty_tool.load_persisted_state()
+    except Exception:  # noqa: BLE001
+        log.debug("PTY state init failed", exc_info=True)
     registry.register(pty_tool)
 
     # Register HTTP tool
