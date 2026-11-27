@@ -2,6 +2,11 @@
 # "openai" = OpenAI-compatible API format (works for OpenAI, llama.cpp, vLLM, etc.)
 provider = "openai"
 
+# Optional DB-backed provider profile to activate. Manage profiles (and their
+# API keys) in Admin > Settings; credentials are stored in the database only,
+# never in this file. Blank uses the fields below.
+active_profile = ""
+
 # Model name (set in the UI under Settings > LLM; no baked-in default so a fresh
 # install starts blank). Valid values:
 #   OpenAI:    "gpt-4o", "gpt-4o-mini", "o3-mini", etc.

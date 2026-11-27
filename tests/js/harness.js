@@ -164,6 +164,7 @@ const ADMIN_FIXTURES = {
   '/api/custom-tools': { tools: [] },
   '/api/agents': [{ id: 'default', name: 'CodeAssist', builtin: true, steps: 20 }],
   '/api/settings': { settings: [] },
+  '/api/provider-profiles': { active: '', profiles: [] },
   '/api/automations': { automations: [], enabled: false },
 };
 
@@ -179,6 +180,7 @@ const ADMIN_FIXTURES = {
  */
 async function bootAdmin({ fixtures = {}, preload = null } = {}) {
   const errors = [];
+  const requests = [];
   const routes = { ...ADMIN_FIXTURES, ...fixtures };
   const dom = new JSDOM(readStatic('admin.html'), {
     url: 'http://localhost:8000/static/admin.html',
@@ -197,8 +199,12 @@ async function bootAdmin({ fixtures = {}, preload = null } = {}) {
   // bootstrap code reads on load.
   if (typeof preload === 'function') preload(window);
 
-  window.fetch = async (url) => {
-    const pathOnly = String(url).split('?')[0];
+  window.fetch = async (url, options = {}) => {
+    const full = String(url);
+    let sent = null;
+    try { sent = options.body ? JSON.parse(options.body) : null; } catch {}
+    requests.push({ url: full, method: options.method || 'GET', body: sent });
+    const pathOnly = full.split('?')[0];
     const body = routes[pathOnly] !== undefined ? routes[pathOnly] : {};
     return {
       ok: true,
@@ -220,7 +226,7 @@ async function bootAdmin({ fixtures = {}, preload = null } = {}) {
   // admin.js boots with an async loadAll(); let it settle before asserting.
   await new Promise((r) => setTimeout(r, 30));
 
-  return { window, document: window.document, errors };
+  return { window, document: window.document, errors, requests };
 }
 
 /**

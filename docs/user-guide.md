@@ -237,14 +237,33 @@ The Settings tab exposes UI-managed overrides that layer on top of `config.toml`
 grouped (LLM, Server, Agent, Tools, Features). For each setting you see:
 
 - Its label and description.
-- A **source badge**: `overridden` (a value set here in the UI) or `from config.toml` (the file's
-  value, or the built-in default).
+- A **source badge**: `overridden` (a value set here in the UI), `profile` (supplied by the active
+  provider profile), `this session`, or `from config.toml` (the file's value, or the built-in
+  default).
 - A **restart-required** note when applicable — such changes take effect after the server restarts.
 
 To change a value, edit it in place and click **Save** (top-right). Use the per-setting **Reset**
 button to drop your override and revert to the config.toml/default value. Click **Test LLM
 connection** to ping the backend using the base URL and API key entered in the form; it reports how
 many models were returned or why the connection failed.
+
+The **Model** field is a searchable picker: successful connection tests fill its suggestions from
+the backend's `/v1/models` list (up to 500 models). Typing is still allowed for model IDs the backend
+does not list, and a test never replaces a model you already entered.
+
+#### Provider profiles
+
+Use the **Profile** toolbar to manage reusable OpenAI-compatible provider configurations:
+
+- **Save provider profile** stores a name, provider type (`openai` or `custom`), base URL, model,
+  context window, timeout, and API key. API keys live only in the database; the form never shows a
+  stored key, and leaving the key field blank keeps the saved value.
+- **Activate** switches all future LLM requests to the selected profile. Profile-managed fields
+  (`provider`, `base_url`, `api_key`, `model`, `context_window`, `vision`, `audio`, `timeout`) then
+  show `profile` as their source; editing and saving those rows updates the active profile instead
+  of creating flat overrides. Generation settings remain global.
+- Select **`(file / default)`** and activate it to return to `config.toml` values and ordinary UI
+  overrides. The active profile must be deactivated before it can be **Delete**d.
 
 > Note: feature toggles (skills, plugins, MCP, LSP, git) are surfaced here, but enabling them still
 > requires a server restart — those subsystems boot once at startup. A live hot-reload for these is

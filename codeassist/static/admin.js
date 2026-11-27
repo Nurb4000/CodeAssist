@@ -502,7 +502,7 @@ function stepChip(a) {
 
 async function loadAll() {
     try {
-        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadSettings(), loadAutomations()]);
+        await Promise.all([loadHealth(), loadSkills(), loadMcp(), loadLsp(), loadPlugins(), loadCustomTools(), loadAgents(), loadProfiles(), loadSettings(), loadAutomations()]);
         updateCounts();
         setStatus('Updated');
     } catch (e) {
@@ -683,6 +683,11 @@ let settingsList = [];
 
 function settingsInput(spec) {
     const id = `set-${spec.key}`;
+    if (spec.key === 'llm.model') {
+        // Native datalist gives a searchable/filterable picker while keeping the
+        // field freely editable (custom model ids, manual overrides).
+        return `<input type="text" id="${id}" data-key="${spec.key}" list="llm-model-options" value="${escapeHtml(spec.value ?? '')}">`;
+    }
     if (spec.type === 'bool') {
         return `<input type="checkbox" id="${id}" data-key="${spec.key}" ${spec.value ? 'checked' : ''}>`;
     }
@@ -703,6 +708,7 @@ async function loadSettings() {
     settingsList = data.settings;
     const groups = {};
     for (const s of settingsList) {
+        if (s.hidden) continue; // e.g. llm.active_profile has its own toolbar
         (groups[s.group] = groups[s.group] || []).push(s);
     }
     const container = document.getElementById('settings-body');
@@ -718,10 +724,12 @@ async function loadSettings() {
         for (const spec of items) {
             const sourceClass = spec.source === 'file' ? 'src-file' : 'src-ui';
             // runtime = ephemeral session-scoped value set from this page.
-            const sourceLabels = { ui: 'overridden', runtime: 'this session', file: 'default' };
+            const sourceLabels = { ui: 'overridden', runtime: 'this session', file: 'default', profile: 'profile' };
             const sourceLabel = sourceLabels[spec.source] || 'default';
             const restartNote = spec.restart_required ? ' · restart required' : '';
-            const resetBtn = spec.source !== 'file'
+            // Profile fields are edited on the profile itself; resetting a flat
+            // override would be a no-op and misleading while one is active.
+            const resetBtn = spec.source !== 'file' && spec.source !== 'profile'
                 ? `<button class="admin-btn admin-btn-danger settings-reset" data-key="${spec.key}">Reset</button>`
                 : '';
             tbody.appendChild(row(
@@ -747,6 +755,91 @@ async function loadSettings() {
             }
         };
     });
+}
+
+// --- Provider profiles -----------------------------------------------------
+
+let profileList = [];
+
+function setProfileField(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value ?? '';
+}
+
+function fillProfileForm(profile) {
+    if (!profile) return;
+    setProfileField('profile-name', profile.name);
+    setProfileField('profile-provider', profile.provider || 'openai');
+    setProfileField('profile-base-url', profile.base_url || '');
+    setProfileField('profile-api-key', ''); // never echo a stored secret
+    setProfileField('profile-model', profile.model || '');
+    setProfileField('profile-context-window', profile.context_window || 128000);
+    setProfileField('profile-timeout', profile.timeout || 900);
+}
+
+async function loadProfiles() {
+    const data = await api('GET', '/api/provider-profiles');
+    profileList = data.profiles || [];
+    const select = document.getElementById('provider-profile-select');
+    select.innerHTML = '';
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = '(file / default)';
+    select.appendChild(blank);
+    for (const p of profileList) {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = p.name;
+        select.appendChild(opt);
+    }
+    select.value = data.active || '';
+    if (data.active) fillProfileForm(profileList.find((p) => p.name === data.active));
+}
+
+function bindProfileActions() {
+    document.getElementById('provider-profile-activate').onclick = async () => {
+        const name = document.getElementById('provider-profile-select').value;
+        try {
+            await api('PUT', '/api/settings', { 'llm.active_profile': name });
+            setStatus(name ? `Activated profile "${name}"` : 'Using file/default provider');
+            await Promise.all([loadProfiles(), loadSettings()]);
+        } catch (e) {
+            setStatus(e.message, true);
+        }
+    };
+    document.getElementById('provider-profile-delete').onclick = async () => {
+        const name = document.getElementById('provider-profile-select').value;
+        if (!name) { setStatus('Select a profile to delete', true); return; }
+        if (!window.confirm(`Delete provider profile "${name}"?`)) return;
+        try {
+            await api('DELETE', `/api/provider-profiles/${encodeURIComponent(name)}`);
+            setStatus(`Deleted profile "${name}"`);
+            document.getElementById('provider-profile-select').value = '';
+            await Promise.all([loadProfiles(), loadSettings()]);
+        } catch (e) {
+            setStatus(e.message, true);
+        }
+    };
+    document.getElementById('profile-save').onclick = async () => {
+        const body = {
+            name: document.getElementById('profile-name').value.trim(),
+            provider: document.getElementById('profile-provider').value,
+            base_url: document.getElementById('profile-base-url').value.trim(),
+            api_key: document.getElementById('profile-api-key').value.trim(),
+            model: document.getElementById('profile-model').value.trim(),
+            context_window: Number(document.getElementById('profile-context-window').value || 128000),
+            timeout: Number(document.getElementById('profile-timeout').value || 900),
+        };
+        if (!body.name) { setStatus('Profile name is required', true); return; }
+        try {
+            const saved = await api('POST', '/api/provider-profiles', body);
+            setStatus(`Saved profile "${saved.name}"`);
+            document.getElementById('provider-profile-select').value = saved.name;
+            await loadProfiles();
+        } catch (e) {
+            setStatus(e.message, true);
+        }
+    };
 }
 
 function bindSettingsActions() {
@@ -780,9 +873,11 @@ function bindSettingsActions() {
     document.getElementById('settings-test').onclick = async () => {
         const baseInput = document.getElementById('set-llm.base_url');
         const keyInput = document.getElementById('set-llm.api_key');
+        const profile = document.getElementById('provider-profile-select').value;
         setStatus('Testing LLM connection…');
         try {
             const res = await api('POST', '/api/config/test-connection', {
+                profile: profile || undefined,
                 base_url: (baseInput && baseInput.value.trim()) || undefined,
                 api_key: (keyInput && keyInput.value.trim()) || undefined,
             });
@@ -790,12 +885,19 @@ function bindSettingsActions() {
                 const models = res.models || [];
                 const modelInput = document.getElementById('set-llm.model');
                 let msg = `Connected: ${models.length} model(s) — ${res.endpoint}`;
-                // Reflect what the backend actually serves in the Model field
-                // instead of leaving a stale default (e.g. "gpt-4o"). The user
-                // explicitly probed, so adopting the detected model is expected;
-                // they can retype to override. This also prevents the
-                // "Model cannot be empty" save error when the field was cleared.
-                if (models.length && modelInput) {
+
+                // Fill the native datalist so the Model field becomes a
+                // searchable picker. Keep any model the user already chose.
+                const datalist = document.getElementById('llm-model-options');
+                if (datalist) {
+                    datalist.innerHTML = '';
+                    for (const m of models) {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        datalist.appendChild(opt);
+                    }
+                }
+                if (models.length && modelInput && !modelInput.value.trim()) {
                     modelInput.value = models[0];
                     msg += ` · model set to "${models[0]}"`;
                 } else if (!models.length) {
@@ -917,6 +1019,7 @@ document.getElementById('lsp-reload').onclick = async () => {
 };
 
 bindSettingsActions();
+bindProfileActions();
 
 bindCreate('skill', () => ({
     name: document.getElementById('skill-name').value.trim(),

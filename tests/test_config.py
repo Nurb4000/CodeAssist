@@ -13,6 +13,7 @@ class TestConfig:
         config = Config.load("/nonexistent/config.toml")
         
         assert config.llm.provider == "openai"
+        assert config.llm.active_profile == ""
         assert config.llm.model == ""  # no baked-in model default; UI-configured
         assert config.server.host == "127.0.0.1"
         assert config.server.port == 8090
@@ -26,6 +27,7 @@ class TestConfig:
         config_file.write_text("""
 [llm]
 provider = "openai"
+active_profile = "local"
 model = "gpt-4o-mini"
 api_key = "test-key"
 
@@ -44,6 +46,7 @@ shell_timeout = 60
         config = Config.load(config_file)
         
         assert config.llm.provider == "openai"
+        assert config.llm.active_profile == "local"
         assert config.llm.model == "gpt-4o-mini"
         assert config.llm.api_key == "test-key"
         assert config.server.host == "0.0.0.0"

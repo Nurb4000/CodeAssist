@@ -110,16 +110,21 @@ def is_external_backend(base_url: str) -> bool:
     return "." in host
 
 
-# Capability detection is per-backend, so the snapshot is keyed by the backend's
-# normalized base_url. A base_url change at runtime (the settings API applies it
-# live) must invalidate the cache immediately rather than serving the previous
-# backend's vision/model/context detection for up to CACHE_TTL.
+# Capability detection is per-backend, so the snapshot is keyed by the backend
+# identity. A base_url / active-profile / model change at runtime (the settings
+# API applies edits live) must invalidate the cache immediately rather than
+# serving the previous backend's vision/model/context detection for CACHE_TTL.
 _cache: dict = {"expires": 0.0, "info": _default_info(), "base_url": ""}
 
 
 def _cache_key(cfg) -> str:
-    """Identity of the backend being probed (normalized base_url)."""
-    return (cfg.llm.base_url or "").strip().rstrip("/").lower()
+    """Identity of the backend/model being probed."""
+    llm = cfg.llm
+    return "|".join([
+        (llm.base_url or "").strip().rstrip("/").lower(),
+        str(getattr(llm, "active_profile", "") or ""),
+        (llm.model or "").strip().lower(),
+    ])
 
 
 def _parse_vision(model_data: dict) -> bool:

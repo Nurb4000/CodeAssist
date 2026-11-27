@@ -60,9 +60,13 @@ def _reset_settings_store():
 
     settings_mod.settings_store._cache = {}
     settings_mod.settings_store._loaded = False
+    settings_mod.provider_profile_store._cache = {}
+    settings_mod.provider_profile_store._loaded = False
     yield
     settings_mod.settings_store._cache = {}
     settings_mod.settings_store._loaded = False
+    settings_mod.provider_profile_store._cache = {}
+    settings_mod.provider_profile_store._loaded = False
 
 
 @pytest.fixture

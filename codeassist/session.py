@@ -50,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 class _DBPool:
@@ -257,6 +257,10 @@ async def init_db():
         if current_version < 18:
             await _add_v18_tables(db)
             current_version = 18
+
+        if current_version < 19:
+            await _add_v19_tables(db)
+            current_version = 19
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -876,6 +880,31 @@ async def _add_v18_tables(db):
     await db.execute("""
         CREATE INDEX IF NOT EXISTS idx_automation_runs_automation
         ON automation_runs(automation_id, started_at DESC)
+    """)
+    await db.commit()
+
+
+async def _add_v19_tables(db):
+    """DB-only provider profiles: OpenAI-compatible endpoints + their credentials.
+
+    Secrets live here, never in config.toml/config.overrides.toml. The active
+    profile name is an ordinary UI setting, so a data-dir reset leaves profiles
+    orphaned rather than silently writing keys back to disk.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS provider_profiles (
+            name TEXT PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT 'openai',
+            base_url TEXT NOT NULL DEFAULT '',
+            api_key TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            context_window INTEGER NOT NULL DEFAULT 128000,
+            vision INTEGER NOT NULL DEFAULT 0,
+            audio INTEGER NOT NULL DEFAULT 0,
+            timeout INTEGER NOT NULL DEFAULT 900,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
     """)
     await db.commit()
 

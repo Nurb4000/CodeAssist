@@ -64,8 +64,13 @@ def _resolve_is_metadata(host: str) -> bool:
     return False
 
 
-def _catalog_payload(spec: dict, cfg, value: str | None) -> dict:
+def _catalog_payload(
+    spec: dict, cfg, value: str | None,
+    *, active_profile: str = "", profile: dict | None = None,
+) -> dict:
     """Snapshot one catalog entry for the client (effective value + metadata)."""
+    from ..settings import PROFILE_MANAGED_KEYS
+
     section = getattr(cfg, spec["section"])
     effective = getattr(section, spec["field"])
     item = {
@@ -82,11 +87,14 @@ def _catalog_payload(spec: dict, cfg, value: str | None) -> dict:
     # label its source so the UI can show it as active for the server lifetime.
     if spec["key"] == "permissions.trust_all" and effective == "session":
         item["source"] = "runtime"
+    if active_profile and spec["key"] in PROFILE_MANAGED_KEYS:
+        item["source"] = "profile"
     if spec.get("options"):
         item["options"] = spec["options"]
     if spec.get("secret"):
-        # Never return the secret; just whether we hold an override for it.
-        item["has_value"] = value is not None
+        # Never return the secret; just whether a key is held (override or the
+        # active profile's DB-only credential).
+        item["has_value"] = bool(profile and profile.get("api_key")) if active_profile else value is not None
     return item
 
 
@@ -94,14 +102,22 @@ def _catalog_payload(spec: dict, cfg, value: str | None) -> dict:
 async def get_settings():
     """List editable settings with effective values and source."""
     from ..server import get_config
-    from ..settings import SETTINGS_CATALOG, settings_store
+    from ..settings import (
+        SETTINGS_CATALOG, provider_profile_store, settings_store,
+    )
 
     if not settings_store.is_loaded():
         await settings_store.load()
     cfg = get_config()
+    active = str(settings_store.get("llm.active_profile") or "").strip()
+    await provider_profile_store.load()
+    profile = provider_profile_store.get(active) if active else None
     return {
         "settings": [
-            _catalog_payload(spec, cfg, settings_store.get(spec["key"]))
+            _catalog_payload(
+                spec, cfg, settings_store.get(spec["key"]),
+                active_profile=active, profile=profile,
+            )
             for spec in SETTINGS_CATALOG
         ]
     }
@@ -109,11 +125,21 @@ async def get_settings():
 
 @router.put("/api/settings")
 async def update_settings(payload: dict):
-    """Persist UI overrides. Restart-required keys are saved but not applied live."""
+    """Persist UI overrides. Restart-required keys are saved but not applied live.
+
+    While a DB provider profile is active, its identity/auth fields are edited
+    in place instead of becoming flat overrides, so the profile stays the single
+    source of truth and secrets never reach config.overrides.toml.
+    """
     from ..server import get_config
     from ..settings import (
         BY_KEY,
+        PROFILE_FIELD_FOR_KEY,
+        PROFILE_MANAGED_KEYS,
+        apply_active_profile,
+        apply_settings_overrides,
         coerce,
+        provider_profile_store,
         remove_override,
         settings_store,
         validate_setting,
@@ -123,7 +149,8 @@ async def update_settings(payload: dict):
     if not settings_store.is_loaded():
         await settings_store.load()
     cfg = get_config()
-    applied, restart_required = [], []
+    active_before = str(settings_store.get("llm.active_profile") or "").strip()
+    applied, restart_required, profile_edits = [], [], []
     for key, value in payload.items():
         spec = BY_KEY.get(key)
         if not spec or value is None:
@@ -141,6 +168,10 @@ async def update_settings(payload: dict):
         error = validate_setting(spec, coerced)
         if error:
             raise HTTPException(status_code=422, detail=error)
+        if key == "llm.active_profile" and coerced:
+            await provider_profile_store.load()
+            if provider_profile_store.get(coerced) is None:
+                raise HTTPException(status_code=404, detail=f"Unknown provider profile: {coerced}")
         if spec["key"] == "permissions.trust_all" and coerced == "session":
             # "This session" is ephemeral: apply it live, drop any persisted
             # override (DB + overrides file) so it reverts after a restart.
@@ -148,6 +179,13 @@ async def update_settings(payload: dict):
             remove_override(cfg, key)
             section = getattr(cfg, spec["section"])
             setattr(section, spec["field"], coerced)
+            applied.append(key)
+            continue
+        if active_before and key in PROFILE_MANAGED_KEYS:
+            await provider_profile_store.update_field(
+                active_before, PROFILE_FIELD_FOR_KEY[key], coerced
+            )
+            profile_edits.append(key)
             applied.append(key)
             continue
         await settings_store.set(key, coerced)
@@ -161,6 +199,14 @@ async def update_settings(payload: dict):
             section = getattr(cfg, spec["section"])
             setattr(section, spec["field"], coerced)
             applied.append(key)
+    if "llm.active_profile" in applied:
+        if str(settings_store.get("llm.active_profile") or "").strip():
+            await apply_active_profile(cfg)
+        else:
+            # Clearing the profile must restore file/default llm.* values.
+            await apply_settings_overrides(cfg)
+    elif profile_edits:
+        await apply_active_profile(cfg)
     return {"applied": applied, "restart_required": restart_required}
 
 
@@ -207,40 +253,61 @@ async def test_connection(payload: dict | None = None):
     Hardened against SSRF and stored-key exfiltration:
       - Only ``http``/``https`` is accepted, and cloud-metadata / link-local /
         unspecified endpoints are refused (they are never an LLM backend).
-      - The server's stored API key is attached **only** when the probe targets
-        the configured backend host. A client-supplied ``base_url`` pointing
-        somewhere else must bring its own ``api_key``, so an attacker cannot
-        redirect the stored secret to a host they control.
+      - A stored key (flat config or a named profile) is attached **only** when
+        the probe targets that credential's own host. A client-supplied
+        ``base_url`` pointing somewhere else must bring its own ``api_key``, so
+        an attacker cannot redirect a DB-only secret to a host they control.
+      - A profile with a blank ``base_url`` owns the default OpenAI host; it
+        never inherits the flat configured host just because the profile was
+        selected during a probe.
     """
     import httpx
 
     from ..capabilities import context_window_from_body
     from ..server import get_config
+    from ..settings import provider_profile_store
 
     cfg = get_config()
     configured_base = cfg.llm.base_url or ""
     client_base = ""
     client_key = ""
+    profile_name = ""
     if payload:
         client_base = str(payload.get("base_url") or "")
         client_key = str(payload.get("api_key") or "")
+        profile_name = str(payload.get("profile") or "")
 
-    base_url = client_base or configured_base
+    profile = None
+    if profile_name:
+        await provider_profile_store.load()
+        profile = provider_profile_store.get(profile_name)
+        if profile is None:
+            return {"ok": False, "error": f"Unknown provider profile: {profile_name}"}
+
+    profile_base = (profile or {}).get("base_url") or ""
+    # A selected profile is self-contained: a blank base_url means the default
+    # OpenAI endpoint, not the flat configured backend. Only unprofiled probes
+    # inherit ``configured_base``.
+    base_url = client_base or profile_base or ("" if profile else configured_base)
     parsed = urlsplit(base_url if "//" in base_url else "//" + base_url) if base_url else None
     scheme = parsed.scheme if parsed and parsed.scheme else "https"
     if scheme not in ("http", "https"):
         return {"ok": False, "error": f"Unsupported scheme: {scheme}"}
 
-    target_host = _url_host(base_url)
+    default_host = _url_host("https://api.openai.com/v1")
+    target_host = _url_host(base_url) or default_host
     if _is_metadata_host(target_host) or (target_host and _resolve_is_metadata(target_host)):
         return {"ok": False, "error": "Refusing to contact a metadata/link-local endpoint"}
-    configured_host = _url_host(configured_base)
+    key_host = (_url_host(profile_base) or default_host) if profile else (_url_host(configured_base) or default_host)
 
-    # Only reuse the stored key when the probe stays on the configured backend
-    # host; otherwise the caller must supply a key of their own.
+    # Only reuse a stored key when the probe stays on that credential's own
+    # host. A foreign base_url must bring its own key, even when a profile was
+    # named, so a crafted request cannot exfiltrate a DB-only credential.
     if client_key:
         api_key = client_key
-    elif not client_base or target_host == configured_host:
+    elif profile:
+        api_key = (profile.get("api_key") or "") if target_host == key_host else ""
+    elif not client_base or target_host == key_host:
         api_key = cfg.llm.api_key
     else:
         api_key = ""
@@ -262,7 +329,71 @@ async def test_connection(payload: dict | None = None):
         context_window = context_window_from_body(body)
     except Exception:  # noqa: BLE001
         models = []
-    result = {"ok": True, "endpoint": endpoint, "models": models[:25]}
+    # The admin model picker filters client-side, so return enough models for a
+    # real search instead of the old 25-model sample (capped to bound payloads).
+    result = {"ok": True, "endpoint": endpoint, "models": models[:500]}
     if context_window is not None:
         result["context_window"] = context_window
     return result
+
+
+# --- DB-only provider profiles --------------------------------------------- #
+
+
+@router.get("/api/provider-profiles")
+async def list_provider_profiles():
+    """List masked profiles plus the active name (never returns API keys)."""
+    from ..settings import provider_profile_store, settings_store
+
+    if not settings_store.is_loaded():
+        await settings_store.load()
+    await provider_profile_store.load()
+    return {
+        "active": str(settings_store.get("llm.active_profile") or "").strip(),
+        "profiles": [provider_profile_store.masked(p) for p in provider_profile_store.all()],
+    }
+
+
+@router.post("/api/provider-profiles")
+async def save_provider_profile(payload: dict):
+    """Create or update a profile. A blank api_key means 'keep the stored key'."""
+    from ..settings import (
+        normalize_profile_values, provider_profile_store, validate_profile_name,
+    )
+
+    name = str(payload.get("name") or "").strip()
+    error = validate_profile_name(name)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
+    await provider_profile_store.load()
+    values = {k: v for k, v in payload.items()
+              if k in ("provider", "base_url", "api_key", "model", "context_window",
+                       "vision", "audio", "timeout") and k != "name"}
+    try:
+        values = normalize_profile_values(values)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    row = await provider_profile_store.upsert(name, values)
+    return provider_profile_store.masked(row)
+
+
+@router.delete("/api/provider-profiles/{name}")
+async def delete_provider_profile(name: str):
+    """Delete a profile; the active one must be deactivated first."""
+    from ..server import get_config
+    from ..settings import apply_settings_overrides, provider_profile_store, settings_store
+
+    if not settings_store.is_loaded():
+        await settings_store.load()
+    await provider_profile_store.load()
+    if provider_profile_store.get(name) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider profile: {name}")
+    active = str(settings_store.get("llm.active_profile") or "").strip()
+    if active == name:
+        raise HTTPException(status_code=409, detail="Deactivate the profile before deleting it")
+    await provider_profile_store.delete(name)
+    # Keep the active profile's hydrated config consistent if the deleted row
+    # was still cached in a long-running process.
+    if active:
+        await apply_settings_overrides(get_config())
+    return {"ok": True, "name": name}

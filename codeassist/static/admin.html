@@ -143,6 +143,30 @@
                 <button class="admin-btn" id="settings-test">Test LLM connection</button>
                 <span class="admin-muted">Changes flagged &quot;restart required&quot; apply after the server restarts.</span>
             </div>
+            <div class="admin-toolbar" id="provider-profile-bar">
+                <label for="provider-profile-select" class="admin-muted">Profile</label>
+                <select id="provider-profile-select"><option value="">(file / default)</option></select>
+                <button class="admin-btn" id="provider-profile-activate">Activate</button>
+                <button class="admin-btn admin-btn-danger" id="provider-profile-delete">Delete</button>
+                <span class="admin-muted">Profiles keep API keys in the database only. Test connection fills the searchable Model field.</span>
+                <datalist id="llm-model-options"></datalist>
+            </div>
+            <details class="admin-create" id="provider-profile-create">
+                <summary>Save provider profile</summary>
+                <div class="admin-form">
+                    <input id="profile-name" placeholder="name (letters, digits, . _ -)">
+                    <select id="profile-provider">
+                        <option value="openai">openai</option>
+                        <option value="custom">custom</option>
+                    </select>
+                    <input id="profile-base-url" placeholder="base URL (blank = api.openai.com)">
+                    <input id="profile-api-key" type="password" placeholder="API key (blank = keep saved key)">
+                    <input id="profile-model" placeholder="model id">
+                    <input id="profile-context-window" type="number" min="1" value="128000" placeholder="context window">
+                    <input id="profile-timeout" type="number" min="1" value="900" placeholder="timeout (s)">
+                    <button class="admin-btn" id="profile-save">Save profile</button>
+                </div>
+            </details>
             <div id="settings-body"></div>
 
             <h2 id="automations">Automations</h2>

@@ -85,6 +85,25 @@ class TestLLMClientInit:
             LLMClient(config)
             mock_openai.assert_called_once_with(api_key="test-key", timeout=720)
 
+    def test_profile_switch_rebuilds_sdk_client(self):
+        """Activating a DB profile mutates the shared config in place; the next
+        request must use new credentials instead of the original SDK client."""
+        config = LLMConfig(model="gpt-4o", api_key="key-a", base_url="https://a/v1", timeout=100)
+        with patch("codeassist.llm.openai.AsyncOpenAI") as mock_openai:
+            client = LLMClient(config)
+            assert mock_openai.call_count == 1
+            client._ensure_client()
+            assert mock_openai.call_count == 1  # unchanged config: no rebuild
+
+            config.api_key = "key-b"
+            config.base_url = "https://b/v1"
+            config.timeout = 200
+            client._ensure_client()
+            assert mock_openai.call_count == 2
+            mock_openai.assert_called_with(
+                api_key="key-b", base_url="https://b/v1", timeout=200
+            )
+
 
 class TestFormatTools:
     """Test format_tools method."""

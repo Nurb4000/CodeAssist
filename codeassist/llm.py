@@ -250,20 +250,40 @@ class ProviderTransform:
 class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
+        self._transforms: list[ProviderTransform] = []
+        self._client_signature: tuple | None = None
+        self._ensure_client()
+
+    def _client_kwargs(self) -> tuple[dict, tuple]:
+        """Build SDK kwargs plus a signature used to detect profile switches."""
         # The OpenAI SDK rejects an empty or missing key at construction, but
         # no-auth backends (e.g. a local/on-prem llama.cpp) are often configured
         # with an empty key. Fall back to the OPENAI_API_KEY env var, then a
         # placeholder sentinel so the client still constructs and the request
         # goes through unauthenticated instead of raising "Missing credentials".
-        api_key = config.api_key or os.environ.get("OPENAI_API_KEY")
-        kwargs = {"api_key": api_key or "sk-no-auth"}
-        if config.base_url:
-            kwargs["base_url"] = config.base_url
+        api_key = self.config.api_key or os.environ.get("OPENAI_API_KEY") or "sk-no-auth"
+        kwargs = {"api_key": api_key}
+        if self.config.base_url:
+            kwargs["base_url"] = self.config.base_url
         # Honor the configured LLM timeout so slow local servers (llama.cpp,
         # vLLM) get more than the SDK's own generous default only when asked.
-        kwargs["timeout"] = config.timeout
-        self.client = openai.AsyncOpenAI(**kwargs)
-        self._transforms: list[ProviderTransform] = []
+        kwargs["timeout"] = self.config.timeout
+        signature = (api_key, self.config.base_url, self.config.timeout)
+        return kwargs, signature
+
+    def _ensure_client(self):
+        """Rebuild the SDK client if the active provider/profile changed.
+
+        Admin profile activation mutates the shared LLMConfig in place; owners
+        of this LLMClient (agent, token counter, model status) are long-lived.
+        Rebuilding lazily here means a switch takes effect on the next request
+        without reconstructing every owner.
+        """
+        kwargs, signature = self._client_kwargs()
+        if signature != self._client_signature:
+            self.client = openai.AsyncOpenAI(**kwargs)
+            self._client_signature = signature
+        return self.client
 
     def add_transform(self, transform: ProviderTransform):
         """Add a provider transform to the pipeline.
@@ -286,6 +306,9 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
+        # Snapshot both the SDK client and request kwargs: a profile switch
+        # during an active stream must not redirect an in-flight turn.
+        client = self._ensure_client()
         kwargs = {
             "model": self.config.model,
             "messages": messages,
@@ -311,7 +334,7 @@ class LLMClient:
 
         for attempt in range(MAX_RETRIES):
             try:
-                response = await self.client.chat.completions.create(**kwargs)
+                response = await client.chat.completions.create(**kwargs)
                 break
             except openai.APITimeoutError as e:
                 log.warning("LLM timeout (attempt %d/%d): %s", attempt + 1, MAX_RETRIES, e)
@@ -479,7 +502,7 @@ class LLMClient:
                     await asyncio.sleep(sleep_time)
                     stream_backoff = min(stream_backoff * 2, MAX_BACKOFF)
                     # Re-create the response to retry streaming
-                    response = await self.client.chat.completions.create(**kwargs)
+                    response = await client.chat.completions.create(**kwargs)
                 else:
                     raise
 

@@ -16,6 +16,9 @@ class LLMConfig:
     # Provider is a required enum; "openai" is the neutral default and works for
     # both OpenAI and OpenAI-compatible backends (llama.cpp, vLLM) via base_url.
     provider: str = "openai"
+    # Name of the DB-backed provider profile currently hydrating this config.
+    # Blank means the ordinary provider/base_url/key/model fields are in use.
+    active_profile: str = ""
     # No baked-in model default: LLM identity is configured in the UI (Settings
     # > LLM) and persisted in the DB between sessions. An empty model simply
     # means "not configured yet" — the app boots fine and chat prompts the user
@@ -552,6 +555,7 @@ class Config:
         config = cls(
             llm=LLMConfig(
                 provider=llm_raw.get("provider", "openai"),
+                active_profile=str(llm_raw.get("active_profile", "") or ""),
                 # No baked-in default: match LLMConfig.model and the documented
                 # "blank until configured in the UI" policy at config.py:16-19.
                 model=llm_raw.get("model", ""),

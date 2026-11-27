@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tomllib
 from datetime import UTC, datetime
 from typing import Any
@@ -31,6 +32,12 @@ def _now_iso() -> str:
 # attribute (cfg.llm, cfg.server, ...), `field` the attribute within it.
 SETTINGS_CATALOG: list[dict[str, Any]] = [
     # --- LLM ---
+    # Managed by the dedicated provider-profile controls in Admin > Settings;
+    # hidden from the generated table but still a normal persisted setting so
+    # boot/restart paths apply it like every other override.
+    {"key": "llm.active_profile", "section": "llm", "field": "active_profile", "type": "str",
+     "label": "Active provider profile", "description": "DB-backed profile to use; blank uses the file/default provider fields.",
+     "group": "LLM", "hidden": True, "restart_required": False},
     {"key": "llm.provider", "section": "llm", "field": "provider", "type": "str",
      "label": "Provider", "description": "openai API or a custom-compatible endpoint.",
      "group": "LLM", "options": ["openai", "custom"], "restart_required": False},
@@ -203,6 +210,79 @@ SETTINGS_CATALOG: list[dict[str, Any]] = [
 
 BY_KEY = {spec["key"]: spec for spec in SETTINGS_CATALOG}
 
+# Provider profiles hydrate these LLMConfig fields. Generation knobs
+# (temperature/max_tokens/penalties/embedding model) stay global.
+PROFILE_FIELDS = (
+    "provider", "base_url", "api_key", "model", "context_window",
+    "vision", "audio", "timeout",
+)
+PROFILE_MANAGED_KEYS = frozenset({
+    "llm.provider", "llm.base_url", "llm.api_key", "llm.model",
+    "llm.context_window", "llm.vision", "llm.audio", "llm.timeout",
+})
+PROFILE_FIELD_FOR_KEY = {
+    "llm.provider": "provider",
+    "llm.base_url": "base_url",
+    "llm.api_key": "api_key",
+    "llm.model": "model",
+    "llm.context_window": "context_window",
+    "llm.vision": "vision",
+    "llm.audio": "audio",
+    "llm.timeout": "timeout",
+}
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_PROFILE_DEFAULTS: dict[str, Any] = {
+    "provider": "openai",
+    "base_url": "",
+    "api_key": "",
+    "model": "",
+    "context_window": 128000,
+    "vision": False,
+    "audio": False,
+    "timeout": 900,
+}
+
+
+def validate_profile_name(name: Any) -> str | None:
+    """Return an error for unsafe/awkward profile names, else None."""
+    if not isinstance(name, str) or not _PROFILE_NAME_RE.fullmatch(name):
+        return "Profile name must be 1-64 letters, digits, dot, dash or underscore and start alphanumeric"
+    return None
+
+
+def _profile_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def normalize_profile_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Coerce and bound-check the writable profile fields."""
+    result: dict[str, Any] = {}
+    for field in PROFILE_FIELDS:
+        if field not in values:
+            continue
+        raw = values[field]
+        if field in ("provider", "base_url", "api_key", "model"):
+            result[field] = str(raw or "")
+        elif field in ("context_window", "timeout"):
+            try:
+                result[field] = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field} must be an integer") from exc
+            if result[field] < 1:
+                raise ValueError(f"{field} must be >= 1")
+        else:
+            result[field] = _profile_bool(raw)
+    if "provider" in result and result["provider"] not in ("openai", "custom"):
+        raise ValueError("provider must be one of openai, custom")
+    if "base_url" in result and result["base_url"]:
+        error = validate_setting({"label": "Base URL", "url": True}, result["base_url"])
+        if error:
+            raise ValueError(error)
+    return result
+
+
 # Declarative per-field constraints merged into the matching catalog entry.
 # ``min``/``max`` apply to numbers, ``url`` validates HTTP(S) URLs, ``nonempty``
 # requires a non-blank string. These turn naive type-coercion into real
@@ -315,6 +395,130 @@ class SettingsStore:
 settings_store = SettingsStore()
 
 
+class ProviderProfileStore:
+    """DB-only OpenAI-compatible provider profiles, cached after load.
+
+    Unlike UI settings, profiles are never synced to config.overrides.toml:
+    the API key must never land on disk as plain text.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._loaded = False
+
+    async def load(self) -> None:
+        try:
+            async with get_db() as db, db.execute(
+                "SELECT * FROM provider_profiles ORDER BY name"
+            ) as cursor:
+                rows = await cursor.fetchall()
+            profiles = {}
+            for row in rows:
+                profile = dict(row)
+                for field in ("vision", "audio"):
+                    profile[field] = bool(profile[field])
+                profiles[profile["name"]] = profile
+            self._cache = profiles
+            self._loaded = True
+        except Exception as e:  # noqa: BLE001
+            log.debug("Failed to load provider profiles: %s", e)
+
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+    def all(self) -> list[dict[str, Any]]:
+        return [dict(p) for p in self._cache.values()]
+
+    def get(self, name: str) -> dict[str, Any] | None:
+        row = self._cache.get(name)
+        return dict(row) if row else None
+
+    @staticmethod
+    def masked(row: dict[str, Any]) -> dict[str, Any]:
+        """Snapshot a profile for the API without ever returning its secret."""
+        result = dict(row)
+        result["api_key"] = None
+        result["has_key"] = bool(row.get("api_key"))
+        return result
+
+    async def upsert(self, name: str, values: dict[str, Any]) -> dict[str, Any]:
+        await self.load()
+        existing = self._cache.get(name, {})
+        merged = {field: values.get(field, existing.get(field, _PROFILE_DEFAULTS[field]))
+                  for field in PROFILE_FIELDS}
+        # A blank key in a form means "keep the stored key", never "erase it".
+        if not str(values.get("api_key") or "").strip():
+            merged["api_key"] = existing.get("api_key", "")
+        now = _now_iso()
+        merged.update({
+            "name": name,
+            "created_at": existing.get("created_at") or now,
+            "updated_at": now,
+        })
+        await self._write(merged)
+        self._cache[name] = merged
+        return dict(merged)
+
+    async def update_field(self, name: str, field: str, value: Any) -> dict[str, Any]:
+        """Update one field of an existing profile (used by the Settings Save)."""
+        if field not in PROFILE_FIELDS:
+            raise KeyError(field)
+        await self.load()
+        existing = self._cache.get(name)
+        if existing is None:
+            raise KeyError(name)
+        updated = normalize_profile_values({field: value})
+        merged = dict(existing)
+        merged.update(updated)
+        merged["updated_at"] = _now_iso()
+        await self._write(merged)
+        self._cache[name] = merged
+        return dict(merged)
+
+    async def delete(self, name: str) -> None:
+        try:
+            async with get_db() as db:
+                await db.execute("DELETE FROM provider_profiles WHERE name = ?", [name])
+                await db.commit()
+        finally:
+            self._cache.pop(name, None)
+
+    async def _write(self, row: dict[str, Any]) -> None:
+        async with get_db() as db:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO provider_profiles
+                    (name, provider, base_url, api_key, model, context_window,
+                     vision, audio, timeout, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [row["name"], row["provider"], row["base_url"], row["api_key"],
+                 row["model"], row["context_window"], int(bool(row["vision"])),
+                 int(bool(row["audio"])), row["timeout"],
+                 row["created_at"], row["updated_at"]],
+            )
+            await db.commit()
+
+
+provider_profile_store = ProviderProfileStore()
+
+
+async def apply_active_profile(cfg: Any) -> bool:
+    """Hydrate cfg.llm from the active DB profile. Returns True if applied."""
+    name = str(settings_store.get("llm.active_profile") or "").strip()
+    cfg.llm.active_profile = name
+    if not name:
+        return False
+    await provider_profile_store.load()
+    profile = provider_profile_store.get(name)
+    if profile is None:
+        log.warning("Active provider profile %r no longer exists; using file/default LLM settings", name)
+        return False
+    for field in PROFILE_FIELDS:
+        setattr(cfg.llm, field, profile[field])
+    return True
+
+
 async def apply_settings_overrides(cfg: Any) -> None:
     """Apply persisted UI overrides onto the live Config object (at boot)."""
     try:
@@ -322,6 +526,23 @@ async def apply_settings_overrides(cfg: Any) -> None:
     except Exception as e:  # noqa: BLE001
         log.debug("Settings override load skipped: %s", e)
         return
+    # Reset profile-managed fields to their file/default values first. Without
+    # this, deactivating a profile (or deleting its last override) would leave
+    # the previous profile's model/key in the live config indefinitely.
+    try:
+        fresh = Config.load()
+        for key in PROFILE_MANAGED_KEYS:
+            spec = BY_KEY.get(key)
+            if not spec:
+                continue
+            live_section = getattr(cfg, spec["section"], None)
+            fresh_section = getattr(fresh, spec["section"], None)
+            if live_section is not None and fresh_section is not None:
+                setattr(live_section, spec["field"], getattr(fresh_section, spec["field"]))
+        cfg.llm.audio = fresh.llm.audio
+    except Exception as e:  # noqa: BLE001
+        log.debug("Could not reset LLM baseline: %s", e)
+
     for spec in SETTINGS_CATALOG:
         raw = settings_store.get(spec["key"])
         if raw is None:
@@ -339,6 +560,9 @@ async def apply_settings_overrides(cfg: Any) -> None:
     # overrides landed, so re-derive it or a UI-set workspace is ignored.
     if hasattr(cfg, "refresh_workspace"):
         cfg.refresh_workspace()
+    # An active profile wins over flat llm.* overrides: hydrate last so the
+    # runtime always reflects the profile the admin actually activated.
+    await apply_active_profile(cfg)
     log.info("Applied %d settings override(s) from DB", len(settings_store.all()))
 
 
@@ -357,6 +581,12 @@ async def clear_override(key: str, cfg: Any) -> None:
         return
     live_section = getattr(cfg, spec["section"])
     setattr(live_section, spec["field"], getattr(fresh_section, spec["field"]))
+    if spec["key"] == "llm.active_profile":
+        # Other llm.* fields currently hold the old profile's values. Re-run the
+        # full override pass so file/default (and any remaining flat overrides)
+        # become effective again instead of leaving stale profile settings.
+        await apply_settings_overrides(cfg)
+        return
     if spec["key"] == "server.workspace" and hasattr(cfg, "refresh_workspace"):
         cfg.refresh_workspace()
 
