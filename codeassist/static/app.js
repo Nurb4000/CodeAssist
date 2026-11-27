@@ -1539,6 +1539,31 @@ function onToolResult(id, output) {
     maybeScrollToBottom();
 }
 
+function onToolProgress(data) {
+    const parentId = data.parent_tool_call_id;
+    if (!parentId) return;
+    const step = findStepForToolCall(parentId);
+    const div = step ? matchToolCallIn(step.querySelector('.tool-call-stack'), parentId) : null;
+    if (!div) return;
+    const detail = div.querySelector('.tool-call-detail');
+    if (!detail) return;
+    let box = detail.querySelector('.tool-call-codemode-progress');
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'tool-call-codemode-progress';
+        detail.appendChild(box);
+    }
+    const line = document.createElement('div');
+    line.className = 'codemode-progress-line ' + (data.status || '');
+    const name = data.name ? `${data.name} ` : '';
+    const status = data.status || 'update';
+    line.textContent = `[execute] ${name}${status}`.trim();
+    box.appendChild(line);
+    while (box.childNodes.length > 20) box.removeChild(box.firstChild);
+    div.querySelector('.tool-call-preview').textContent = snippet(`${div._args} → executing ${data.name || 'tool'}...`, 96);
+    maybeScrollToBottom();
+}
+
 // Locate the work step (or pending unit) that owns tool call `id`, searching
 // most-recent-first so a duplicate id in an older step cannot win.
 function findStepForToolCall(id) {
@@ -2811,6 +2836,8 @@ function connectWS() {
         } else if (data.type === 'tool_result') {
             hideProgress();
             onToolResult(data.id, data.output);
+        } else if (data.type === 'tool_progress') {
+            onToolProgress(data);
         } else if (data.type === 'context') {
             updateContextUsage(data.tokens, data.usage_pct, data.severity, data);
         } else if (data.type === 'compacting') {

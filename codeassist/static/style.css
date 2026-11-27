@@ -2065,3 +2065,8 @@ body.is-working .mode-dot {
 .keybinds-conflict:not(:empty) { font-weight: 500; }
 .keybind-input.keybind-conflict { border-color: var(--red); outline-color: var(--red); background: rgba(239, 68, 68, 0.08); }
 .keybinds-modal .modal-card:focus-visible, .keybind-input:focus-visible, .modal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.tool-call-codemode-progress { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--border); font-size: 11px; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.codemode-progress-line { padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.codemode-progress-line.completed { color: var(--green); }
+.codemode-progress-line.error { color: var(--red); }

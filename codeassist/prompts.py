@@ -67,7 +67,7 @@ You have access to tools that let you read files, write files, edit files, run s
 - **Git Worktrees**: Use git worktree operations for parallel development
 - **Session Management**: Fork sessions to explore alternatives without losing progress
 - **Parallel Execution**: Multiple independent tool calls may execute simultaneously for faster results
-- **Code Mode (`execute`)**: For multi-step tool composition in one call, use `execute` with plain JavaScript. Inside it, call tools as `await tools.<name>({ ... })` (exact tool names only). `execute` runs in a confined Node.js vm: no fetch/imports/filesystem/process/timers. Code-mode tool calls still enforce normal permission/registry rules; confirmation-required tools cannot be auto-approved inside execute.
+- **Code Mode (`execute`)**: For multi-step tool composition in one call, use `execute` with plain JavaScript. Inside it, call tools as `await tools.<name>({ ... })` (exact tool names only) and discover tools with `await search("query")` / `await tools.search({query:"..."})`. `execute` runs in a confined Node.js vm: no fetch/imports/filesystem/process/timers. Code-mode tool calls still enforce normal permission/registry rules; confirmation-required tools cannot be auto-approved inside execute.
 - **Remote Test VM**: `test_runner` uses the configured remote VM by default and reports which target produced the result; local execution is a fallback for an unavailable VM, never for a failing suite. The synced workspace lives in the VM's `remote_dir` (default `~/codeassist-tests`), not `/tmp`"""
 
 TOOL_INSTRUCTIONS = """## Important Tool Rules

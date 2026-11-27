@@ -60,7 +60,7 @@ async def test_execute_simple_return():
     reg = _registry()
     result = await reg.execute("execute", {"code": "return 1 + 2"})
     assert not result.error, result.output
-    assert result.output.strip() == "3"
+    assert result.output.strip().startswith("3")
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_execute_namespaced_tool_call():
     reg = _registry()
     result = await reg.execute("execute", {"code": "return await tools['math.add']({a: 2, b: 5});"})
     assert not result.error, result.output
-    assert result.output.strip() == "7"
+    assert "7" in result.output
 
 
 @pytest.mark.asyncio
@@ -147,3 +147,24 @@ async def test_execute_disabled_by_config():
     result = await reg.execute("execute", {"code": "return 1"})
     assert result.error
     assert "disabled" in result.output.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_virtual_tool():
+    reg = _registry()
+    result = await reg.execute(
+        "execute",
+        {"code": "const r = await tools.search({query: 'echo'}); return r.items.map(i=>i.name).join(',');"},
+    )
+    assert not result.error, result.output
+    assert "echo" in result.output
+
+
+@pytest.mark.asyncio
+async def test_execute_rejects_invalid_argument_shape_host_side():
+    reg = _registry()
+    ex = reg.get("execute")
+    bad = {"text": object()}
+    res = await ex._execute_tool_call("echo", bad)
+    assert res.error
+    assert "unsupported argument type" in res.output

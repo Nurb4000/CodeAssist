@@ -408,12 +408,13 @@ section for the frontmatter format. Custom and auto-created skills appear in the
 
 ## Code Mode (`execute`)
 
-CodeAssist includes an initial D1 **Code Mode** tool named `execute`. It runs plain JavaScript in a confined Node.js `vm` runtime so the model can compose multiple tool calls in one step.
+CodeAssist includes a D1 **Code Mode** tool named `execute`. It runs plain JavaScript in a confined Node.js `vm` runtime so the model can compose multiple tool calls in one step.
 
 - **Call form**: pass JavaScript in `code`; prefer an explicit `return`.
-- **Tool access**: `await tools.<name>({ ... })` or `await tools["name"]({ ... })` using exact tool names.
+- **Tool access**: `await tools.<name>({ ... })` or `await tools["name"]({ ... })` using exact tool names. Use `await search("query")` or `await tools.search({query:"..."})` to discover available tools.
 - **Confined runtime**: no `fetch`, imports/modules, filesystem/process access, timers, or recursive `execute`.
-- **Safety**: normal tool schema validation and permission checks apply. Tools that require interactive confirmation are denied inside execute; run them as normal tool calls.
+- **Safety**: normal tool schema validation and permission checks apply. Tools that require interactive confirmation are denied inside execute; run them as normal tool calls. Tool arguments are shape-validated at the host bridge boundary.
+- **Observability**: nested tool-call progress events are streamed to the UI and appended to the execute tool card; outputs include an execution summary when tool calls/logs occur.
 - **Limits**: bounded execution timeout, tool-call count, and output size (configurable under `[tools.codemode]`).
 
 ## Worktrees and persistent PTY (agent tools)

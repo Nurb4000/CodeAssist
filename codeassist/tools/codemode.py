@@ -16,9 +16,11 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
 from . import Tool, ToolResult
+from .security import validate_tool_arguments
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ MAX_CODE_CHARS = 100_000
 # Tools that must not be callable from inside code mode. `execute` would recurse;
 # `question`/confirm-like interactive flows are not bridged by this runtime.
 EXCLUDED_TOOLS = {"execute", "question"}
+VIRTUAL_TOOLS = {"search"}
 
 
 _HARNESS_JS = r"""
@@ -83,7 +86,15 @@ function callTool(name, input) {
   const id = nextId++;
   send({ type: 'tool_call', id, name: String(name), input: input === undefined ? {} : input });
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, {
+      resolve: (output) => {
+        if (String(name) === 'search' && typeof output === 'string') {
+          try { resolve(JSON.parse(output)); return; } catch (_) {}
+        }
+        resolve(output);
+      },
+      reject,
+    });
     if (pending.size > MAX_PENDING) {
       pending.delete(id);
       reject(new Error('Too many pending tool calls'));
@@ -155,11 +166,14 @@ const configLinePromise = new Promise((resolve) => {
 
   // Prevent recursive/forbidden tool access even if code probes.
   tools.execute = (input) => callTool('execute', input);
+  tools.search = (input) => callTool('search', typeof input === 'string' ? {query: input} : (input || {}));
+  const search = (input) => tools.search(input);
 
   const context = vm.createContext(Object.create(null));
   // Minimal safe globals.
   context.globalThis = context;
   context.tools = tools;
+  context.search = search;
   context.console = {
     log: (...args) => send({ type: 'log', level: 'log', text: args.map(String).join(' ') }),
     error: (...args) => send({ type: 'log', level: 'error', text: args.map(String).join(' ') }),
@@ -231,6 +245,20 @@ const configLinePromise = new Promise((resolve) => {
 """
 
 
+_EXECUTOR: ContextVar[Callable[[str, dict[str, Any]], Awaitable[ToolResult]] | None] = ContextVar("codemode_executor", default=None)
+_EVENT_SINK: ContextVar[Callable[[dict[str, Any]], Awaitable[None]] | None] = ContextVar("codemode_event_sink", default=None)
+
+
+def bind_codemode(executor=None, event_sink=None):
+    return _EXECUTOR.set(executor), _EVENT_SINK.set(event_sink)
+
+
+def reset_codemode(tokens):
+    ex_tok, sink_tok = tokens
+    _EXECUTOR.reset(ex_tok)
+    _EVENT_SINK.reset(sink_tok)
+
+
 class ExecuteTool(Tool):
     name = "execute"
     description = (
@@ -260,6 +288,7 @@ class ExecuteTool(Tool):
         self.workspace: Path | None = None
         self._registry = None
         self._executor: Callable[[str, dict[str, Any]], Awaitable[ToolResult]] | None = None
+        self._event_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None
 
     def set_registry(self, registry) -> None:
         self._registry = registry
@@ -267,6 +296,16 @@ class ExecuteTool(Tool):
     def set_executor(self, executor: Callable[[str, dict[str, Any]], Awaitable[ToolResult]] | None) -> None:
         """Optional host executor; when set it must enforce permissions/policy."""
         self._executor = executor
+
+    def set_event_sink(self, sink: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
+        """Optional callback for nested tool progress events."""
+        self._event_sink = sink
+
+    def _current_executor(self):
+        return _EXECUTOR.get() or self._executor
+
+    def _current_event_sink(self):
+        return _EVENT_SINK.get() or self._event_sink
 
     def apply_config(self, config) -> None:
         cm = getattr(getattr(config, "tools", None), "codemode", None)
@@ -287,16 +326,113 @@ class ExecuteTool(Tool):
             names.append(name)
         return sorted(names)
 
+    def _search_catalog(self, query: str = "", limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        q = str(query or "").strip().lower()
+        items = self.catalog()
+        if q:
+            def score(it):
+                name = it.get("name", "").lower()
+                desc = it.get("description", "").lower()
+                s = 0
+                if q == name: s += 100
+                if q in name: s += 20
+                if q in desc: s += 5
+                for tok in q.split():
+                    if tok and tok in name: s += 10
+                    if tok and tok in desc: s += 2
+                return -s
+            items = [it for it in items if q in it.get("name","").lower() or q in it.get("description","").lower() or any(t in it.get("name","").lower() for t in q.split())]
+            items.sort(key=score)
+        try:
+            limit = max(1, min(int(limit), 50))
+        except Exception:
+            limit = 20
+        try:
+            offset = max(0, int(offset))
+        except Exception:
+            offset = 0
+        page = items[offset:offset + limit]
+        remaining = max(0, len(items) - (offset + len(page)))
+        next_obj = {"offset": offset + len(page)} if remaining else None
+        return {
+            "items": [{
+                "path": f"tools.{it['name']}",
+                "name": it["name"],
+                "description": it.get("description", ""),
+                "signature": f"tools.{it['name']}(input: object) -> Promise<any>",
+                "parameters": it.get("parameters", []),
+                "required": it.get("required", []),
+            } for it in page],
+            "remaining": remaining,
+            "next": next_obj,
+            "total": len(items),
+        }
+
+    def catalog(self) -> list[dict[str, Any]]:
+        """Return a compact catalog for code-mode prompts/tests."""
+        if not self._registry:
+            return []
+        items = []
+        for name in self._available_tools():
+            tool = self._registry.get(name)
+            if not tool:
+                continue
+            schema = {}
+            try:
+                schema = tool.schema().get("function", {})
+            except Exception:
+                schema = {}
+            raw_desc = str(schema.get("description") or "").strip()
+            desc = (raw_desc.splitlines()[0] if raw_desc else name)[:160]
+            params = schema.get("parameters") if isinstance(schema.get("parameters"), dict) else {}
+            props = params.get("properties") if isinstance(params.get("properties"), dict) else {}
+            required = params.get("required") if isinstance(params.get("required"), list) else []
+            items.append({
+                "name": name,
+                "description": desc,
+                "parameters": list(props.keys())[:12],
+                "required": [r for r in required if isinstance(r, str)][:12],
+            })
+        return items
+
     async def _execute_tool_call(self, name: str, arguments: Any) -> ToolResult:
         if name in EXCLUDED_TOOLS:
             return ToolResult(output=f"Tool '{name}' is not available inside execute", error=True)
+        if name == "search":
+            if isinstance(arguments, str):
+                arguments = {"query": arguments}
+            if not isinstance(arguments, dict):
+                return ToolResult(output="Tool 'search' arguments must be an object or string", error=True)
+            try:
+                res = self._search_catalog(
+                    query=arguments.get("query", ""),
+                    limit=arguments.get("limit", 20),
+                    offset=arguments.get("offset", 0),
+                )
+                return ToolResult(output=json.dumps(res, ensure_ascii=False))
+            except Exception as e:  # noqa: BLE001
+                return ToolResult(output=f"Search failed: {e}", error=True)
         if not isinstance(arguments, dict):
             return ToolResult(output=f"Tool '{name}' arguments must be an object", error=True)
-        if self._executor is not None:
-            return await self._executor(name, arguments)
+        # Defensive boundary: validate argument shape before host execution.
+        arg_err = validate_tool_arguments(arguments)
+        if arg_err:
+            return ToolResult(output=f"Invalid arguments for '{name}': {arg_err}", error=True)
+        executor = self._current_executor()
+        if executor is not None:
+            return await executor(name, arguments)
         if self._registry is None:
             return ToolResult(output="Code mode runtime is not configured", error=True)
         return await self._registry.execute(name, arguments)
+
+    async def _emit(self, payload: dict[str, Any]) -> None:
+        sink = self._current_event_sink()
+        if sink is None:
+            return
+        try:
+            await sink(payload)
+        except Exception:
+            log.debug("Code mode event sink failed", exc_info=True)
 
     async def execute(self, code: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> ToolResult:
         if not getattr(self, "enabled", True):
@@ -322,6 +458,7 @@ class ExecuteTool(Tool):
         available = self._available_tools()
         if not available:
             return ToolResult(output="Error: no tools available for code mode execution", error=True)
+        catalog_preview = self._search_catalog(limit=min(20, len(available)))
 
         harness_path = None
         logs: list[str] = []
@@ -344,7 +481,12 @@ class ExecuteTool(Tool):
             )
             assert proc.stdin is not None and proc.stdout is not None
 
-            config = json.dumps({"code": code, "tools": available, "timeoutMs": timeout_ms})
+            config = json.dumps({
+                "code": code,
+                "tools": available,
+                "timeoutMs": timeout_ms,
+                "catalogPreview": catalog_preview,
+            })
             proc.stdin.write((config + "\n").encode("utf-8"))
             await proc.stdin.drain()
 
@@ -369,6 +511,7 @@ class ExecuteTool(Tool):
                         args = msg.get("input", {})
                         entry = {"id": call_id, "name": name, "status": "running"}
                         tool_calls.append(entry)
+                        await self._emit({"type": "codemode_tool_call", "id": call_id, "name": name, "status": "running"})
                         try:
                             tr = await self._execute_tool_call(name, args)
                             entry["status"] = "error" if tr.error else "completed"
@@ -381,6 +524,14 @@ class ExecuteTool(Tool):
                         except Exception as e:  # noqa: BLE001
                             entry["status"] = "error"
                             payload = {"type": "tool_result", "id": call_id, "output": "", "error": str(e)}
+                        await self._emit({
+                            "type": "codemode_tool_result",
+                            "id": call_id,
+                            "name": name,
+                            "status": entry["status"],
+                            "output": str(payload.get("output", ""))[:1000],
+                            "error": bool(payload.get("error")),
+                        })
                         if proc.stdin and not proc.stdin.is_closing():
                             proc.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
                             await proc.stdin.drain()
@@ -416,9 +567,18 @@ class ExecuteTool(Tool):
                 err = stderr.decode("utf-8", errors="replace").strip()
                 return ToolResult(output=f"Error: execute failed{': ' + err if err else ''}", error=True)
 
+            summary = {
+                "tool_calls": len(tool_calls),
+                "errors": sum(1 for t in tool_calls if t.get("status") == "error"),
+                "completed": sum(1 for t in tool_calls if t.get("status") == "completed"),
+            }
+            summary_str = json.dumps(summary, ensure_ascii=False)
+
             if not result_msg.get("ok"):
                 err = str(result_msg.get("error", "Unknown code mode error"))
                 out = err
+                if tool_calls or logs:
+                    out += "\n\n[execute summary] " + summary_str
                 if logs:
                     out += "\n\nLogs:\n" + "\n".join(logs[-20:])
                 return ToolResult(output=out[:max_output_chars], error=True)
@@ -431,11 +591,14 @@ class ExecuteTool(Tool):
                     out = json.dumps(value, ensure_ascii=False)
                 except Exception:
                     out = str(value)
+            out = (out or "null").rstrip()
+            if tool_calls or logs:
+                out += "\n\n[execute summary] " + summary_str
             if logs:
                 out = (out + "\n\nLogs:\n" + "\n".join(logs[-20:])).strip()
             if len(out) > max_output_chars:
                 out = out[:max_output_chars] + "\n...[truncated]"
-            return ToolResult(output=out or "null")
+            return ToolResult(output=out)
         finally:
             if harness_path:
                 try:

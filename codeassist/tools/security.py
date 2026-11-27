@@ -53,6 +53,50 @@ class WorkspaceViolationError(Exception):
     """Raised when a path escapes the workspace boundary."""
 
 
+def validate_tool_arguments(arguments: dict, *, max_depth: int = 20, max_nodes: int = 5000) -> str | None:
+    """Validate tool argument shape for untrusted/runtime-bridged calls.
+
+    Returns an error string when invalid, else None.
+    """
+    if not isinstance(arguments, dict):
+        return "arguments must be an object"
+    seen = 0
+
+    def walk(v, depth):
+        nonlocal seen
+        seen += 1
+        if seen > max_nodes:
+            return "arguments are too large/complex"
+        if depth > max_depth:
+            return "arguments are too deeply nested"
+        if v is None or isinstance(v, (str, int, float, bool)):
+            return None
+        if isinstance(v, list):
+            for item in v:
+                err = walk(item, depth + 1)
+                if err:
+                    return err
+            return None
+        if isinstance(v, dict):
+            for k, item in v.items():
+                if not isinstance(k, str):
+                    return "argument keys must be strings"
+                err = walk(item, depth + 1)
+                if err:
+                    return err
+            return None
+        # Reject unknown objects/functions/etc.
+        return f"unsupported argument type: {type(v).__name__}"
+
+    for k, v in arguments.items():
+        if not isinstance(k, str):
+            return "argument keys must be strings"
+        err = walk(v, 1)
+        if err:
+            return err
+    return None
+
+
 def validate_path(file_path: str, workspace: Path) -> Path:
     """Resolve and validate that a path is within the workspace.
 

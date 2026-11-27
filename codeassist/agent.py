@@ -885,6 +885,7 @@ class Agent:
             max_bytes=self.config.tool_output.max_bytes,
             retention_days=self.config.tool_output.retention_days,
         )
+        self._codemode_progress: asyncio.Queue[AgentEvent] | None = None
 
     def cancel(self):
         """Cancel the current agent run."""
@@ -1380,13 +1381,12 @@ class Agent:
         if question_tool and hasattr(question_tool, "set_answer"):
             question_tool.set_answer(question_id, answer)
 
-    async def _execute_codemode_tool(self, name: str, arguments: dict):
+    async def _execute_codemode_tool(self, name: str, arguments: dict, parent_tc=None):
         """Execute a tool call originating from the confined execute runtime.
 
-        Runs through the same registry as normal tool calls, so schema validation
-        and tool behavior remain consistent. Permission checks are enforced here
-        because code-mode tool calls do not go through the outer LLM tool-call
-        confirmation loop.
+        Runs through normal registry validation and permission checks. Interactive
+        confirmations are not possible inside execute, so confirmation-required
+        tools are denied with guidance to run them as normal tool calls.
         """
         from .tools import ToolResult
 
@@ -1400,7 +1400,6 @@ class Agent:
 
         needs_prompt = await self._confirmation_required(name, arguments, perm_action)
         if needs_prompt:
-            # Non-interactive/code-mode: do not block on UI confirmation.
             return ToolResult(
                 output=(
                     f"Tool '{name}' requires confirmation and cannot be auto-approved in execute mode. "
@@ -2649,13 +2648,39 @@ class Agent:
                     start = time.monotonic()
                     if tc.name == "execute":
                         ex = self.tools.get("execute")
-                        if ex and hasattr(ex, "set_executor"):
-                            ex.set_executor(self._execute_codemode_tool)
+                        tokens = None
+                        if ex and hasattr(ex, "set_event_sink"):
+                            async def sink(payload, _tc=tc):
+                                p = dict(payload)
+                                p.setdefault("parent_tool_call_id", _tc.id)
+                                q = getattr(self, "_codemode_progress", None)
+                                if q is not None:
+                                    await q.put(AgentEvent("tool_progress", p))
+                        try:
+                            from .tools.codemode import bind_codemode
+                            tokens = bind_codemode(
+                                lambda n, a, _parent=tc: self._execute_codemode_tool(n, a, _parent),
+                                sink if ex and hasattr(ex, "set_event_sink") else None,
+                            )
+                        except Exception:
+                            tokens = None
+                            if ex and hasattr(ex, "set_executor"):
+                                ex.set_executor(lambda n, a, _parent=tc: self._execute_codemode_tool(n, a, _parent))
+                            if ex and hasattr(ex, "set_event_sink"):
+                                ex.set_event_sink(sink)
                         try:
                             result = await self.tools.execute(tc.name, tc.arguments)
                         finally:
+                            if tokens is not None:
+                                try:
+                                    from .tools.codemode import reset_codemode
+                                    reset_codemode(tokens)
+                                except Exception:
+                                    pass
                             if ex and hasattr(ex, "set_executor"):
                                 ex.set_executor(None)
+                            if ex and hasattr(ex, "set_event_sink"):
+                                ex.set_event_sink(None)
                     else:
                         result = await self.tools.execute(tc.name, tc.arguments)
                     duration_ms = int((time.monotonic() - start) * 1000)
@@ -2676,10 +2701,24 @@ class Agent:
 
                 if confirmed_tool_calls:
                     try:
-                        results = await asyncio.gather(
-                            *[_exec_tool(tc) for tc in confirmed_tool_calls],
-                            return_exceptions=True,
-                        )
+                        self._codemode_progress = asyncio.Queue()
+                        tasks = [asyncio.create_task(_exec_tool(tc)) for tc in confirmed_tool_calls]
+                        pending = set(tasks)
+                        results_by_task = {}
+                        while pending:
+                            done, pending = await asyncio.wait(pending, timeout=0.1, return_when=asyncio.FIRST_COMPLETED)
+                            while self._codemode_progress and not self._codemode_progress.empty():
+                                evt = await self._codemode_progress.get()
+                                yield evt
+                            for d in done:
+                                try:
+                                    results_by_task[d] = d.result()
+                                except BaseException as e:
+                                    results_by_task[d] = e
+                        while self._codemode_progress and not self._codemode_progress.empty():
+                            evt = await self._codemode_progress.get()
+                            yield evt
+                        results = [results_by_task[t] for t in tasks]
                     except asyncio.CancelledError:
                         # Stop was pressed while the tools were running. The
                         # assistant message with its tool_calls is already
