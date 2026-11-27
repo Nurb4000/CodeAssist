@@ -235,9 +235,27 @@ class _StdioMCPTransport:
                     continue
                 if not isinstance(message, dict):
                     continue
-                future = self._pending.get(message.get("id"))
-                if future is not None and not future.done():
-                    future.set_result(message)
+                message_id = message.get("id")
+                if message_id is not None:
+                    future = self._pending.get(message_id)
+                    if future is not None and not future.done():
+                        future.set_result(message)
+                    continue
+                # JSON-RPC notification (no id): forward to the MCP client so it
+                # can fan out automation events / refresh cached discovery.
+                method = message.get("method")
+                if method:
+                    handler = getattr(self, "notification_handler", None)
+                    if handler is not None:
+                        try:
+                            result = handler(self.name, method, message.get("params") or {})
+                            if asyncio.iscoroutine(result):
+                                await result
+                        except Exception as e:  # noqa: BLE001
+                            log.warning(
+                                "MCP notification handler failed for '%s' %s: %s",
+                                self.name, method, e,
+                            )
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -347,6 +365,9 @@ class MCPClient:
         self._instructions: dict[str, str] = {}
         self._status: dict[str, dict] = {}
         self._initialized = False
+        # Optional async/sync callback: (server_name, method, params) -> Any.
+        # Used by the server to fan MCP notifications into automations/events.
+        self.notification_handler = None
 
     async def initialize(self, servers_config: dict[str, dict]) -> list[str]:
         """Initialize connections to all configured MCP servers. Returns list of server names."""
@@ -401,7 +422,7 @@ class MCPClient:
         self._initialized = True
         return initialized
 
-    def _status_template(self, name: str, config: dict | None) -> dict:
+    def _status_template(self, name: str, config: dict | None = None) -> dict:
         config = config or self._configs.get(name, {})
         return {
             "name": name,
@@ -492,6 +513,7 @@ class MCPClient:
                     cwd=config.get("cwd"),
                     timeout=timeout,
                 )
+                transport.notification_handler = self._handle_notification
                 await transport.start()
                 self._clients[name] = transport
                 self._urls[name] = ""
@@ -601,7 +623,7 @@ class MCPClient:
             log.error("Failed to discover tools from %s: %s", server_name, e)
 
     async def _discover_prompts(self, server_name: str):
-        """Discover prompts so the admin status panel can show them."""
+        """Discover prompts so the admin status panel and agent tools can use them."""
         try:
             data = await self._post(server_name, {
                 "jsonrpc": "2.0",
@@ -624,7 +646,7 @@ class MCPClient:
             log.error("Failed to discover prompts from %s: %s", server_name, e)
 
     async def _discover_resources(self, server_name: str):
-        """Discover resources so the admin status panel can show them."""
+        """Discover resources so the admin status panel and agent tools can use them."""
         try:
             data = await self._post(server_name, {
                 "jsonrpc": "2.0",
@@ -646,6 +668,53 @@ class MCPClient:
         except Exception as e:  # noqa: BLE001
             self._append_error(server_name, f"resources/list failed: {e}")
             log.error("Failed to discover resources from %s: %s", server_name, e)
+
+    async def _handle_notification(self, server_name: str, method: str, params: dict) -> None:
+        """Handle JSON-RPC notifications from stdio MCP servers.
+
+        Notifications are best-effort: they refresh discovery caches and, when an
+        automation engine is active, fan out to event automations. They never
+        raise into the transport reader.
+        """
+        if method == "notifications/tools/list_changed":
+            prefix = f"mcp_{server_name}_"
+            for tool_name in [t for t in self._tools if t.startswith(prefix)]:
+                del self._tools[tool_name]
+            await self._discover_tools(server_name)
+            self._sync_registry()
+        elif method == "notifications/prompts/list_changed":
+            await self._discover_prompts(server_name)
+            self._sync_registry()
+        elif method == "notifications/resources/list_changed":
+            await self._discover_resources(server_name)
+            self._sync_registry()
+        elif method == "notifications/resources/updated":
+            # The resource body changed; discovery list is unchanged, but event
+            # automations may want to react.
+            pass
+
+        await self._fanout_notification(server_name, method, params)
+
+    def _sync_registry(self) -> None:
+        """Refresh MCP wrappers in the live tool registry, if one exists."""
+        try:
+            from . import server
+
+            if server.tools is not None and server.mcp_client is self:
+                server.sync_mcp_tools()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Failed to sync MCP tool registry after notification: %s", e)
+
+    async def _fanout_notification(self, server_name: str, method: str, params: dict) -> None:
+        handler = self.notification_handler
+        if handler is None:
+            return
+        try:
+            result = handler(server_name, method, params or {})
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:  # noqa: BLE001
+            log.warning("MCP notification fanout failed for %s %s: %s", server_name, method, e)
 
     def get_tools(self) -> list[MCPTool]:
         """Get all discovered MCP tools."""
@@ -698,15 +767,126 @@ class MCPClient:
             log.exception("MCP tool call failed")
             return f"Error calling MCP tool '{tool_name}': {e}"
 
-        content = (data.get("result") or {}).get("content", [])
+        return self._content_to_text(data.get("result") or {})
+
+    @staticmethod
+    def _content_to_text(result: dict) -> str:
+        """Render MCP content arrays/messages as plain text for tool results."""
+        if not isinstance(result, dict):
+            return str(result)
+        content = result.get("content")
         if isinstance(content, list):
-            return "\n".join(
-                item.get("text", "") for item in content if item.get("type") == "text"
-            )
-        elif isinstance(content, str):
+            parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    parts.append(str(item))
+                    continue
+                item_type = item.get("type")
+                if item_type == "text":
+                    parts.append(str(item.get("text", "")))
+                elif item_type == "resource":
+                    resource = item.get("resource") or {}
+                    if isinstance(resource, dict):
+                        if resource.get("text") is not None:
+                            uri = resource.get("uri", "")
+                            text = str(resource.get("text", ""))
+                            parts.append(f"[resource {uri}]\n{text}" if uri else text)
+                        elif resource.get("blob") is not None:
+                            uri = resource.get("uri", "resource")
+                            mime = resource.get("mimeType", "application/octet-stream")
+                            parts.append(f"[binary resource {uri} mime={mime}]")
+                else:
+                    parts.append(jsonlib.dumps(item, default=str))
+            return "\n".join(p for p in parts if p)
+        if isinstance(content, str):
             return content
-        else:
-            return jsonlib.dumps((data.get("result") or {}))
+        if "messages" in result:
+            # prompts/get returns messages, not content.
+            return MCPClient._messages_to_text(result.get("messages") or [])
+        return jsonlib.dumps(result, default=str)
+
+    @staticmethod
+    def _messages_to_text(messages: list) -> str:
+        parts = []
+        for msg in messages or []:
+            if not isinstance(msg, dict):
+                parts.append(str(msg))
+                continue
+            role = msg.get("role", "unknown")
+            content = msg.get("content")
+            if isinstance(content, dict):
+                text = MCPClient._content_to_text({"content": [content]})
+            elif isinstance(content, list):
+                text = MCPClient._content_to_text({"content": content})
+            else:
+                text = str(content or "")
+            parts.append(f"[{role}]\n{text}" if text else f"[{role}]")
+        return "\n\n".join(parts)
+
+    async def get_prompt(self, server_name: str, prompt_name: str, arguments: dict | None = None) -> str:
+        """Fetch a prompt from an MCP server and render it as text."""
+        if server_name not in self._clients:
+            return f"Error: MCP server '{server_name}' not connected"
+        try:
+            data = await self._post(server_name, {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "prompts/get",
+                "params": {
+                    "name": prompt_name,
+                    "arguments": arguments or {},
+                },
+            })
+        except MCPHTTPError as e:
+            return f"Error: MCP prompt fetch failed: {e.text}"
+        except MCPRPCError as e:
+            return f"Error: MCP prompt '{prompt_name}' failed: {e.message}"
+        except Exception as e:
+            log.exception("MCP prompt fetch failed")
+            return f"Error fetching MCP prompt '{prompt_name}': {e}"
+        result = data.get("result") or {}
+        description = result.get("description")
+        body = self._content_to_text(result)
+        if description:
+            return f"{description}\n\n{body}".strip()
+        return body
+
+    async def read_resource(self, server_name: str, uri: str) -> str:
+        """Read a resource from an MCP server and render it as text."""
+        if server_name not in self._clients:
+            return f"Error: MCP server '{server_name}' not connected"
+        try:
+            data = await self._post(server_name, {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "resources/read",
+                "params": {"uri": uri},
+            })
+        except MCPHTTPError as e:
+            return f"Error: MCP resource read failed: {e.text}"
+        except MCPRPCError as e:
+            return f"Error: MCP resource '{uri}' failed: {e.message}"
+        except Exception as e:
+            log.exception("MCP resource read failed")
+            return f"Error reading MCP resource '{uri}': {e}"
+        result = data.get("result") or {}
+        contents = result.get("contents") or []
+        if isinstance(contents, list):
+            parts = []
+            for item in contents:
+                if not isinstance(item, dict):
+                    parts.append(str(item))
+                    continue
+                item_uri = item.get("uri", uri)
+                if item.get("text") is not None:
+                    parts.append(f"[resource {item_uri}]\n{item.get('text', '')}")
+                elif item.get("blob") is not None:
+                    mime = item.get("mimeType", "application/octet-stream")
+                    parts.append(f"[binary resource {item_uri} mime={mime}]")
+                else:
+                    parts.append(jsonlib.dumps(item, default=str))
+            return "\n\n".join(p for p in parts if p)
+        return self._content_to_text(result)
 
     def _get_server_url(self, server_name: str) -> str:
         """Get the URL for an MCP server (empty string for stdio transports)."""
@@ -773,3 +953,113 @@ class MCPToolWrapper:
         output = await self._mcp_client.call_tool(self.name, kwargs)
         is_error = output.startswith("Error:")
         return ToolResult(output=output, error=is_error)
+
+
+class MCPPromptTool:
+    """Agent-callable wrapper around discovered MCP prompts."""
+
+    name = "mcp_get_prompt"
+    description = (
+        "Get a prompt from a connected MCP server. Use this when an MCP server "
+        "exposes prompts/templates. Pass server, prompt name, and optional "
+        "arguments matching the prompt's declared arguments."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "server": {
+                "type": "string",
+                "description": "MCP server name as configured in CodeAssist.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Prompt name to fetch.",
+            },
+            "arguments": {
+                "type": "object",
+                "description": "Arguments for the prompt, if required.",
+            },
+        },
+        "required": ["server", "name"],
+    }
+
+    def __init__(self, mcp_client: MCPClient):
+        self._mcp_client = mcp_client
+
+    def schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+
+    async def execute(self, **kwargs) -> "ToolResult":
+        from .tools import ToolResult
+
+        server = str(kwargs.get("server", "")).strip()
+        name = str(kwargs.get("name", "")).strip()
+        arguments = kwargs.get("arguments") or {}
+        if not server or not name:
+            return ToolResult(output="Error: server and name are required", error=True)
+        if not isinstance(arguments, dict):
+            return ToolResult(output="Error: arguments must be an object", error=True)
+
+        prompts = self._mcp_client._prompts.get(server, [])
+        if prompts and not any(p.name == name for p in prompts):
+            known = ", ".join(p.name for p in prompts[:20])
+            return ToolResult(
+                output=(
+                    f"Error: prompt '{name}' not found on MCP server '{server}'. "
+                    f"Known prompts: {known or '(none)'}"
+                ),
+                error=True,
+            )
+
+        output = await self._mcp_client.get_prompt(server, name, arguments)
+        return ToolResult(output=output, error=output.startswith("Error:"))
+
+
+class MCPResourceTool:
+    """Agent-callable wrapper around discovered MCP resources."""
+
+    name = "mcp_read_resource"
+    description = (
+        "Read a resource from a connected MCP server. Use this when an MCP "
+        "server exposes resources/documents/records. Provide server and the "
+        "exact resource URI from MCP status/discovery."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "server": {
+                "type": "string",
+                "description": "MCP server name as configured in CodeAssist.",
+            },
+            "uri": {
+                "type": "string",
+                "description": "Exact MCP resource URI to read.",
+            },
+        },
+        "required": ["server", "uri"],
+    }
+
+    def __init__(self, mcp_client: MCPClient):
+        self._mcp_client = mcp_client
+
+    def schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+
+    async def execute(self, **kwargs) -> "ToolResult":
+        from .tools import ToolResult
+
+        server = str(kwargs.get("server", "")).strip()
+        uri = str(kwargs.get("uri", "")).strip()
+        if not server or not uri:
+            return ToolResult(output="Error: server and uri are required", error=True)
+
+        output = await self._mcp_client.read_resource(server, uri)
+        return ToolResult(output=output, error=output.startswith("Error:"))

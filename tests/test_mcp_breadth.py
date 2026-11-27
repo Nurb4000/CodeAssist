@@ -341,3 +341,104 @@ def test_status_route_reports_live_client(live_client, monkeypatch):
     body = response.json()
     assert body["enabled"] is True
     assert body["servers"][0]["error"] == "handshake failed"
+
+
+@pytest.mark.asyncio
+async def test_mcp_prompt_and_resource_tools_are_registered_and_callable(monkeypatch, tmp_path):
+    client = MCPClient()
+    client._prompts["demo"] = [mcp_mod.MCPPrompt(name="summarize", description="sum", arguments=[])]
+    client._resources["demo"] = [mcp_mod.MCPResource(uri="file://readme.md", name="readme")]
+    client._clients["demo"] = _NoopClose()
+
+    async def fake_get_prompt(server_name, prompt_name, arguments=None):
+        return f"prompt:{server_name}:{prompt_name}:{arguments}"
+
+    async def fake_read_resource(server_name, uri):
+        return f"resource:{server_name}:{uri}"
+
+    monkeypatch.setattr(client, "get_prompt", fake_get_prompt)
+    monkeypatch.setattr(client, "read_resource", fake_read_resource)
+
+    registry = ToolRegistry(tmp_path)
+    monkeypatch.setattr(server, "mcp_client", client)
+    monkeypatch.setattr(server, "tools", registry)
+    server.sync_mcp_tools()
+
+    assert "mcp_get_prompt" in registry.list_names()
+    assert "mcp_read_resource" in registry.list_names()
+    prompt_result = await registry.execute("mcp_get_prompt", {
+        "server": "demo", "name": "summarize", "arguments": {"topic": "x"},
+    })
+    assert not prompt_result.error
+    assert "prompt:demo:summarize:{'topic': 'x'}" in prompt_result.output
+    resource_result = await registry.execute("mcp_read_resource", {
+        "server": "demo", "uri": "file://readme.md",
+    })
+    assert not resource_result.error
+    assert resource_result.output == "resource:demo:file://readme.md"
+
+
+@pytest.mark.asyncio
+async def test_mcp_prompt_skill_discovery_registers_virtual_skills(tmp_path):
+    from codeassist.skills import SkillRegistry
+
+    client = MCPClient()
+    client._prompts["demo"] = [mcp_mod.MCPPrompt(
+        name="review", description="Review code", arguments=[{"name": "path", "required": True}],
+    )]
+    client._status["demo"] = {
+        "name": "demo", "connected": True, "transport": "stdio", "error": "",
+        "tools": [], "prompts": [], "resources": [], "instructions": "", "oauth_provider": "",
+    }
+    registry = SkillRegistry(tmp_path)
+    registry.discover()
+    count = registry.set_mcp_prompt_skills(client)
+    assert count == 1
+    skill = registry.get_skill("mcp:demo/review")
+    assert skill is not None
+    assert skill.source == "mcp:demo"
+    assert registry.category_for(skill) == SkillRegistry.CATEGORY_MCP
+    assert "mcp_get_prompt" in skill.content
+    assert not registry.is_user_owned("mcp:demo/review")
+
+
+@pytest.mark.asyncio
+async def test_mcp_notification_fans_out_to_automation_events(monkeypatch):
+    from codeassist import automations as automations_mod
+
+    events = []
+
+    class FakeEngine:
+        async def trigger_event(self, name):
+            events.append(name)
+            return 1
+
+    monkeypatch.setattr(automations_mod, "automation_engine", FakeEngine())
+    client = MCPClient()
+    client.notification_handler = server._handle_mcp_notification
+    monkeypatch.setattr(server, "skill_registry", None)
+    monkeypatch.setattr(server, "tools", None)
+    monkeypatch.setattr(server, "mcp_client", client)
+
+    await client._handle_notification("demo", "notifications/tools/list_changed", {})
+    assert "mcp:tools_changed" in events
+    assert "mcp:demo:tools_changed" in events
+    assert "mcp:notifications/tools/list_changed" in events
+
+
+@pytest.mark.asyncio
+async def test_server_mcp_notification_hook_triggers_automation_event(monkeypatch):
+    from codeassist import automations as automations_mod
+
+    events = []
+
+    class FakeEngine:
+        async def trigger_event(self, name):
+            events.append(name)
+            return 1
+
+    monkeypatch.setattr(automations_mod, "automation_engine", FakeEngine())
+    monkeypatch.setattr(server, "skill_registry", None)
+    await server._handle_mcp_notification("demo", "notifications/prompts/list_changed", {})
+    assert "mcp:prompts_changed" in events
+    assert "mcp:demo:prompts_changed" in events

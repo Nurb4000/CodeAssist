@@ -306,6 +306,16 @@ Connection failures no longer disappear into the server log. **Reload connection
 live set and re-registers discovered tools with the agent; a dynamic-tool reload also preserves
 those wrappers.
 
+Discovered MCP prompts and resources are also exposed to the agent as first-class tools:
+`mcp_get_prompt` fetches a prompt template, and `mcp_read_resource` reads an MCP resource URI.
+Prompt discovery also creates read-only virtual skills named `mcp:<server>/<prompt>` so the agent
+can find them through the normal skill system.
+
+For MCP event automations, stdio MCP notifications are fanned out as automation events such as
+`mcp:tools_changed`, `mcp:prompts_changed`, `mcp:resources_changed`, `mcp:resource_updated`, and
+their server-scoped forms like `mcp:<server>:tools_changed`. Event automations can subscribe to
+these names through the existing automation event trigger.
+
 ## Knowledge Base GUI
 
 Open it via the 📚 icon (or the "Knowledge Base" footer link). The Knowledge Base is CodeAssist's

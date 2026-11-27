@@ -276,7 +276,7 @@ def sync_mcp_tools() -> None:
     """
     if tools is None:
         return
-    from codeassist.mcp_client import MCPToolWrapper
+    from codeassist.mcp_client import MCPPromptTool, MCPResourceTool, MCPToolWrapper
 
     if mcp_client is None:
         tools.sync_prefixed("mcp_", {})
@@ -285,7 +285,13 @@ def sync_mcp_tools() -> None:
         mcp_tool.name: MCPToolWrapper(mcp_tool, mcp_client)
         for mcp_tool in mcp_client.get_tools()
     }
+    # Generic prompt/resource tools let the agent use discovered MCP prompts and
+    # resources even when no dedicated wrapper was generated. They stay present as
+    # long as an MCP client exists so the model can inspect what's available.
+    wrappers.setdefault("mcp_get_prompt", MCPPromptTool(mcp_client))
+    wrappers.setdefault("mcp_read_resource", MCPResourceTool(mcp_client))
     tools.sync_prefixed("mcp_", wrappers)
+    _sync_mcp_skills()
 
 
 async def reload_mcp_servers() -> list[str]:
@@ -300,6 +306,7 @@ async def reload_mcp_servers() -> list[str]:
     servers = await _merged_mcp_servers(cfg)
     connected = await mcp_client.reload(servers)
     sync_mcp_tools()
+    _sync_mcp_skills()
     return connected
 
 
@@ -433,13 +440,68 @@ async def _merged_mcp_servers(cfg: Config) -> dict:
     return merged
 
 
+def _sync_mcp_skills() -> None:
+    """Mirror discovered MCP prompts into the live skill registry as virtual skills."""
+    if skill_registry is None or mcp_client is None:
+        return
+    try:
+        skill_registry.set_mcp_prompt_skills(mcp_client)
+    except Exception:  # noqa: BLE001
+        log.warning("Failed to sync MCP prompt skills", exc_info=True)
+
+
+async def _handle_mcp_notification(server_name: str, method: str, params: dict) -> None:
+    """Fan MCP notifications into the automation engine.
+
+    This is best-effort and intentionally narrow: only enabled event automations
+    with matching names fire. We map common MCP list-changed notifications to
+    stable event names, and also emit a generic `mcp:<method>` event for custom
+    automations.
+    """
+    from . import automations as automations_mod
+
+    if method in {
+        "notifications/prompts/list_changed",
+        "notifications/resources/list_changed",
+        "notifications/tools/list_changed",
+    }:
+        _sync_mcp_skills()
+
+    engine = automations_mod.automation_engine
+    if engine is None:
+        return
+    event_names = {
+        f"mcp:{method}",
+        f"mcp:{server_name}:{method}",
+    }
+    if method == "notifications/tools/list_changed":
+        event_names.add("mcp:tools_changed")
+        event_names.add(f"mcp:{server_name}:tools_changed")
+    elif method == "notifications/prompts/list_changed":
+        event_names.add("mcp:prompts_changed")
+        event_names.add(f"mcp:{server_name}:prompts_changed")
+    elif method == "notifications/resources/list_changed":
+        event_names.add("mcp:resources_changed")
+        event_names.add(f"mcp:{server_name}:resources_changed")
+    elif method == "notifications/resources/updated":
+        event_names.add("mcp:resource_updated")
+        event_names.add(f"mcp:{server_name}:resource_updated")
+    for event_name in sorted(event_names):
+        try:
+            await engine.trigger_event(event_name)
+        except Exception:  # noqa: BLE001
+            log.warning("Failed to trigger automation event %s", event_name, exc_info=True)
+
+
 async def init_mcp():
     if mcp_client is None or _config is None:
         sync_mcp_tools()
         return
+    mcp_client.notification_handler = _handle_mcp_notification
     servers = await _merged_mcp_servers(_config)
     await mcp_client.initialize(servers)
     sync_mcp_tools()
+    _sync_mcp_skills()
 
 async def init_skills():
     if skill_registry:

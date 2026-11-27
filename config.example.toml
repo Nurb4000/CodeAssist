@@ -142,6 +142,10 @@ enabled = false
 allow_shell = true       # shell actions stay off when this is false
 tick_seconds = 1.0       # scheduler poll interval
 timeout_seconds = 300    # per-run shell timeout
+#
+# MCP stdio notifications can trigger event automations with names like:
+#   mcp:tools_changed, mcp:prompts_changed, mcp:resources_changed, mcp:resource_updated
+# and server-scoped forms like mcp:<server>:tools_changed.
 
 [skills]
 # Enable skills system

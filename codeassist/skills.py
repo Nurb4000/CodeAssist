@@ -209,12 +209,15 @@ def expand_slash_command(
 class SkillRegistry:
     """Discovers and manages skills from the workspace."""
 
+    MCP_SKILL_PREFIX = "mcp:"
+
     def __init__(self, workspace: Path, config=None):
         self.workspace = workspace
         self.config = config
         self._skills: dict[str, Skill] = {}
         self._slash_commands: dict[str, Skill] = {}
         self._last_discover_time: float = 0
+        self._mcp_skills: dict[str, Skill] = {}
 
     def discover(self) -> list[Skill]:
         """Discover skills from the packaged skills and the configured
@@ -266,7 +269,9 @@ class SkillRegistry:
         self._skills.clear()
         self._slash_commands.clear()
         self._last_discover_time = time.time()
-        return self.discover()
+        discovered = self.discover()
+        self._reapply_mcp_skills()
+        return discovered
 
     def _discover_from_directory(self, directory: Path):
         """Discover skills from a directory."""
@@ -349,6 +354,81 @@ class SkillRegistry:
         """Get a skill by slash command."""
         return self._slash_commands.get(command)
 
+    # --- MCP-provided virtual skills --------------------------------------- #
+
+    @classmethod
+    def mcp_skill_name(cls, server_name: str, prompt_name: str) -> str:
+        return f"{cls.MCP_SKILL_PREFIX}{server_name}/{prompt_name}"
+
+    def set_mcp_prompt_skills(self, mcp_client) -> int:
+        """Register discovered MCP prompts as read-only virtual skills.
+
+        These are not written to disk; they let the agent discover MCP prompt
+        capabilities through the existing skill system.
+        """
+        skills: dict[str, Skill] = {}
+        status = mcp_client.get_status() if mcp_client else []
+        for server in status:
+            server_name = str(server.get("name", "")).strip()
+            if not server_name:
+                continue
+            for prompt in server.get("prompts", []) or []:
+                if not isinstance(prompt, dict):
+                    continue
+                prompt_name = str(prompt.get("name", "")).strip()
+                if not prompt_name:
+                    continue
+                description = str(prompt.get("description", "")).strip() or (
+                    f"MCP prompt '{prompt_name}' from server '{server_name}'."
+                )
+                args = prompt.get("arguments") or []
+                arg_lines = []
+                for arg in args:
+                    if not isinstance(arg, dict):
+                        continue
+                    arg_name = str(arg.get("name", "")).strip()
+                    if not arg_name:
+                        continue
+                    required = "required" if arg.get("required") else "optional"
+                    arg_desc = str(arg.get("description", "")).strip()
+                    suffix = f": {arg_desc}" if arg_desc else ""
+                    arg_lines.append(f"- `{arg_name}` ({required}){suffix}")
+                arg_block = "\n".join(arg_lines) if arg_lines else "- (none declared)"
+                content = (
+                    f"# MCP prompt: {prompt_name}\n\n"
+                    f"Server: `{server_name}`\n\n"
+                    f"{description}\n\n"
+                    f"## Arguments\n{arg_block}\n\n"
+                    f"## How to use\n"
+                    f"Call the `mcp_get_prompt` tool with:\n"
+                    f"- `server`: `{server_name}`\n"
+                    f"- `name`: `{prompt_name}`\n"
+                    f"- `arguments`: object matching the prompt arguments\n"
+                )
+                name = self.mcp_skill_name(server_name, prompt_name)
+                skills[name] = Skill(
+                    name=name,
+                    description=description[:200],
+                    content=content,
+                    slash_command=None,
+                    source=f"mcp:{server_name}",
+                )
+        self._mcp_skills = skills
+        self._reapply_mcp_skills()
+        return len(skills)
+
+    def _reapply_mcp_skills(self) -> None:
+        # Remove stale MCP skills first, then add current ones. MCP skills never
+        # override a file-backed skill with the same name.
+        for name in list(self._skills):
+            skill = self._skills.get(name)
+            if skill is not None and str(skill.source).startswith("mcp:"):
+                self._skills.pop(name, None)
+        for name, skill in self._mcp_skills.items():
+            if name in self._skills:
+                continue
+            self._skills[name] = skill
+
     # --- disk edit / remove (admin-managed skills) ------------------------- #
 
     def _resolve_skill_path(self, name: str) -> Path | None:
@@ -375,10 +455,10 @@ class SkillRegistry:
     def is_user_owned(self, name: str) -> bool:
         """Whether a discovered skill is the user's own, and so may be mutated.
 
-        Only custom skills qualify. Base skills ship with the app and packaged
-        ones live in the installed package: both are the app's, not the user's,
-        and deleting one either destroys a shipped file or silently does nothing.
-        Unknown names are not user-owned either.
+        Only custom skills qualify. Base skills ship with the app, packaged ones
+        live in the installed package, and MCP skills are virtual discovery
+        records: none of those are the user's to modify. Unknown names are not
+        user-owned either.
         """
         skill = self._skills.get(name)
         return bool(skill) and self.category_for(skill) == self.CATEGORY_CUSTOM
@@ -477,19 +557,23 @@ class SkillRegistry:
     CATEGORY_BASE = "base"
     CATEGORY_CUSTOM = "custom"
     CATEGORY_PACKAGED = "packaged"
+    CATEGORY_MCP = "mcp"
 
     def category_for(self, skill: Skill) -> str:
-        """Classify a discovered skill as base, custom or packaged.
+        """Classify a discovered skill as base, custom, packaged, or MCP.
 
         ``base`` skills ship under ``codeassist/skills`` and belong to the app,
         so they are not the user's to modify. ``custom`` skills live in a
         user-writable directory (``runtime/skills``) and are the only ones the
         admin page may edit or delete. ``packaged`` skills come from the
         installed package, outside the workspace entirely, so they are immutable.
+        ``mcp`` skills are virtual prompt-discovery records from live MCP servers.
         """
         source = skill.source or ""
         if source.startswith(self.PACKAGE_SOURCE_PREFIX):
             return self.CATEGORY_PACKAGED
+        if source == "mcp" or source.startswith("mcp:"):
+            return self.CATEGORY_MCP
         return self._category_for(source)
 
     def _category_for(self, rel_posix: str) -> str:

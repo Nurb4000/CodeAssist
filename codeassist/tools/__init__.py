@@ -405,9 +405,11 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     # Register MCP tools (if MCP client exists)
     if mcp_client:
-        from codeassist.mcp_client import MCPToolWrapper
+        from codeassist.mcp_client import MCPPromptTool, MCPResourceTool, MCPToolWrapper
         for mcp_tool in mcp_client.get_tools():
             registry.register(MCPToolWrapper(mcp_tool, mcp_client))
+        registry.register(MCPPromptTool(mcp_client))
+        registry.register(MCPResourceTool(mcp_client))
 
     # Register plugin tools
     if plugin_registry:
