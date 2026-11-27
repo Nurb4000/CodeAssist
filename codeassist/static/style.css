@@ -2062,4 +2062,6 @@ body.is-working .mode-dot {
 [data-theme="light"] .pty-panel-body { background: #f6f8fa; color: #24292f; }
 
 .keybinds-conflict { min-height: 1.2em; color: var(--red); font-size: 12px; margin-bottom: 8px; }
-.keybind-input.keybind-conflict { border-color: var(--red); outline-color: var(--red); }
+.keybinds-conflict:not(:empty) { font-weight: 500; }
+.keybind-input.keybind-conflict { border-color: var(--red); outline-color: var(--red); background: rgba(239, 68, 68, 0.08); }
+.keybinds-modal .modal-card:focus-visible, .keybind-input:focus-visible, .modal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

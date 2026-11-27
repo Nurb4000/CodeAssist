@@ -186,7 +186,7 @@ CodeAssist automatically manages context window limits during long sessions:
 - **Staged revert / redo / per-message diff**: Revert can be staged non-destructively at any message, committed to a redo stack, cleared, or redone. Per-message diff shows recorded file snapshot previews; staged revert currently affects session history/context, not filesystem state.
 - **Worktree + persistent PTY tools**: Dedicated `worktree` tool for git worktree list/create/remove/prune, and `pty` tool for persistent interactive terminal sessions across tool calls. PTY output streams to the UI as live `pty_output` websocket events; PTY metadata/output buffers persist across CodeAssist restarts, and live processes lost on restart are reported as recovered metadata only.
 - **Worktree-aware sessions**: Sessions can be bound to a workspace/worktree path inside the configured workspace. The sidebar can create sessions against a selected worktree, session APIs expose/update `workspace`, and an idle WebSocket session can switch workspace with `set_workspace`.
-- **UI theming/keybinds**: Light/dark theme toggle and configurable keyboard shortcuts persisted in browser local storage, with keybind conflict detection and accessibility polish in the keybinds dialog.
+- **UI theming/keybinds**: Light/dark theme toggle and configurable keyboard shortcuts persisted in browser local storage. The keybinds dialog includes conflict detection, normalization, aria labels/descriptions, focus trapping, and keyboard-accessible save/reset/cancel behavior.
 
 Configuration in `config.toml`:
 ```toml

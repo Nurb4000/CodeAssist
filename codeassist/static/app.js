@@ -1823,46 +1823,82 @@ if (commandPaletteBtn) commandPaletteBtn.addEventListener('click', openCommandPa
 
 function openKeybindsDialog() {
     if (document.querySelector('.keybinds-modal')) return;
+    const priorFocus = document.activeElement;
     const kb = getKeybinds();
     const rows = Object.entries(DEFAULT_KEYBINDS).map(([name, def]) => {
         const label = name.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase());
         const val = escapeHtml(kb[name] || def);
-        return `<label class="modal-field"><span class="modal-label">${escapeHtml(label)}</span><input class="modal-input keybind-input" data-kb="${escapeHtml(name)}" value="${val}" placeholder="${escapeHtml(def)}" aria-label="${escapeHtml(label)} keyboard shortcut"></label>`;
+        const desc = `${label} keyboard shortcut. Default: ${def}.`;
+        return `<label class="modal-field"><span class="modal-label">${escapeHtml(label)}</span><input class="modal-input keybind-input" data-kb="${escapeHtml(name)}" value="${val}" placeholder="${escapeHtml(def)}" aria-label="${escapeHtml(label)} keyboard shortcut" aria-describedby="keybinds-hint keybinds-conflict"></label>`;
     }).join('');
     const bd = openModal(
-        `<h3 class="modal-title" id="keybinds-title">Keyboard shortcuts</h3><p class="modal-hint" id="keybinds-hint">Use Mod for Ctrl/Cmd. Examples: Mod+K, Mod+Shift+F, Enter. Conflicts are highlighted.</p><div id="keybinds-conflict" class="keybinds-conflict" role="status" aria-live="polite"></div>${rows}`,
-        `<button class="modal-btn" id="keybinds-reset">Reset defaults</button><button class="modal-btn" id="keybinds-cancel">Cancel</button><button class="modal-btn primary" id="keybinds-save">Save</button>`
+        `<h3 class="modal-title" id="keybinds-title">Keyboard shortcuts</h3><p class="modal-hint" id="keybinds-hint">Use Mod for Ctrl/Cmd. Examples: Mod+K, Mod+Shift+F, Enter. Conflicts are highlighted; each action must have a unique shortcut.</p><div id="keybinds-conflict" class="keybinds-conflict" role="status" aria-live="polite" aria-atomic="true"></div>${rows}`,
+        `<button class="modal-btn" id="keybinds-reset" type="button">Reset defaults</button><button class="modal-btn" id="keybinds-cancel" type="button">Cancel</button><button class="modal-btn primary" id="keybinds-save" type="button">Save</button>`
     );
     bd.classList.add('keybinds-modal');
     bd.setAttribute('role', 'dialog');
     bd.setAttribute('aria-modal', 'true');
     bd.setAttribute('aria-labelledby', 'keybinds-title');
+    bd.setAttribute('aria-describedby', 'keybinds-hint');
     const conflictEl = bd.querySelector('#keybinds-conflict');
     const inputs = () => Array.from(bd.querySelectorAll('.keybind-input'));
+    const focusables = () => Array.from(bd.querySelectorAll('input:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])'));
+
     function detectConflicts() {
-        const seen = new Map();
-        let conflicts = [];
+        const seen = new Map(); // normalized -> [input, actionName]
+        const conflicts = [];
         inputs().forEach((i) => {
             i.classList.remove('keybind-conflict');
+            i.removeAttribute('aria-invalid');
             const n = normalizeKeybind(i.value);
             if (!n) return;
-            if (seen.has(n)) { conflicts.push(n); i.classList.add('keybind-conflict'); seen.get(n).classList.add('keybind-conflict'); }
-            else seen.set(n, i);
+            const label = i.dataset.kb || 'action';
+            if (seen.has(n)) {
+                const prev = seen.get(n);
+                conflicts.push(`${prev.label} and ${label} both use ${n}`);
+                i.classList.add('keybind-conflict'); i.setAttribute('aria-invalid', 'true');
+                prev.input.classList.add('keybind-conflict'); prev.input.setAttribute('aria-invalid', 'true');
+            } else {
+                seen.set(n, { input: i, label });
+            }
         });
-        conflictEl.textContent = conflicts.length ? `Conflicting shortcut: ${[...new Set(conflicts)].join(', ')}` : '';
+        conflictEl.textContent = conflicts.length ? `Conflicts: ${conflicts.join('; ')}.` : 'No conflicts.';
         return conflicts.length === 0;
     }
+
+    function trapFocus(e) {
+        if (e.key !== 'Tab') return;
+        const els = focusables();
+        if (!els.length) return;
+        const first = els[0];
+        const last = els[els.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    bd.addEventListener('keydown', trapFocus);
+    const previousRemove = bd.remove.bind(bd);
+    bd.remove = () => {
+        bd.removeEventListener('keydown', trapFocus);
+        previousRemove();
+        if (priorFocus && typeof priorFocus.focus === 'function') priorFocus.focus();
+    };
+
     inputs().forEach((i) => i.addEventListener('input', detectConflicts));
     detectConflicts();
     bd.querySelector('#keybinds-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#keybinds-reset').addEventListener('click', () => {
         inputs().forEach((i) => { i.value = DEFAULT_KEYBINDS[i.dataset.kb] || ''; });
         detectConflicts();
+        inputs()[0]?.focus();
     });
     bd.querySelector('#keybinds-save').addEventListener('click', () => {
-        if (!detectConflicts()) { showStatus('Resolve keybind conflicts before saving.', 'error'); return; }
+        if (!detectConflicts()) { showStatus('Resolve keybind conflicts before saving.', 'error'); inputs().find(i => i.classList.contains('keybind-conflict'))?.focus(); return; }
         const next = { ...DEFAULT_KEYBINDS };
-        inputs().forEach((i) => { const n = normalizeKeybind(i.value); if (n) next[i.dataset.kb] = n; });
+        for (const i of inputs()) {
+            const n = normalizeKeybind(i.value);
+            if (!n) { showStatus(`Shortcut for ${i.dataset.kb} cannot be empty.`, 'error'); i.focus(); return; }
+            next[i.dataset.kb] = n;
+        }
         try { localStorage.setItem(KEYBINDS_KEY, JSON.stringify(next)); } catch {}
         bd.remove();
         showStatus('Keyboard shortcuts saved.', 'info');
@@ -3861,7 +3897,7 @@ function setKeybind(name, value) {
 }
 
 function normalizeKeybind(str) {
-    return String(str || '')
+    const parts = String(str || '')
         .split('+')
         .map((p) => p.trim())
         .filter(Boolean)
@@ -3872,9 +3908,14 @@ function normalizeKeybind(str) {
             if (l === 'alt' || l === 'option') return 'Alt';
             if (l === 'enter' || l === 'return') return 'Enter';
             if (l === 'esc' || l === 'escape') return 'Escape';
+            if (l === 'space' || l === 'spacebar') return 'Space';
             return p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1).toLowerCase();
-        })
-        .join('+');
+        });
+    const order = ['Mod', 'Shift', 'Alt'];
+    const mods = order.filter((m) => parts.includes(m));
+    const keys = parts.filter((p) => !order.includes(p));
+    const key = keys[keys.length - 1] || '';
+    return [...mods, ...(key ? [key] : [])].join('+');
 }
 
 function eventToKeybind(e) {
@@ -3884,7 +3925,8 @@ function eventToKeybind(e) {
     if (e.altKey) parts.push('Alt');
     const key = e.key;
     if (!['Control', 'Meta', 'Shift', 'Alt'].includes(key)) {
-        parts.push(key.length === 1 ? key.toUpperCase() : (key === 'Escape' ? 'Escape' : key));
+        if (key === ' ') parts.push('Space');
+        else parts.push(key.length === 1 ? key.toUpperCase() : (key === 'Escape' ? 'Escape' : key));
     }
     return normalizeKeybind(parts.join('+'));
 }
