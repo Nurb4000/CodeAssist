@@ -32,6 +32,7 @@ const API_FIXTURES = {
   },
   '/api/sessions': [{ id: 'session-1', name: 'test' }],
   '/api/sessions/session-1/messages': [],
+  '/api/sessions/session-1/messages/search': [],
   '/api/todos': [],
   '/api/kb/stats': { total: 0 },
   '/api/agents': [{ id: 'default', name: 'CodeAssist' }],

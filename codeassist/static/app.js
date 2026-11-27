@@ -11,6 +11,16 @@ const attachBtn = document.getElementById('attach-btn');
 const fileInputEl = document.getElementById('file-input');
 const attachPreviewEl = document.getElementById('attach-preview');
 const inputAreaEl = document.getElementById('input-area');
+// In-session message search lives outside #messages so its panel never joins the
+// scrollable transcript (and never breaks the flow-section layout contract).
+const messageSearchEl = document.getElementById('message-search');
+const messageSearchInputEl = document.getElementById('message-search-input');
+const messageSearchResultsEl = document.getElementById('message-search-results');
+const messageSearchStatusEl = document.getElementById('message-search-status');
+const messageSearchBtn = document.getElementById('message-search-btn');
+const messageSearchCloseBtn = document.getElementById('message-search-close');
+const searchMessagesBtn = document.getElementById('search-messages-btn');
+let messageSearchSeq = 0; // stale-response guard for overlapping searches
 // Short display labels for built-in agents (shown when the selector is collapsed).
 const AGENT_SHORT = {
     default: 'Full', research: 'Research', review: 'Review',
@@ -645,6 +655,9 @@ function switchSession(id) {
     // that `await switchSession(...)` still settle once the switch finishes.
     if (isStreaming) return sessionSwitchQueue;
     currentSessionId = id;
+    // Search hits belong to the old transcript: invalidate them even when a
+    // mid-turn switch bails before loadMessages() gets a chance to do it.
+    resetMessageSearch();
     hideContinueButton();
     // Plans are persisted per session, so switching no longer destroys
     // anything: drop the old session's panel and load the new one's.
@@ -678,6 +691,7 @@ async function deleteSession(id) {
         if (currentSessionId === id) {
             currentSessionId = null;
             messagesEl.innerHTML = '';
+            resetMessageSearch();
             clearPlanDisplay(); // the plan went with the session
             resetFlowSections();
             showWelcome();
@@ -705,6 +719,7 @@ async function loadMessages() {
         return;
     }
     messagesEl.innerHTML = '';
+    resetMessageSearch(); // hits pointed into the transcript we just wiped
     // #messages was just wiped, so the Work block, the past-thinking container
     // and the flow anchors went with it. Their handles are cached, so reset them
     // too or this session's steps and reasoning are built inside detached nodes.
@@ -714,11 +729,12 @@ async function loadMessages() {
     if (msgs.length === 0) { showWelcome(); return; }
 
     // Consecutive prose-only assistant turns accumulate into one summary message
-    // in the main flow; tool-using turns each become a work step.
-    let summaryBuf = { prose: '', reasoning: '' };
+    // in the main flow; tool-using turns each become a work step. The first row's
+    // id is kept on the summary bubble so search hits can navigate back to it.
+    let summaryBuf = { prose: '', reasoning: '', id: null };
     const flushSummary = () => {
-        if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf = { prose: '', reasoning: '' }; return; }
-        const div = appendAssistantMessage(summaryBuf.prose);
+        if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf = { prose: '', reasoning: '', id: null }; return; }
+        const div = appendAssistantMessage(summaryBuf.prose, summaryBuf.id);
         if (summaryBuf.reasoning) {
             // Same rule a live turn follows: reasoning is filed in the collapsed
             // past-thinking container, so a reloaded session looks exactly like
@@ -730,27 +746,28 @@ async function loadMessages() {
                 archiveThinking(think);
             }
         }
-        summaryBuf = { prose: '', reasoning: '' };
+        summaryBuf = { prose: '', reasoning: '', id: null };
     };
 
     for (const m of msgs) {
         if (m.role === 'user') {
             flushSummary();
-            appendUserMessage(m.content, m.attachments);
+            appendUserMessage(m.content, m.attachments, m.id);
         } else if (m.role === 'assistant') {
             if (m.tool_calls) {
                 flushSummary();
-                const step = openWorkStep(++workStepCount);
+                const step = openWorkStep(++workStepCount, m.id);
                 appendStepProse(step, m.content);
                 if (m.reasoning_content) appendStepReasoning(step, m.reasoning_content);
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
                 for (const tc of tcs) appendToolCallTo(step, tc.function?.name || tc.name, tc.function?.arguments || '{}', '', tc.id);
             } else {
+                if (!summaryBuf.prose && !summaryBuf.reasoning) summaryBuf.id = m.id;
                 summaryBuf.prose += m.content;
                 summaryBuf.reasoning += m.reasoning_content || '';
             }
         } else if (m.role === 'tool') {
-            if (activeStepEl) updateToolResultIn(activeStepEl, m.tool_call_id, m.content);
+            if (activeStepEl) updateToolResultIn(activeStepEl, m.tool_call_id, m.content, m.id);
         }
     }
     flushSummary();
@@ -762,9 +779,10 @@ async function loadMessages() {
 // history zone. Reload has no live run, so there is no active step: every step is
 // a completed one living inside the (collapsed) work block. `activeStepEl` still
 // points at the newest step so its tool results match by id. Returns the step.
-function openWorkStep(n) {
+function openWorkStep(n, messageId = null) {
     ensureWorkBlock();
     const step = createWorkStep(n);
+    if (messageId != null) step.dataset.messageId = String(messageId);
     workHistoryEl.appendChild(step);
     activeStepEl = step;
     updateWorkCount();
@@ -949,11 +967,12 @@ function beginTurnSections() {
     // is the correct boundary for starting a fresh session's reasoning.
 }
 
-function appendUserMessage(text, images = []) {
+function appendUserMessage(text, images = [], messageId = null) {
     removeWelcome();
     beginTurnSections();
     const div = document.createElement('div');
     div.className = 'message';
+    if (messageId != null) div.dataset.messageId = String(messageId);
     div.innerHTML = `<div class="message-role user">You</div><div class="message-content user-content"></div>`;
     const content = div.querySelector('.message-content');
     if (images && images.length > 0) {
@@ -996,10 +1015,11 @@ function ensureMainMessage() {
     return appendAssistantMessage('');
 }
 
-function appendAssistantMessage(text) {
+function appendAssistantMessage(text, messageId = null) {
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'message';
+    if (messageId != null) div.dataset.messageId = String(messageId);
     div.innerHTML =
         `<div class="message-role assistant">CodeAssist</div>` +
         `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
@@ -1133,10 +1153,11 @@ function matchToolCallIn(stack, id) {
 }
 
 // Update the matching tool call in `step` with a freshly computed result.
-function updateToolResultIn(step, id, output) {
+function updateToolResultIn(step, id, output, messageId = null) {
     const div = matchToolCallIn(step.querySelector('.tool-call-stack'), id);
     if (!div) return;
     div._output = output || '';
+    if (messageId != null) div.dataset.messageId = String(messageId);
     applyToolCallRender(div);
 }
 
@@ -1482,6 +1503,194 @@ function maybeScrollToBottom() {
     if (atBottom) {
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
+}
+
+// ── In-session message search ──────────────────────────────────────────────
+// Backend: GET /api/sessions/{id}/messages/search?q=... (FTS5 with LIKE fallback).
+// The panel is a sibling of #messages so it never becomes a flow section.
+
+function messageSearchTerms(query) {
+    return String(query || '').trim().split(/\s+/).filter(Boolean).slice(0, 20);
+}
+
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function clearMessageHighlights() {
+    messagesEl.querySelectorAll('.message-search-hit').forEach((el) => {
+        el.classList.remove('message-search-hit');
+    });
+}
+
+function setMessageSearchStatus(text) {
+    if (messageSearchStatusEl) messageSearchStatusEl.textContent = text || '';
+}
+
+function resetMessageSearch() {
+    // Bump before returning so an in-flight search can never paint stale hits.
+    messageSearchSeq++;
+    if (!messageSearchEl) return;
+    messageSearchEl.hidden = true;
+    if (messageSearchInputEl) messageSearchInputEl.value = '';
+    if (messageSearchResultsEl) messageSearchResultsEl.innerHTML = '';
+    setMessageSearchStatus('');
+    clearMessageHighlights();
+}
+
+function openMessageSearch() {
+    if (!messageSearchEl) return;
+    messageSearchEl.hidden = false;
+    messageSearchInputEl.focus();
+    messageSearchInputEl.select();
+}
+
+// Build a snippet with real <mark> nodes rather than interpolated HTML: message
+// content is untrusted, and FTS snippet() markup would splice raw text into DOM.
+function appendSearchSnippet(parent, content, terms, maxLen = 220) {
+    const text = String(content ?? '').replace(/\s+/g, ' ').trim();
+    if (!terms.length || !text) {
+        parent.textContent = text.slice(0, maxLen);
+        return;
+    }
+    const pattern = terms.map(escapeRegExp).join('|');
+    const finder = new RegExp(pattern, 'gi');
+    const first = finder.exec(text);
+    const start = first && first.index > maxLen / 2
+        ? first.index - Math.floor(maxLen / 2)
+        : 0;
+    const visible = text.slice(start, start + maxLen);
+    if (start > 0) parent.appendChild(document.createTextNode('…'));
+    const matcher = new RegExp(pattern, 'gi');
+    let last = 0;
+    let match;
+    while ((match = matcher.exec(visible)) !== null) {
+        if (match.index > last) {
+            parent.appendChild(document.createTextNode(visible.slice(last, match.index)));
+        }
+        const mark = document.createElement('mark');
+        mark.textContent = match[0];
+        parent.appendChild(mark);
+        last = match.index + match[0].length;
+    }
+    if (last < visible.length) parent.appendChild(document.createTextNode(visible.slice(last)));
+    if (start + maxLen < text.length) parent.appendChild(document.createTextNode('…'));
+}
+
+function renderMessageSearchResults(results, terms) {
+    messageSearchResultsEl.innerHTML = '';
+    for (const result of results) {
+        const row = document.createElement('div');
+        row.className = 'message-search-result';
+        row.setAttribute('role', 'listitem');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'message-search-result-btn';
+        if (result.id != null) button.dataset.messageId = String(result.id);
+        if (result.tool_call_id != null) button.dataset.callId = String(result.tool_call_id);
+        const role = document.createElement('span');
+        role.className = 'message-search-result-role';
+        role.textContent = result.role || 'message';
+        const body = document.createElement('span');
+        body.className = 'message-search-result-text';
+        appendSearchSnippet(body, result.content || result.reasoning_content || '', terms);
+        button.appendChild(role);
+        button.appendChild(body);
+        button.addEventListener('click', () => jumpToMessageSearchHit(result));
+        row.appendChild(button);
+        messageSearchResultsEl.appendChild(row);
+    }
+}
+
+// Quote a value for use inside a CSS attribute selector. Stored ids are UUIDs,
+// but imported sessions may carry arbitrary ids, so never interpolate raw.
+function cssAttrValue(value) {
+    return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function jumpToMessageSearchHit(result) {
+    if (!result) return;
+    let target = null;
+    if (result.id != null) {
+        target = messagesEl.querySelector(`[data-message-id="${cssAttrValue(result.id)}"]`);
+    }
+    if (!target && result.tool_call_id != null) {
+        target = messagesEl.querySelector(
+            `.tool-call[data-call-id="${cssAttrValue(result.tool_call_id)}"]`
+        );
+    }
+    if (!target) {
+        setMessageSearchStatus('That message is no longer in the transcript.');
+        return;
+    }
+    clearMessageHighlights();
+    // Tool hits live inside collapsed Work steps; reveal them before scrolling.
+    const step = target.closest('.work-step');
+    if (step) {
+        step.classList.add('open');
+        const details = step.querySelector('details');
+        if (details) details.open = true;
+    }
+    const block = target.closest('.work-block');
+    if (block && block.classList.contains('history-hidden')) {
+        block.classList.remove('history-hidden');
+        const chevron = block.querySelector('.work-chevron');
+        if (chevron) chevron.textContent = '▾';
+        workBlockUserToggled = true;
+    }
+    target.classList.add('message-search-hit');
+    if (typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ block: 'center' });
+    } else {
+        messagesEl.scrollTop = target.offsetTop || 0;
+    }
+}
+
+async function runMessageSearch() {
+    if (!messageSearchInputEl || !currentSessionId) return;
+    const query = messageSearchInputEl.value.trim();
+    const terms = messageSearchTerms(query);
+    if (!terms.length) {
+        messageSearchSeq++;
+        messageSearchResultsEl.innerHTML = '';
+        clearMessageHighlights();
+        setMessageSearchStatus('Enter a word or phrase to search.');
+        return;
+    }
+    const seq = ++messageSearchSeq;
+    setMessageSearchStatus('Searching…');
+    try {
+        const path = `/api/sessions/${encodeURIComponent(currentSessionId)}` +
+            `/messages/search?q=${encodeURIComponent(query)}`;
+        const results = await api('GET', path);
+        if (seq !== messageSearchSeq) return; // superseded by a newer search or switch
+        const rows = Array.isArray(results) ? results : [];
+        clearMessageHighlights();
+        renderMessageSearchResults(rows, terms);
+        setMessageSearchStatus(rows.length
+            ? `${rows.length} result${rows.length === 1 ? '' : 's'}`
+            : 'No messages match that search.');
+    } catch (e) {
+        if (seq !== messageSearchSeq) return;
+        messageSearchResultsEl.innerHTML = '';
+        setMessageSearchStatus(e.message || 'Search failed');
+    }
+}
+
+if (searchMessagesBtn) searchMessagesBtn.addEventListener('click', openMessageSearch);
+if (messageSearchBtn) messageSearchBtn.addEventListener('click', runMessageSearch);
+if (messageSearchCloseBtn) messageSearchCloseBtn.addEventListener('click', resetMessageSearch);
+if (messageSearchInputEl) {
+    messageSearchInputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            runMessageSearch();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            resetMessageSearch();
+            inputEl.focus();
+        }
+    });
 }
 
 // escapeHtml is the shared helper loaded from /static/shared/escapeHtml.js
@@ -3062,6 +3271,13 @@ function initSidebarToggle() {
             const hidden = !app.classList.contains('sidebar-hidden');
             applySidebarHidden(hidden);
             localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(!hidden));
+        }
+        // Avoid plain Ctrl+F (the browser's own find) and Ctrl+K (command palette).
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            openMessageSearch();
+        } else if (e.key === 'Escape' && messageSearchEl && !messageSearchEl.hidden) {
+            resetMessageSearch();
         }
     });
 }
