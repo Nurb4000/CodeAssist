@@ -40,6 +40,9 @@ function agentShortLabel(id) {
 const BUILTIN_COMMANDS = [
     { name: 'compact', description: 'Checkpoint this session for a faster resume' },
     { name: 'undo', description: 'Undo the last turn' },
+    { name: 'redo', description: 'Redo the last committed revert' },
+    { name: 'revert-clear', description: 'Clear staged revert without deleting messages' },
+    { name: 'revert-commit', description: 'Commit staged revert and enable redo' },
     { name: 'stop', description: 'Stop the current turn' },
     { name: 'agent', description: 'Switch agent — /agent <id>' },
     { name: 'help', description: 'Show available commands' },
@@ -66,6 +69,8 @@ let pendingAudio = [];
 let visionCapable = false;
 let audioCapable = false;
 let currentAgentName = null;
+let currentRevertState = null;
+let currentRedoState = { count: 0, can_redo: false };
 
 const MAX_IMAGES_PER_MESSAGE = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -772,14 +777,11 @@ async function loadMessages() {
     // Consecutive prose-only assistant turns accumulate into one summary message
     // in the main flow; tool-using turns each become a work step. The first row's
     // id is kept on the summary bubble so search hits can navigate back to it.
-    let summaryBuf = { prose: '', reasoning: '', id: null };
+    let summaryBuf = { prose: '', reasoning: '', id: null, reverted: false };
     const flushSummary = () => {
-        if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf = { prose: '', reasoning: '', id: null }; return; }
-        const div = appendAssistantMessage(summaryBuf.prose, summaryBuf.id);
+        if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf = { prose: '', reasoning: '', id: null, reverted: false }; return; }
+        const div = appendAssistantMessage(summaryBuf.prose, summaryBuf.id, !!summaryBuf.reverted);
         if (summaryBuf.reasoning) {
-            // Same rule a live turn follows: reasoning is filed in the collapsed
-            // past-thinking container, so a reloaded session looks exactly like
-            // the turn that produced it. The message keeps the answer only.
             const think = div.querySelector('.thinking-block');
             const rEl = think && think.querySelector('.thinking-content');
             if (rEl) {
@@ -787,25 +789,27 @@ async function loadMessages() {
                 archiveThinking(think);
             }
         }
-        summaryBuf = { prose: '', reasoning: '', id: null };
+        summaryBuf = { prose: '', reasoning: '', id: null, reverted: false };
     };
 
     for (const m of msgs) {
+        const reverted = !!m.reverted;
         if (m.role === 'user') {
             flushSummary();
-            appendUserMessage(m.content, m.attachments, m.id);
+            appendUserMessage(m.content, m.attachments, m.id, reverted);
         } else if (m.role === 'assistant') {
             if (m.tool_calls) {
                 flushSummary();
-                const step = openWorkStep(++workStepCount, m.id);
+                const step = openWorkStep(++workStepCount, m.id, reverted);
                 appendStepProse(step, m.content);
                 if (m.reasoning_content) appendStepReasoning(step, m.reasoning_content);
                 const tcs = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls;
                 for (const tc of tcs) appendToolCallTo(step, tc.function?.name || tc.name, tc.function?.arguments || '{}', '', tc.id);
             } else {
-                if (!summaryBuf.prose && !summaryBuf.reasoning) summaryBuf.id = m.id;
-                summaryBuf.prose += m.content;
+                if (!summaryBuf.prose && !summaryBuf.reasoning) { summaryBuf.id = m.id; summaryBuf.reverted = reverted; }
+                summaryBuf.prose += m.content || '';
                 summaryBuf.reasoning += m.reasoning_content || '';
+                summaryBuf.reverted = summaryBuf.reverted || reverted;
             }
         } else if (m.role === 'tool') {
             if (activeStepEl) updateToolResultIn(activeStepEl, m.tool_call_id, m.content, m.id);
@@ -814,16 +818,18 @@ async function loadMessages() {
     flushSummary();
     finalizeState();
     scrollToBottom();
+    await refreshRevertState();
 }
 
 // Create a fresh work step during reload and drop it straight into the collapsed
 // history zone. Reload has no live run, so there is no active step: every step is
 // a completed one living inside the (collapsed) work block. `activeStepEl` still
 // points at the newest step so its tool results match by id. Returns the step.
-function openWorkStep(n, messageId = null) {
+function openWorkStep(n, messageId = null, reverted = false) {
     ensureWorkBlock();
     const step = createWorkStep(n);
     if (messageId != null) step.dataset.messageId = String(messageId);
+    if (reverted) step.classList.add('reverted');
     workHistoryEl.appendChild(step);
     activeStepEl = step;
     updateWorkCount();
@@ -1008,12 +1014,13 @@ function beginTurnSections() {
     // is the correct boundary for starting a fresh session's reasoning.
 }
 
-function appendUserMessage(text, images = [], messageId = null) {
+function appendUserMessage(text, images = [], messageId = null, reverted = false) {
     removeWelcome();
     beginTurnSections();
     const div = document.createElement('div');
-    div.className = 'message';
+    div.className = 'message' + (reverted ? ' reverted' : '');
     if (messageId != null) div.dataset.messageId = String(messageId);
+    if (reverted) div.dataset.reverted = 'true';
     div.innerHTML = `<div class="message-role user">You</div><div class="message-content user-content"></div>`;
     const content = div.querySelector('.message-content');
     if (images && images.length > 0) {
@@ -1038,6 +1045,25 @@ function appendUserMessage(text, images = [], messageId = null) {
         if (flex.childElementCount > 0) content.appendChild(flex);
     }
     content.appendChild(document.createTextNode(text));
+    if (messageId != null) {
+        const actions = document.createElement('div');
+        actions.className = 'message-actions';
+        const revertBtn = document.createElement('button');
+        revertBtn.type = 'button';
+        revertBtn.className = 'message-action-btn';
+        revertBtn.textContent = 'Revert here';
+        revertBtn.title = 'Stage revert at this message (non-destructive until committed)';
+        revertBtn.addEventListener('click', () => stageRevertAt(messageId));
+        actions.appendChild(revertBtn);
+        const diffBtn = document.createElement('button');
+        diffBtn.type = 'button';
+        diffBtn.className = 'message-action-btn';
+        diffBtn.textContent = 'Diff';
+        diffBtn.title = 'Show file changes recorded for this message';
+        diffBtn.addEventListener('click', () => showMessageDiff(messageId));
+        actions.appendChild(diffBtn);
+        div.appendChild(actions);
+    }
     lastMainMsgEl = div;
     lastUserEl = div;
     messagesEl.appendChild(div);
@@ -1053,18 +1079,38 @@ function ensureMainMessage() {
     if (role && role.classList.contains('assistant')) {
         return lastMainMsgEl;
     }
-    return appendAssistantMessage('');
+    return appendAssistantMessage('', null, false);
 }
 
-function appendAssistantMessage(text, messageId = null) {
+function appendAssistantMessage(text, messageId = null, reverted = false) {
     removeWelcome();
     const div = document.createElement('div');
-    div.className = 'message';
+    div.className = 'message' + (reverted ? ' reverted' : '');
     if (messageId != null) div.dataset.messageId = String(messageId);
+    if (reverted) div.dataset.reverted = 'true';
     div.innerHTML =
         `<div class="message-role assistant">CodeAssist</div>` +
         `<div class="thinking-block" ${thinkingHiddenAttr()}><details><summary>${thinkingSummaryText()}</summary><div class="thinking-content"></div></details></div>` +
         `<div class="message-content"></div>`;
+    if (messageId != null) {
+        const actions = document.createElement('div');
+        actions.className = 'message-actions';
+        const revertBtn = document.createElement('button');
+        revertBtn.type = 'button';
+        revertBtn.className = 'message-action-btn';
+        revertBtn.textContent = 'Revert here';
+        revertBtn.title = 'Stage revert at this message (non-destructive until committed)';
+        revertBtn.addEventListener('click', () => stageRevertAt(messageId));
+        actions.appendChild(revertBtn);
+        const diffBtn = document.createElement('button');
+        diffBtn.type = 'button';
+        diffBtn.className = 'message-action-btn';
+        diffBtn.textContent = 'Diff';
+        diffBtn.title = 'Show file changes recorded for this message';
+        diffBtn.addEventListener('click', () => showMessageDiff(messageId));
+        actions.appendChild(diffBtn);
+        div.appendChild(actions);
+    }
     messagesEl.appendChild(div);
     lastMainMsgEl = div;
     div.querySelector('.message-content').innerHTML = renderMarkdown(text);
@@ -2097,6 +2143,91 @@ function openModal(bodyHtml, actionsHtml) {
     return backdrop;
 }
 
+
+async function refreshRevertState() {
+    if (!currentSessionId) { currentRevertState = null; currentRedoState = { count: 0, can_redo: false }; renderRevertBar(); return; }
+    try {
+        const data = await api('GET', `/api/sessions/${currentSessionId}/revert`);
+        currentRevertState = data.revert || null;
+        currentRedoState = data.redo || { count: 0, can_redo: false };
+    } catch (_) {
+        // Leave previous state visible; revert bar is advisory.
+    }
+    renderRevertBar();
+}
+
+function renderRevertBar() {
+    let bar = document.getElementById('revert-bar');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'revert-bar';
+        bar.className = 'revert-bar';
+        const plan = document.getElementById('plan-display');
+        plan.parentNode.insertBefore(bar, plan);
+    }
+    const hasRevert = !!(currentRevertState && currentRevertState.message_id);
+    const canRedo = !!(currentRedoState && currentRedoState.can_redo);
+    if (!hasRevert && !canRedo) {
+        bar.hidden = true;
+        bar.innerHTML = '';
+        return;
+    }
+    bar.hidden = false;
+    const parts = [];
+    if (hasRevert) {
+        parts.push(`<span class="revert-bar-status">Staged revert at message <code>${escapeHtml(String(currentRevertState.message_id).slice(0, 8))}</code></span>`);
+        parts.push(`<button type="button" class="revert-bar-btn" data-action="revert-commit">Commit revert</button>`);
+        parts.push(`<button type="button" class="revert-bar-btn" data-action="revert-clear">Clear revert</button>`);
+    }
+    if (canRedo) {
+        parts.push(`<span class="revert-bar-status">Redo available (${Number(currentRedoState.count || 0)})</span>`);
+        parts.push(`<button type="button" class="revert-bar-btn" data-action="redo">Redo</button>`);
+    }
+    bar.innerHTML = `<div class="revert-bar-inner">${parts.join('')}</div>`;
+    bar.querySelectorAll('[data-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const action = btn.getAttribute('data-action');
+            if (action === 'revert-commit') sendWsControl('revert_commit');
+            else if (action === 'revert-clear') sendWsControl('revert_clear');
+            else if (action === 'redo') sendWsControl('redo');
+        });
+    });
+}
+
+function sendWsControl(type, payload = {}) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showStatus('Connect to a session first.', 'error');
+        return;
+    }
+    ws.send(JSON.stringify({ type, ...payload }));
+}
+
+function stageRevertAt(messageId) {
+    if (!messageId) return;
+    sendWsControl('revert_stage', { message_id: messageId });
+}
+
+async function showMessageDiff(messageId) {
+    if (!currentSessionId || !messageId) return;
+    try {
+        const data = await api('GET', `/api/sessions/${currentSessionId}/messages/${messageId}/diff`);
+        const files = data.files || [];
+        if (!files.length) {
+            showStatus('No file snapshot diff recorded for this message.', 'info');
+            return;
+        }
+        const rows = files.map((f) => {
+            const preview = f.content_preview ? `<pre class="diff-preview-block">${escapeHtml(String(f.content_preview))}</pre>` : '<div class="diff-preview-empty">No preview captured.</div>';
+            return `<div class="diff-file"><div class="diff-file-head"><code>${escapeHtml(f.file_path || '')}</code><span class="diff-file-meta">${escapeHtml(f.action || '')}${f.size_bytes != null ? ` · ${Number(f.size_bytes)} bytes` : ''}</span></div>${preview}</div>`;
+        }).join('');
+        const body = `<div class="diff-modal"><p class="diff-modal-meta">Message <code>${escapeHtml(String(messageId).slice(0,8))}</code>${data.reverted ? ' · <span class="revert-pill">reverted</span>' : ''}</p>${rows}</div>`;
+        const bd = openModal(`<h3 class="modal-title">Message diff</h3>${body}`, `<button class="modal-btn primary" id="diff-close-btn">Close</button>`);
+        bd.querySelector('#diff-close-btn').addEventListener('click', () => bd.remove());
+    } catch (e) {
+        showError(e.message || 'Failed to load message diff');
+    }
+}
+
 // ── Slash commands and the command palette ─────────────────────────────────
 // Built-ins stay in the browser: they reuse the same buttons/frames as the UI
 // controls, so a typed command and a click cannot drift apart.
@@ -2125,6 +2256,30 @@ function runBuiltinCommand(name, args = '') {
             showStatus('Connect to a session before undoing a turn.', 'error');
         } else {
             ws.send(JSON.stringify({ type: 'undo' }));
+        }
+        return true;
+    }
+    if (name === 'redo') {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            showStatus('Connect to a session before redoing.', 'error');
+        } else {
+            ws.send(JSON.stringify({ type: 'redo' }));
+        }
+        return true;
+    }
+    if (name === 'revert-clear') {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            showStatus('Connect to a session before clearing a revert.', 'error');
+        } else {
+            ws.send(JSON.stringify({ type: 'revert_clear' }));
+        }
+        return true;
+    }
+    if (name === 'revert-commit') {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            showStatus('Connect to a session before committing a revert.', 'error');
+        } else {
+            ws.send(JSON.stringify({ type: 'revert_commit' }));
         }
         return true;
     }
@@ -2428,15 +2583,13 @@ function connectWS() {
     thisWs.onopen = () => {
         wsConnected = true;
         reconnectAttempt = 0; // connection succeeded: start the next backoff sequence fresh
-        // A checkpoint save can outlive its socket (proxy idle timeout, refresh,
-        // network blip). The terminal frame went to the old socket, so clear the
-        // stale compacting UI here instead of leaving the spinner up forever.
         if (compactingActive) {
             hideProgress();
             clearCompacting();
             if (compactBtn) compactBtn.disabled = false;
         }
         updateConnectionStatus('connected');
+        refreshRevertState();
         // (Re)arm the keepalive; clear any stale timer first.
         if (pingTimer) clearInterval(pingTimer);
         pingTimer = setInterval(() => {
@@ -2516,16 +2669,32 @@ function connectWS() {
         } else if (data.type === 'compacted') {
             showCompactionNotice(data.message);
         } else if (data.type === 'undo_done') {
-            // Undo used to be a silent no-op in the GUI (the server replied but
-            // nothing re-rendered). Reload the transcript so the removed turn
-            // disappears from every view, including the Work section.
-            // loadMessages() clears #messages, so show the confirmation only
-            // after it has rebuilt the transcript -- otherwise the status is
-            // wiped with the old rows and undo still looks like a no-op.
             hideProgress();
             const deleted = !!data.deleted;
             loadMessages().then(() => showStatus(
                 deleted ? 'Undid the last turn.' : 'Nothing to undo.', 'info'
+            ));
+        } else if (data.type === 'rollback_done') {
+            hideProgress();
+            loadMessages().then(() => showStatus(
+                data.deleted ? `Rolled back ${data.deleted} message(s).` : 'Nothing to roll back.', 'info'
+            ));
+        } else if (data.type === 'revert_staged') {
+            hideProgress();
+            loadMessages().then(() => showStatus('Staged revert. Review changes, then commit or clear.', 'info'));
+        } else if (data.type === 'revert_cleared') {
+            hideProgress();
+            loadMessages().then(() => showStatus(data.cleared ? 'Cleared staged revert.' : 'No staged revert to clear.', 'info'));
+        } else if (data.type === 'revert_committed') {
+            hideProgress();
+            loadMessages().then(() => showStatus(
+                data.committed ? `Committed revert (${data.deleted || 0} message(s) removed).` : 'No staged revert to commit.',
+                'info'
+            ));
+        } else if (data.type === 'redo_done') {
+            hideProgress();
+            loadMessages().then(() => showStatus(
+                data.redone ? `Redid ${data.restored || 0} message(s).` : 'Nothing to redo.', 'info'
             ));
         } else if (data.type === 'checkpoint_saved') {
             // Manual compaction is not a turn: the `compacting` frame installed

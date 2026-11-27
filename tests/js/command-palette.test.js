@@ -115,7 +115,7 @@ test('the palette opens from the button or Ctrl+K and lists skills safely', asyn
   assert.ok(env.requests.includes('/api/skills'), 'slash-enabled skills were loaded');
 
   const rows = palette.querySelectorAll('.command-palette-item');
-  assert.equal(rows.length, 6, 'five built-ins plus one skill');
+  assert.equal(rows.length, 9, 'eight built-ins plus one skill');
   assert.ok(Array.from(rows).some((r) => r.textContent.startsWith('/review')));
   assert.equal(rows[rows.length - 1].querySelector('img'), null, 'skill text is not markup');
   assert.ok(rows[rows.length - 1].textContent.includes(dangerous), 'the unsafe description stays literal');

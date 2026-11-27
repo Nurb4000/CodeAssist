@@ -2895,7 +2895,7 @@ class TestWorkingContextPersists:
             return msg_id
 
         mock_session.add_message = AsyncMock(side_effect=add_message)
-        mock_session.get_messages = AsyncMock(side_effect=lambda: list(history))
+        mock_session.get_messages = AsyncMock(side_effect=lambda *a, **k: list(history))
 
         agent.config.compaction.enabled = True
         agent.config.compaction.mode = "text"

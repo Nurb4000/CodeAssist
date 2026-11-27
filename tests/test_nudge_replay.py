@@ -66,8 +66,11 @@ class FakeSession:
                     row["reasoning_content"] = reasoning_content
                 return
 
-    async def get_messages(self):
-        return [dict(r) for r in self.rows]
+    async def get_messages(self, include_reverted=True):
+        rows = [dict(r) for r in self.rows]
+        if not include_reverted:
+            rows = [r for r in rows if not r.get("reverted")]
+        return rows
 
     async def delete_message(self, message_id):
         before = len(self.rows)

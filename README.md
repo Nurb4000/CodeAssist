@@ -183,6 +183,7 @@ CodeAssist automatically manages context window limits during long sessions:
 - **Persisted context checkpoints**: The compacted transcript is saved to a derived cache, so reopening or restarting a session resumes from it instead of replaying and re-summarizing the full history. The raw `messages` rows are never modified, and a checkpoint is discarded automatically if the history or the prompt/compaction settings have changed since it was saved.
 - **Accurate telemetry**: The UI updates the gauge from the provider's reported prompt tokens, and `compacted` is emitted only when the request actually shrank
 - **Smart truncation**: Tool output truncation preserves error/traceback lines for debugging
+- **Staged revert / redo / per-message diff**: Revert can be staged non-destructively at any message, committed to a redo stack, cleared, or redone. Per-message diff shows recorded file snapshot previews; staged revert currently affects session history/context, not filesystem state.
 
 Configuration in `config.toml`:
 ```toml

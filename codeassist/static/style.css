@@ -1949,3 +1949,53 @@ body.is-working .mode-dot {
     background: var(--bg-hover);
     color: var(--text-primary);
 }
+
+/* D3: staged revert / redo / per-message diff */
+.message.reverted, .work-step.reverted {
+    opacity: 0.55;
+    border-left: 3px solid #d97706;
+    padding-left: 10px;
+}
+.message-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+.message-action-btn {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.message-action-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.revert-bar {
+    margin: 8px 16px 0;
+    padding: 8px 12px;
+    border: 1px solid #d97706;
+    background: rgba(217,119,6,0.12);
+    border-radius: 8px;
+    font-size: 12px;
+}
+.revert-bar-inner { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.revert-bar-status { color: var(--text-primary); }
+.revert-bar-btn {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.revert-bar-btn:hover { background: var(--bg-hover); }
+.diff-modal-meta { margin-bottom: 10px; color: var(--text-secondary); font-size: 12px; }
+.diff-file { margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.diff-file-head { display:flex; justify-content:space-between; gap:8px; padding:8px 10px; background: var(--bg-tertiary); font-size: 12px; }
+.diff-file-meta { color: var(--text-secondary); }
+.diff-preview-block { margin:0; padding:10px; max-height:260px; overflow:auto; font-size:12px; white-space:pre-wrap; background: var(--bg-primary); }
+.diff-preview-empty { padding:10px; font-size:12px; color: var(--text-secondary); }
+.revert-pill { color:#d97706; font-weight:600; }

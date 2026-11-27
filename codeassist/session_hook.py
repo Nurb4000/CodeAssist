@@ -521,6 +521,7 @@ Provide a JSON response with:
                             file_path=file_path,
                             action=tool_name,
                             content_preview=str(args.get("content", ""))[:500],
+                            message_id=msg.get("id"),
                         )
                         
                         # Extract file type knowledge
@@ -553,6 +554,7 @@ Provide a JSON response with:
                             session_id=session_id,
                             file_path=file_path,
                             action="read",
+                            message_id=msg.get("id"),
                         )
                         suffix = Path(file_path).suffix.lower()
                         if suffix:

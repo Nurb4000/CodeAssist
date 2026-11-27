@@ -50,7 +50,7 @@ def __getattr__(name: str) -> Path:  # PEP 562: module-level lazy attribute
         return _resolve_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class _DBPool:
@@ -261,6 +261,10 @@ async def init_db():
         if current_version < 19:
             await _add_v19_tables(db)
             current_version = 19
+
+        if current_version < 20:
+            await _add_v20_tables(db)
+            current_version = 20
 
         await db.execute(
             "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
@@ -909,6 +913,52 @@ async def _add_v19_tables(db):
     await db.commit()
 
 
+async def _add_v20_tables(db):
+    """Staged revert/redo state and per-message diff metadata.
+
+    ``session_revert_state`` holds one staged boundary per session. Staging is
+    non-destructive: messages remain in the DB, but the agent context and UI can
+    treat rows at/after the boundary as reverted. Committing deletes the staged
+    rows and moves them to ``session_revert_redo`` so the user can redo.
+    Clearing drops the staged boundary without deleting messages.
+
+    Also adds optional ``message_id`` to ``file_snapshots`` for per-message diff
+    association. Existing rows keep NULL.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS session_revert_state (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            message_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS session_revert_redo (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            boundary_message_id TEXT NOT NULL,
+            messages_json TEXT NOT NULL,
+            attachments_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_session_revert_redo_session_seq "
+        "ON session_revert_redo(session_id, seq)"
+    )
+    # file_snapshots.message_id - best-effort association for per-message diff.
+    cursor = await db.execute("PRAGMA table_info(file_snapshots)")
+    cols = {r["name"] for r in await cursor.fetchall()}
+    if "message_id" not in cols:
+        await db.execute("ALTER TABLE file_snapshots ADD COLUMN message_id TEXT")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_file_snapshots_message ON file_snapshots(message_id)"
+        )
+    await db.commit()
+
+
 async def _ensure_fts5_tables():
     """Create FTS5 virtual tables if they don't exist."""
     try:
@@ -1216,6 +1266,13 @@ class Session:
         attachments: list[dict] | None = None,
         reasoning_content: str | None = None,
     ) -> str:
+        # A new user message creates a new timeline branch. Commit any staged
+        # revert before inserting so reverted rows are removed and redo is cleared.
+        if role == "user":
+            state = await self.get_revert_state()
+            if state:
+                await self.commit_revert(clear_redo=True)
+
         mid = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         async with get_db() as db:
@@ -1363,7 +1420,7 @@ class Session:
                 return None
         return title
 
-    async def get_messages(self) -> list[dict]:
+    async def get_messages(self, *, include_reverted: bool = True) -> list[dict]:
         async with get_db() as db:
             cursor = await db.execute(
                 "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at, rowid",
@@ -1392,8 +1449,16 @@ class Session:
                 }
                 by_message.setdefault(att["message_id"], []).append(entry)
 
+            revert = await self._get_revert_state_row(db)
+            revert_id = revert["message_id"] if revert else None
+            reverted = False
             for msg in messages:
                 msg["attachments"] = by_message.get(msg["id"], [])
+                if revert_id and msg["id"] == revert_id:
+                    reverted = True
+                msg["reverted"] = reverted
+            if not include_reverted and revert_id:
+                messages = [m for m in messages if not m["reverted"]]
             return messages
 
     async def update_message(
@@ -1582,6 +1647,10 @@ class Session:
                 condition = "(created_at > ? OR (created_at = ? AND rowid > ?))"
             params = (row["created_at"], row["created_at"], row["seq"])
             deleted = await self._delete_messages_where(db, condition, params)
+            # History mutation invalidates staged revert/redo/checkpoint state.
+            await db.execute("DELETE FROM session_revert_state WHERE session_id = ?", (self.id,))
+            await db.execute("DELETE FROM session_revert_redo WHERE session_id = ?", (self.id,))
+            await db.execute("DELETE FROM session_context_checkpoints WHERE session_id = ?", (self.id,))
             now = datetime.now(UTC).isoformat()
             await db.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -1721,6 +1790,274 @@ class Session:
                 (self.id,),
             )
             await db.commit()
+
+    async def _get_revert_state_row(self, db) -> dict | None:
+        cursor = await db.execute(
+            "SELECT session_id, message_id, created_at, updated_at "
+            "FROM session_revert_state WHERE session_id = ?",
+            (self.id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_revert_state(self) -> dict | None:
+        async with get_db() as db:
+            row = await self._get_revert_state_row(db)
+        if not row:
+            return None
+        return {
+            "message_id": row["message_id"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    async def clear_revert_state(self) -> bool:
+        """Clear staged revert boundary without deleting messages."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                "DELETE FROM session_revert_state WHERE session_id = ?",
+                (self.id,),
+            )
+            cleared = cursor.rowcount > 0
+            if cleared:
+                await db.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                    (datetime.now(UTC).isoformat(), self.id),
+                )
+            await db.commit()
+        return cleared
+
+    async def _clear_redo_stack(self, db) -> None:
+        await db.execute("DELETE FROM session_revert_redo WHERE session_id = ?", (self.id,))
+
+    async def clear_redo_stack(self) -> None:
+        async with get_db() as db:
+            await self._clear_redo_stack(db)
+            await db.commit()
+
+    async def get_redo_state(self) -> dict:
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) AS count, MAX(seq) AS max_seq FROM session_revert_redo WHERE session_id = ?",
+                (self.id,),
+            )
+            row = await cursor.fetchone()
+        count = int(row["count"] or 0) if row else 0
+        return {"count": count, "can_redo": count > 0}
+
+    async def stage_revert(self, message_id: str) -> dict:
+        """Stage a non-destructive revert boundary at message_id.
+
+        Messages at/after the boundary remain in the DB but are marked reverted
+        and excluded from active agent context. Staging clears the redo stack
+        because a new timeline branch is being created.
+        """
+        now = datetime.now(UTC).isoformat()
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT id FROM messages WHERE id = ? AND session_id = ?",
+                (message_id, self.id),
+            )
+            if not await cursor.fetchone():
+                raise ValueError(f"Message {message_id} not found in session {self.id}")
+            await self._clear_redo_stack(db)
+            await db.execute(
+                """
+                INSERT INTO session_revert_state (session_id, message_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    message_id = excluded.message_id,
+                    updated_at = excluded.updated_at
+                """,
+                (self.id, message_id, now, now),
+            )
+            await db.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (now, self.id),
+            )
+            await db.commit()
+        await self.invalidate_context_checkpoint()
+        state = await self.get_revert_state()
+        return {"staged": True, "revert": state, "redo": await self.get_redo_state()}
+
+    async def _messages_from_rowids(self, db, rowids: list[int]) -> list[dict]:
+        if not rowids:
+            return []
+        placeholders = ",".join("?" for _ in rowids)
+        cursor = await db.execute(
+            f"SELECT * FROM messages WHERE session_id = ? AND rowid IN ({placeholders}) ORDER BY created_at, rowid",
+            (self.id, *rowids),
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+        msg_ids = [r["id"] for r in rows]
+        by_message: dict[str, list[dict]] = {}
+        if msg_ids:
+            att_ph = ",".join("?" for _ in msg_ids)
+            cursor = await db.execute(
+                f"SELECT * FROM message_attachments WHERE message_id IN ({att_ph}) ORDER BY created_at, rowid",
+                (*msg_ids,),
+            )
+            for att in await cursor.fetchall():
+                by_message.setdefault(att["message_id"], []).append(dict(att))
+        for row in rows:
+            row["attachments"] = by_message.get(row["id"], [])
+        return rows
+
+    async def commit_revert(self, *, clear_redo: bool = False) -> dict:
+        """Commit staged revert: delete reverted rows and optionally push to redo stack.
+
+        When clear_redo is True (new timeline branch), the reverted rows are
+        discarded without creating a redo entry and the redo stack is cleared.
+        """
+        async with get_db() as db:
+            revert = await self._get_revert_state_row(db)
+            if not revert:
+                return {"committed": False, "deleted": 0, "redo": await self.get_redo_state()}
+            boundary_id = revert["message_id"]
+            cursor = await db.execute(
+                "SELECT rowid AS seq, created_at FROM messages WHERE id = ? AND session_id = ?",
+                (boundary_id, self.id),
+            )
+            boundary = await cursor.fetchone()
+            if not boundary:
+                await db.execute("DELETE FROM session_revert_state WHERE session_id = ?", (self.id,))
+                await db.commit()
+                return {"committed": False, "deleted": 0, "redo": await self.get_redo_state()}
+
+            condition = "(created_at > ? OR (created_at = ? AND rowid >= ?))"
+            params = (boundary["created_at"], boundary["created_at"], boundary["seq"])
+            cursor = await db.execute(
+                f"SELECT rowid FROM messages WHERE session_id = ? AND {condition} ORDER BY created_at, rowid",
+                (self.id, *params),
+            )
+            rowids = [r["rowid"] for r in await cursor.fetchall()]
+            rows = await self._messages_from_rowids(db, rowids)
+            if not rows:
+                await db.execute("DELETE FROM session_revert_state WHERE session_id = ?", (self.id,))
+                await db.commit()
+                return {"committed": False, "deleted": 0, "redo": await self.get_redo_state()}
+
+            now = datetime.now(UTC).isoformat()
+            redo_id = None
+            if clear_redo:
+                await self._clear_redo_stack(db)
+            else:
+                cursor = await db.execute(
+                    "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_revert_redo WHERE session_id = ?",
+                    (self.id,),
+                )
+                max_seq = int((await cursor.fetchone())["max_seq"] or 0)
+                redo_id = str(uuid.uuid4())
+                attachments = []
+                for row in rows:
+                    for att in row.get("attachments", []):
+                        attachments.append({
+                            "id": att.get("id") or str(uuid.uuid4()),
+                            "message_id": row["id"],
+                            "attachment_type": att.get("attachment_type", "image"),
+                            "mime_type": att.get("mime_type", "application/octet-stream"),
+                            "file_name": att.get("file_name"),
+                            "data": att.get("data", ""),
+                            "created_at": att.get("created_at") or now,
+                        })
+                msg_payload = []
+                for row in rows:
+                    msg_payload.append({
+                        "id": row["id"],
+                        "session_id": row["session_id"],
+                        "role": row["role"],
+                        "content": row.get("content"),
+                        "tool_call_id": row.get("tool_call_id"),
+                        "tool_calls": row.get("tool_calls"),
+                        "name": row.get("name"),
+                        "reasoning_content": row.get("reasoning_content"),
+                        "created_at": row.get("created_at"),
+                    })
+                await db.execute(
+                    "INSERT INTO session_revert_redo (id, session_id, seq, boundary_message_id, messages_json, attachments_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (redo_id, self.id, max_seq + 1, boundary_id, json.dumps(msg_payload, ensure_ascii=False), json.dumps(attachments, ensure_ascii=False), now),
+                )
+
+            deleted = await self._delete_messages_where(db, condition, params)
+            await db.execute("DELETE FROM session_revert_state WHERE session_id = ?", (self.id,))
+            await db.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (now, self.id),
+            )
+            await db.commit()
+
+        await self.invalidate_context_checkpoint()
+        result = {"committed": True, "deleted": deleted, "redo": await self.get_redo_state()}
+        if redo_id:
+            result["redo_id"] = redo_id
+        return result
+
+    async def redo(self) -> dict:
+        """Redo the last committed revert by reinserting its stored rows."""
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT * FROM session_revert_redo WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+                (self.id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return {"redone": False, "restored": 0, "redo": {"count": 0, "can_redo": False}}
+            redo_row = dict(row)
+            messages = json.loads(redo_row["messages_json"] or "[]")
+            attachments = json.loads(redo_row["attachments_json"] or "[]")
+            # Avoid restoring if IDs already exist (should not happen, but be safe).
+            restored = 0
+            for msg in messages:
+                cursor = await db.execute("SELECT 1 FROM messages WHERE id = ?", (msg["id"],))
+                if await cursor.fetchone():
+                    continue
+                await db.execute(
+                    "INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_calls, name, reasoning_content, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        msg["id"],
+                        self.id,
+                        msg.get("role", "user"),
+                        msg.get("content"),
+                        msg.get("tool_call_id"),
+                        msg.get("tool_calls"),
+                        msg.get("name"),
+                        msg.get("reasoning_content"),
+                        msg.get("created_at"),
+                    ),
+                )
+                restored += 1
+            for att in attachments:
+                cursor = await db.execute("SELECT 1 FROM message_attachments WHERE id = ?", (att["id"],))
+                if await cursor.fetchone():
+                    continue
+                cursor = await db.execute("SELECT 1 FROM messages WHERE id = ? AND session_id = ?", (att.get("message_id"), self.id))
+                if not await cursor.fetchone():
+                    continue
+                await db.execute(
+                    "INSERT INTO message_attachments (id, message_id, attachment_type, mime_type, file_name, data, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        att["id"],
+                        att["message_id"],
+                        att.get("attachment_type", "image"),
+                        att.get("mime_type", "application/octet-stream"),
+                        att.get("file_name"),
+                        att.get("data", ""),
+                        att.get("created_at"),
+                    ),
+                )
+            await db.execute("DELETE FROM session_revert_redo WHERE id = ?", (redo_row["id"],))
+            # After redo, stage revert at the boundary again so user can inspect before committing/clearing?
+            # Better to clear staged state and let restored messages be visible; user asked for redo.
+            await db.execute("DELETE FROM session_revert_state WHERE session_id = ?", (self.id,))
+            now = datetime.now(UTC).isoformat()
+            await db.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, self.id))
+            await db.commit()
+
+        await self.invalidate_context_checkpoint()
+        return {"redone": True, "restored": restored, "redo": await self.get_redo_state()}
 
     async def undo_last_turn(self) -> int:
         """Remove the last turn, including the user message that started it.

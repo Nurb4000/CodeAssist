@@ -1698,7 +1698,7 @@ class Agent:
         seeing the full conversation. Only the agent's working context and the
         checkpoint cache are replaced. Returns a small result dict for the UI.
         """
-        history = await self.session.get_messages()
+        history = await self.session.get_messages(include_reverted=False)
         # A fresh agent (e.g. right after reconnect) may not have run a turn yet,
         # so hydrate any existing checkpoint first. Otherwise we would summarize
         # the head from scratch and throw away a summary built over several turns.
@@ -1759,7 +1759,7 @@ class Agent:
         caller then keeps going on the existing context rather than hard-stopping).
         """
         cfg = self.config.compaction
-        history = await self.session.get_messages()
+        history = await self.session.get_messages(include_reverted=False)
         tail_start = _recent_tail_start(history, cfg.tail_turns)
         # Need at least one head row to summarize and at least one tail row to
         # keep; otherwise there is nothing to roll over.
@@ -1919,7 +1919,7 @@ class Agent:
             # ── Phase 0: Build messages (with compaction if needed) ──────
             # Fetch messages once, then track incrementally
             if self._messages is None or self._messages_dirty:
-                self._messages = await self.session.get_messages()
+                self._messages = await self.session.get_messages(include_reverted=False)
                 self._messages_dirty = False
             history = self._messages
 

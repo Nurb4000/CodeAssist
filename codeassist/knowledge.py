@@ -1027,6 +1027,7 @@ class KnowledgeBase:
         content_hash: str | None = None,
         content_preview: str | None = None,
         size_bytes: int | None = None,
+        message_id: str | None = None,
     ) -> str:
         """Log a file snapshot."""
         snapshot_id = str(uuid.uuid4())
@@ -1036,8 +1037,8 @@ class KnowledgeBase:
             await db.execute(
                 """INSERT INTO file_snapshots 
                    (id, session_id, file_path, action, content_hash, content_preview, 
-                    size_bytes, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    size_bytes, created_at, message_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     snapshot_id,
                     session_id,
@@ -1047,6 +1048,7 @@ class KnowledgeBase:
                     content_preview[:500] if content_preview else None,
                     size_bytes,
                     now,
+                    message_id,
                 ),
             )
             await db.commit()
@@ -1069,6 +1071,33 @@ class KnowledgeBase:
                    LIMIT ?""",
                 (file_path, limit),
             )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_session_file_snapshots(
+        session_id: str,
+        message_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Get file snapshots for a session, optionally filtered by message."""
+        async with get_db() as db:
+            if message_id:
+                cursor = await db.execute(
+                    """SELECT * FROM file_snapshots
+                       WHERE session_id = ? AND message_id = ?
+                       ORDER BY created_at, rowid
+                       LIMIT ?""",
+                    (session_id, message_id, limit),
+                )
+            else:
+                cursor = await db.execute(
+                    """SELECT * FROM file_snapshots
+                       WHERE session_id = ?
+                       ORDER BY created_at, rowid
+                       LIMIT ?""",
+                    (session_id, limit),
+                )
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 

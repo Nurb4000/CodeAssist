@@ -1443,6 +1443,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "deleted": deleted,
                     })
 
+            elif data.get("type") == "revert_stage":
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
+                message_id = data.get("message_id")
+                if not message_id:
+                    await websocket.send_json({"type": "error", "message": "message_id is required"})
+                    continue
+                try:
+                    result = await session.stage_revert(message_id)
+                    await websocket.send_json({"type": "revert_staged", **result})
+                except ValueError as e:
+                    await websocket.send_json({"type": "error", "message": str(e)})
+
+            elif data.get("type") == "revert_clear":
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
+                cleared = await session.clear_revert_state()
+                await websocket.send_json({
+                    "type": "revert_cleared",
+                    "cleared": cleared,
+                    "revert": await session.get_revert_state(),
+                    "redo": await session.get_redo_state(),
+                })
+
+            elif data.get("type") == "revert_commit":
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
+                result = await session.commit_revert()
+                await websocket.send_json({"type": "revert_committed", **result})
+
+            elif data.get("type") == "redo":
+                if agent_task and not agent_task.done():
+                    await websocket.send_json({"type": "error", "message": "Agent is busy, please wait"})
+                    continue
+                result = await session.redo()
+                await websocket.send_json({"type": "redo_done", **result})
+
             elif data.get("type") == "confirm_response":
                 confirm_id = data.get("id")
                 approved = data.get("approved", False)

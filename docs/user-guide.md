@@ -187,11 +187,11 @@ transcript is now *persisted* as a checkpoint for the session:
   the server, the agent starts from the saved compacted transcript and extends it with only messages
   added since. You do not pay for summarizing the same history again on every reopen.
 - **Your transcript is unchanged** — a checkpoint is a derived cache, not a rewrite of the chat.
-  Every original message stays in the database, so the visible conversation, export, undo, and
-  rollback all still see the full history.
-- **Automatic invalidation** — if messages were edited, undone, rolled back, or the model/agent or
-  compaction settings changed after a checkpoint was saved, it is discarded and rebuilt on the next
-  turn instead of showing a stale summary.
+  Every original message stays in the database, so the visible conversation, export, undo, rollback,
+  staged revert, and redo all still see the relevant history state.
+- **Automatic invalidation** — if messages were edited, undone, rolled back, reverted/redone, or the
+  model/agent or compaction settings changed after a checkpoint was saved, it is discarded and
+  rebuilt on the next turn instead of showing a stale summary.
 - **Compact on demand** — the **Compact context** button in the sidebar footer saves a checkpoint at
   any time. It is disabled while a turn is streaming. A status line confirms how many messages were
   covered; the chat itself is not modified.
@@ -212,6 +212,30 @@ The sidebar footer shows two live readouts:
   `Generating · ~42 tok/s`). It is derived from the streamed output (roughly one token per four
   characters), so it works even on local/self-hosted backends that do not report token usage. It
   disappears as soon as the completion finishes, so nothing stale lingers between turns.
+
+## Staged revert, redo, and per-message diff
+
+CodeAssist supports a non-destructive staged revert workflow for conversation history:
+
+- **Revert here** — each user/assistant message has a **Revert here** action. Staging a revert marks
+  that message and everything after it as reverted in the UI and excludes them from active agent
+  context, but does not immediately delete them from the database.
+- **Revert bar** — while a revert is staged, a bar above the plan shows the staged boundary and
+  provides **Commit revert** and **Clear revert**. If committed reverts are available, it also shows
+  **Redo**.
+- **Commit vs clear** — **Commit revert** permanently removes the staged reverted messages and moves
+  them to a redo stack. **Clear revert** removes only the staged boundary and restores the reverted
+  messages to the active conversation.
+- **Redo** — after a committed revert, **Redo** restores the most recently committed reverted
+  messages. Starting a new user message on a staged/committed-reverted timeline commits the staged
+  revert and clears redo, creating a new branch.
+- **Per-message diff** — the **Diff** action shows file snapshot previews recorded for that message
+  (captured from file-mutating/read tool activity). This is a snapshot/metadata diff view, not a
+  unified git patch; files without recorded snapshots show no per-message diff.
+- **Scope note** — staged revert currently affects session/message history and agent context. It does
+  not restore filesystem state; use git/worktree workflows when you need file rollback.
+
+Slash commands: `/undo` (legacy last-turn undo), `/redo`, `/revert-clear`, `/revert-commit`.
 
 ## Import and export sessions
 

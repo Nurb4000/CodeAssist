@@ -50,11 +50,11 @@ async def update_session(session_id: str, body: dict):
 
 
 @router.get("/{session_id}/messages")
-async def get_messages(session_id: str):
+async def get_messages(session_id: str, include_reverted: bool = True):
     """Get all messages for a session in chronological order."""
     from codeassist.session import Session
     session = Session(session_id)
-    return await session.get_messages()
+    return await session.get_messages(include_reverted=include_reverted)
 
 
 @router.get("/{session_id}/messages/search")
@@ -80,6 +80,39 @@ async def search_messages(
     return await KnowledgeBase.fulltext_search_messages(
         session_id, query, limit=limit, offset=offset
     )
+
+
+@router.get("/{session_id}/messages/{message_id}/diff")
+async def get_message_diff(session_id: str, message_id: str):
+    """Return per-message diff/snapshot metadata for timeline UI."""
+    from codeassist.knowledge import KnowledgeBase
+    from codeassist.session import Session
+
+    session = Session(session_id)
+    messages = await session.get_messages(include_reverted=True)
+    target = next((m for m in messages if m["id"] == message_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    snapshots = await KnowledgeBase.get_session_file_snapshots(session_id, message_id=message_id)
+    files = []
+    for snap in snapshots:
+        files.append({
+            "id": snap.get("id"),
+            "file_path": snap.get("file_path"),
+            "action": snap.get("action"),
+            "content_hash": snap.get("content_hash"),
+            "content_preview": snap.get("content_preview"),
+            "size_bytes": snap.get("size_bytes"),
+            "created_at": snap.get("created_at"),
+        })
+    return {
+        "message_id": message_id,
+        "session_id": session_id,
+        "reverted": bool(target.get("reverted")),
+        "files": files,
+        "has_diff": len(files) > 0,
+    }
 
 
 @router.post("/{session_id}/fork")
@@ -125,6 +158,74 @@ async def undo_session(session_id: str):
     session = Session(session_id)
     deleted = await session.undo_last_turn()
     return {"deleted": deleted}
+
+
+@router.get("/{session_id}/revert")
+async def get_revert_state(session_id: str):
+    """Get staged revert boundary and redo availability."""
+    from codeassist.session import Session
+
+    session = Session(session_id)
+    return {
+        "revert": await session.get_revert_state(),
+        "redo": await session.get_redo_state(),
+    }
+
+
+@router.post("/{session_id}/revert/stage/{message_id}")
+async def stage_revert(session_id: str, message_id: str):
+    """Stage a non-destructive revert boundary at the given message."""
+    from codeassist import turn_state
+
+    if turn_state.is_session_running(session_id):
+        raise HTTPException(status_code=409, detail="A turn is already running for this session; wait for it to finish.")
+    from codeassist.session import Session
+
+    session = Session(session_id)
+    try:
+        return await session.stage_revert(message_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{session_id}/revert/clear")
+async def clear_revert(session_id: str):
+    """Clear staged revert boundary without deleting messages."""
+    from codeassist import turn_state
+
+    if turn_state.is_session_running(session_id):
+        raise HTTPException(status_code=409, detail="A turn is already running for this session; wait for it to finish.")
+    from codeassist.session import Session
+
+    session = Session(session_id)
+    cleared = await session.clear_revert_state()
+    return {"cleared": cleared, "revert": await session.get_revert_state(), "redo": await session.get_redo_state()}
+
+
+@router.post("/{session_id}/revert/commit")
+async def commit_revert(session_id: str):
+    """Commit staged revert: delete reverted rows and push to redo stack."""
+    from codeassist import turn_state
+
+    if turn_state.is_session_running(session_id):
+        raise HTTPException(status_code=409, detail="A turn is already running for this session; wait for it to finish.")
+    from codeassist.session import Session
+
+    session = Session(session_id)
+    return await session.commit_revert()
+
+
+@router.post("/{session_id}/redo")
+async def redo_session(session_id: str):
+    """Redo the last committed revert."""
+    from codeassist import turn_state
+
+    if turn_state.is_session_running(session_id):
+        raise HTTPException(status_code=409, detail="A turn is already running for this session; wait for it to finish.")
+    from codeassist.session import Session
+
+    session = Session(session_id)
+    return await session.redo()
 
 
 @router.delete("/{session_id}/messages/{message_id}")
