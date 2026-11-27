@@ -152,6 +152,14 @@ start a new turn after Stop.
 
 // Trust approval required for a new tool
 {"type": "trust_approval_required", ...}
+
+// A background prompt automation finished. Delivered only to the sockets of
+// `session_id` when the job is pinned to one, otherwise to every connected
+// client. Shell-job output is never broadcast; it stays in the admin run history.
+// Clients render this as its own notification row and must not treat it as part
+// of an in-flight turn (no `done`/`error`, no busy-state change).
+{"type": "automation_result", "automation_id": "...", "name": "nightly",
+ "status": "ok", "output": "...", "error": "", "session_id": null}
 ```
 
 ## Client State Model
