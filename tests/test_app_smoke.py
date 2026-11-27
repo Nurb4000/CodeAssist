@@ -972,6 +972,49 @@ def test_user_message_queued_not_rejected_while_turn_running(live_client, monkey
         assert second_ran, f"queued message never ran; saw {seen_prompts}"
 
 
+def test_slash_command_is_expanded_before_the_turn(live_client, monkeypatch):
+    """A leading `/name args` resolves through the live skill registry: the model
+    sees the skill body with $ARGUMENTS substituted, not the raw command line."""
+    import uuid
+
+    import codeassist.llm as llm_mod
+    import codeassist.server as server_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+
+    class FakeSkill:
+        content = "Review $ARGUMENTS carefully."
+
+    class FakeRegistry:
+        def get_by_slash_command(self, command):
+            return FakeSkill() if command == "review" else None
+
+        def get_instructions(self):
+            return ""
+
+    monkeypatch.setattr(server_mod, "skill_registry", FakeRegistry())
+
+    seen_prompts = []
+
+    async def _stream(self, messages, tools=None):
+        prompt = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                prompt = m["content"]
+                break
+        seen_prompts.append(prompt)
+        yield TextDelta(f"turn:{prompt}")
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    sid = f"slash-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "/review auth.py"})
+        _drain_until(ws, "done")
+
+    assert "Review auth.py carefully." in seen_prompts, seen_prompts
+
+
 def test_plan_tasks_are_persisted_and_scoped_per_session(live_client, monkeypatch):
     """A session's plan belongs to that session and outlives the process.
 

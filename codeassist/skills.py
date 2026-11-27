@@ -169,6 +169,43 @@ def reload_live_registry() -> "SkillRegistry | None":
     return registry
 
 
+# A slash command is a leading `/name` with optional arguments. Restricting the
+# name to command-safe characters keeps ordinary paths like `/tmp/notes.md` and
+# prose starting with a slash out of the command path.
+_SLASH_INVOCATION_RE = re.compile(r"^/([A-Za-z0-9_-]+)(?:\s+(.*))?$", re.DOTALL)
+
+
+def expand_slash_command(
+    text: str, registry: "SkillRegistry | None" = None
+) -> str | None:
+    """Expand a leading ``/skill [args]`` into that skill's content.
+
+    Returns ``None`` for anything that is not a known slash invocation, so the
+    caller can pass the original text through untouched. When the skill body
+    contains ``$ARGUMENTS`` it is replaced with the typed arguments; otherwise
+    arguments are appended as a separate line. The registry defaults to the
+    live boot-time registry so a freshly created skill works immediately.
+    """
+    if registry is None:
+        from codeassist import server
+
+        registry = getattr(server, "skill_registry", None)
+    if not registry:
+        return None
+
+    match = _SLASH_INVOCATION_RE.match(text.strip())
+    if not match:
+        return None
+    skill = registry.get_by_slash_command(match.group(1))
+    if not skill:
+        return None
+
+    args = (match.group(2) or "").strip()
+    if "$ARGUMENTS" in skill.content:
+        return skill.content.replace("$ARGUMENTS", args)
+    return f"{skill.content}\n\n{args}" if args else skill.content
+
+
 class SkillRegistry:
     """Discovers and manages skills from the workspace."""
 

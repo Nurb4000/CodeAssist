@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from codeassist.config import SkillsConfig
-from codeassist.skills import SkillRegistry, SkillTool, SkillValidationError
+from codeassist.skills import (
+    SkillRegistry,
+    SkillTool,
+    SkillValidationError,
+    expand_slash_command,
+)
 from codeassist.tools import ToolResult
 
 
@@ -62,6 +67,43 @@ It should be discoverable.
         
         assert skill is not None
         assert skill.name == "test-skill"
+
+    def test_expand_slash_command_appends_arguments(self, skill_registry):
+        """A skill without $ARGUMENTS receives typed args on a separate line."""
+        skill_registry.discover()
+        expanded = expand_slash_command(
+            "/test explain auth.py", registry=skill_registry
+        )
+        assert expanded is not None
+        assert expanded.startswith("This is the test skill content.")
+        assert expanded.endswith("explain auth.py")
+
+    def test_expand_slash_command_substitutes_placeholder(self, skill_registry):
+        """$ARGUMENTS is replaced in place, including multiple occurrences."""
+        skill_registry.discover()
+        skill = skill_registry.get_skill("test-skill")
+        skill.content = "Review $ARGUMENTS. Focus on $ARGUMENTS."
+        assert expand_slash_command("/test auth.py", registry=skill_registry) == (
+            "Review auth.py. Focus on auth.py."
+        )
+
+    def test_expand_slash_command_leaves_other_text_untouched(self, skill_registry):
+        """Paths and unknown commands are not skill invocations."""
+        skill_registry.discover()
+        for text in (
+            "plain prose", "/tmp/notes.md", "/unknown arg", "see /test in docs",
+            "",
+        ):
+            assert expand_slash_command(text, registry=skill_registry) is None, text
+
+    def test_expand_slash_command_uses_live_registry(self, skill_registry, monkeypatch):
+        """With no registry argument the boot-time registry is used, so a skill
+        created after startup works on its first invocation."""
+        from codeassist import server
+
+        skill_registry.discover()
+        monkeypatch.setattr(server, "skill_registry", skill_registry)
+        assert expand_slash_command("/test now") is not None
 
     def test_list_skills(self, skill_registry):
         """Test listing all skills."""

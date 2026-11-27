@@ -1140,8 +1140,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             if data.get("type") == "user_message":
                 from codeassist.capabilities import model_audio_capable, model_vision_capable
+                from codeassist.skills import expand_slash_command
                 from codeassist.transcribe import transcribe_audio
                 content = data.get("content", "")
+                # A leading /name args is a real prompt expansion, not chat text.
+                # Unknown commands fall through unchanged so paths and ordinary
+                # prose starting with a slash still reach the model verbatim.
+                # Expand before the length check: a long skill body is still a
+                # prompt and must obey the same cap.
+                expanded = expand_slash_command(content)
+                if expanded is not None:
+                    content = expanded
                 images, img_error = _parse_image_attachments(data.get("images") or [])
                 files, file_error = _parse_text_files(data.get("files") or [])
                 audio, audio_error = _parse_audio_attachments(data.get("audio") or [])
