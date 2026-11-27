@@ -67,6 +67,16 @@ class AgentConfig:
 
 
 @dataclass
+class CodeModeConfig:
+    """Confined JS execute-tool runtime (D1)."""
+
+    enabled: bool = True
+    timeout_ms: int = 120000
+    max_tool_calls: int = 64
+    max_output_chars: int = 20000
+
+
+@dataclass
 class ToolConfig:
     shell_timeout: int = 120
     max_output_chars: int = 20000
@@ -78,6 +88,7 @@ class ToolConfig:
     # and make the model lose track mid-run. opencode caps this at ~2k chars;
     # 2000 tokens is a middle ground that stays focused while preserving detail.
     tool_output_max_tokens: int = 2000
+    codemode: CodeModeConfig = field(default_factory=CodeModeConfig)
 
 
 @dataclass
@@ -589,14 +600,20 @@ class Config:
                 max_auto_creations=raw.get("agent", {}).get("max_auto_creations", 3),
                 min_confidence=raw.get("agent", {}).get("min_confidence", 0.7),
             ),
-            tools=ToolConfig(
-                shell_timeout=raw.get("tools", {}).get("shell_timeout", 120),
-                max_output_chars=raw.get("tools", {}).get("max_output_chars", 20000),
-                webfetch_max_chars=raw.get("tools", {}).get("webfetch_max_chars", 30000),
-                websearch_max_chars=raw.get("tools", {}).get("websearch_max_chars", 30000),
-                websearch_engine=raw.get("tools", {}).get("websearch_engine", "duckduckgo"),
-                tool_output_max_tokens=raw.get("tools", {}).get("tool_output_max_tokens", 2000),
-            ),
+            tools=(lambda tools_raw, cm_raw: ToolConfig(
+                shell_timeout=tools_raw.get("shell_timeout", 120),
+                max_output_chars=tools_raw.get("max_output_chars", 20000),
+                webfetch_max_chars=tools_raw.get("webfetch_max_chars", 30000),
+                websearch_max_chars=tools_raw.get("websearch_max_chars", 30000),
+                websearch_engine=tools_raw.get("websearch_engine", "duckduckgo"),
+                tool_output_max_tokens=tools_raw.get("tool_output_max_tokens", 2000),
+                codemode=CodeModeConfig(
+                    enabled=bool(cm_raw.get("enabled", True)),
+                    timeout_ms=max(1, int(cm_raw.get("timeout_ms", 120000))),
+                    max_tool_calls=max(1, int(cm_raw.get("max_tool_calls", 64))),
+                    max_output_chars=max(1000, int(cm_raw.get("max_output_chars", 20000))),
+                ),
+            ))(raw.get("tools", {}), raw.get("tools", {}).get("codemode", {}) if isinstance(raw.get("tools", {}).get("codemode", {}), dict) else {}),
             remote_test_vm=_remote_test_vm_config(raw.get("remote_test_vm", {})),
             mcp=MCPConfig(
                 enabled=raw.get("mcp", {}).get("enabled", False),

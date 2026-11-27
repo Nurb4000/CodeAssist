@@ -1380,6 +1380,36 @@ class Agent:
         if question_tool and hasattr(question_tool, "set_answer"):
             question_tool.set_answer(question_id, answer)
 
+    async def _execute_codemode_tool(self, name: str, arguments: dict):
+        """Execute a tool call originating from the confined execute runtime.
+
+        Runs through the same registry as normal tool calls, so schema validation
+        and tool behavior remain consistent. Permission checks are enforced here
+        because code-mode tool calls do not go through the outer LLM tool-call
+        confirmation loop.
+        """
+        from .tools import ToolResult
+
+        file_path = arguments.get("file_path", arguments.get("path", ""))
+        try:
+            perm_action = await self.get_permission_action(name, arguments)
+        except Exception:
+            perm_action = "ask"
+        if perm_action == "deny":
+            return ToolResult(output=f"Tool '{name}' is not permitted by your permission rules.", error=True)
+
+        needs_prompt = await self._confirmation_required(name, arguments, perm_action)
+        if needs_prompt:
+            # Non-interactive/code-mode: do not block on UI confirmation.
+            return ToolResult(
+                output=(
+                    f"Tool '{name}' requires confirmation and cannot be auto-approved in execute mode. "
+                    "Run it as a normal tool call."
+                ),
+                error=True,
+            )
+        return await self.tools.execute(name, arguments)
+
     async def _promote_plan_task(self) -> list[dict] | None:
         """Mark the first pending plan item in progress, if nothing is active.
 
@@ -2617,7 +2647,17 @@ class Agent:
                 # Phase 2: Execute confirmed tools in parallel
                 async def _exec_tool(tc):
                     start = time.monotonic()
-                    result = await self.tools.execute(tc.name, tc.arguments)
+                    if tc.name == "execute":
+                        ex = self.tools.get("execute")
+                        if ex and hasattr(ex, "set_executor"):
+                            ex.set_executor(self._execute_codemode_tool)
+                        try:
+                            result = await self.tools.execute(tc.name, tc.arguments)
+                        finally:
+                            if ex and hasattr(ex, "set_executor"):
+                                ex.set_executor(None)
+                    else:
+                        result = await self.tools.execute(tc.name, tc.arguments)
                     duration_ms = int((time.monotonic() - start) * 1000)
 
                     # First truncate to token limit

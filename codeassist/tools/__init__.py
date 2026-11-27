@@ -258,6 +258,7 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
     from .database import DatabaseTool
     from .diff_preview import DiffPreviewTool
     from .directory import DirectoryTool
+    from .codemode import ExecuteTool
     from .docker_tool import DockerTool
     from .documentation import DocumentationTool
     from .edit import EditTool
@@ -369,6 +370,18 @@ def create_registry(workspace: Path, tool_config=None, mcp_client=None, skill_re
 
     # Register Question tool
     registry.register(QuestionTool())
+
+    # Register Code Mode execute tool (confined JS runtime)
+    cm_cfg = getattr(tool_config, "codemode", None)
+    if cm_cfg is None or bool(getattr(cm_cfg, "enabled", True)):
+        execute_tool = ExecuteTool()
+        execute_tool.workspace = workspace
+        execute_tool.set_registry(registry)
+        if tool_config and hasattr(execute_tool, "apply_config"):
+            class _Cfg: pass
+            cfg = _Cfg(); cfg.tools = tool_config
+            execute_tool.apply_config(cfg)
+        registry.register(execute_tool)
 
     # Register Create Tool and Create Skill tools
     create_tool = CreateTool()

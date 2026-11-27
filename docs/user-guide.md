@@ -406,6 +406,16 @@ CodeAssist. Add your own as markdown files in `runtime/skills/` — see the READ
 section for the frontmatter format. Custom and auto-created skills appear in the Admin page under
 **Skills**.
 
+## Code Mode (`execute`)
+
+CodeAssist includes an initial D1 **Code Mode** tool named `execute`. It runs plain JavaScript in a confined Node.js `vm` runtime so the model can compose multiple tool calls in one step.
+
+- **Call form**: pass JavaScript in `code`; prefer an explicit `return`.
+- **Tool access**: `await tools.<name>({ ... })` or `await tools["name"]({ ... })` using exact tool names.
+- **Confined runtime**: no `fetch`, imports/modules, filesystem/process access, timers, or recursive `execute`.
+- **Safety**: normal tool schema validation and permission checks apply. Tools that require interactive confirmation are denied inside execute; run them as normal tool calls.
+- **Limits**: bounded execution timeout, tool-call count, and output size (configurable under `[tools.codemode]`).
+
 ## Worktrees and persistent PTY (agent tools)
 
 These are agent-facing tools available during coding turns (not separate GUI panels):
