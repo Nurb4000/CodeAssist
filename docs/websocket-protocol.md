@@ -12,6 +12,18 @@ new WebSocket(`ws://host:port/ws/${sessionId}`, [password])
 
 The password is NEVER accepted via query parameters (security best practice).
 
+## Protocol version
+
+Immediately after connecting, the server sends a capability frame before any
+turn starts:
+
+```jsonc
+{"type": "protocol", "version": 2, "delivery": ["queue", "steer"]}
+```
+
+Version 2 adds explicit follow-up delivery (`queue` or `steer`). Clients that
+omit `delivery` are still treated as `queue`, so older clients keep working.
+
 ## Client → Server Messages
 
 ```jsonc
@@ -19,7 +31,11 @@ The password is NEVER accepted via query parameters (security best practice).
 // URLs, max 4, only accepted when the model is vision-capable) and files
 // (array of {name, content}, max 5, inlined into the prompt as text parts;
 // rejected with an error if too large).
-{"type": "user_message", "content": "...", "images": [...], "files": [...]}
+// `delivery` is "queue" (default): run after any current turn finishes, in order.
+// `delivery` is "steer": inject into a running turn at its next loop boundary,
+// after all tool results for the current step have been persisted. If no turn
+// is running, a steer is simply run as a normal queued turn.
+{"type": "user_message", "content": "...", "delivery": "queue", "images": [...], "files": [...]}
 
 // Cancel the current agent turn
 {"type": "cancel"}
@@ -105,7 +121,19 @@ The password is NEVER accepted via query parameters (security best practice).
 // Active agent for this session (sent once right after connect). The choice is
 // persisted per session, so reconnecting to a session reports its agent.
 {"type": "active_agent", "agent": {"id": "default", "name": "CodeAssist", ...}}
+
+// A steer was accepted. `deferred: true` means no live turn existed at that
+// moment, so it was queued as an ordinary follow-up instead.
+{"type": "steer_queued", "content": "...", "deferred": false}
+
+// A staged steer reached the agent loop boundary and was written to the
+// transcript. The next model request sees it as the newest user message.
+{"type": "steered", "content": "..."}
 ```
+
+A steer is discarded if the turn is cancelled before its next loop boundary:
+there is no later step to inject into, and the follow-up must not silently
+start a new turn after Stop.
 
 ### Non-agent events
 

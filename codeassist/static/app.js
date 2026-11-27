@@ -2,6 +2,8 @@ const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
+const deliveryQueueBtn = document.getElementById('delivery-queue');
+const deliverySteerBtn = document.getElementById('delivery-steer');
 const sessionListEl = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const modelInfoEl = document.getElementById('model-info');
@@ -84,7 +86,12 @@ let currentSessionId = null;
 let sessionSwitchQueue = Promise.resolve();
 let ws = null;
 let wsConnected = false;
+let serverProtocolVersion = 0;
 let isStreaming = false;
+// How a follow-up sent during a running turn should be delivered. Queue is the
+// default (the old behaviour); Steer asks the server to inject it at the next
+// agent loop boundary so the current turn can change direction without waiting.
+let deliveryMode = 'queue';
 // Set the moment Stop is pressed, cleared when the run starts or ends. Drives
 // the button's "stopping" state so a click is visibly acknowledged before the
 // server's `cancelled` reply gets back.
@@ -349,8 +356,26 @@ function setAttachmentUiEnabled(enabled) {
 
 function setAttachmentUiBusy(busy) {
     if (!attachBtn) return;
-    attachBtn.disabled = busy;
-    attachBtn.style.opacity = busy ? '0.5' : '1';
+    // Follow-ups can carry attachments too, so the paperclip stays live while a
+    // turn is running. `busy` is accepted for call-site compatibility.
+    attachBtn.disabled = false;
+    attachBtn.style.opacity = '1';
+}
+
+function setDeliveryMode(mode) {
+    deliveryMode = mode === 'steer' ? 'steer' : 'queue';
+    const queued = deliveryMode === 'queue';
+    if (deliveryQueueBtn) {
+        deliveryQueueBtn.classList.toggle('active', queued);
+        deliveryQueueBtn.setAttribute('aria-pressed', String(queued));
+    }
+    if (deliverySteerBtn) {
+        deliverySteerBtn.classList.toggle('active', !queued);
+        deliverySteerBtn.setAttribute('aria-pressed', String(!queued));
+    }
+    sendBtn.title = isStreaming
+        ? `Send follow-up (${deliveryMode})`
+        : 'Send (Enter)';
 }
 
 function readFileAsDataURL(file) {
@@ -2448,8 +2473,25 @@ function connectWS() {
             clearCompacting();
         }
 
-        if (data.type === 'active_agent') {
+        if (data.type === 'protocol') {
+            // v2 adds delivery="steer". The selector is always available; on an
+            // older server a steer simply runs as a queued follow-up.
+            serverProtocolVersion = Number(data.version) || 0;
+        } else if (data.type === 'active_agent') {
             if (data.agent) setAgentSelection(data.agent.id || data.agent.name);
+        } else if (data.type === 'steer_queued') {
+            // The server held the follow-up safely. Update the live progress
+            // label instead of appending a status bubble, which would hide the
+            // spinner while the original turn is still running.
+            if (progressEl) {
+                updateProgress(
+                    data.deferred
+                        ? 'Follow-up queued for the next turn...'
+                        : 'Follow-up accepted, steering at the next step...'
+                );
+            }
+        } else if (data.type === 'steered') {
+            if (progressEl) updateProgress('Steered, following the new direction...');
         } else if (data.type === 'agent_switched') {
             // Guard like active_agent above: a malformed event with no `agent`
             // used to fall through to setAgentSelection(undefined) -- the trailing
@@ -2672,8 +2714,10 @@ function updateConnectionStatus(status) {
     el.style.marginBottom = '4px';
 }
 
-function sendMessage() {
+function sendMessage(delivery = deliveryMode) {
     const text = inputEl.value.trim();
+    // Defaults to queue for missing/unknown values, matching the protocol.
+    const chosenDelivery = delivery === 'steer' ? 'steer' : 'queue';
     // Built-in commands are local actions. Handle them before the streaming
     // guard so /stop works during a run; they never create a user bubble or
     // start a turn. Unknown slash commands fall through for server expansion.
@@ -2685,7 +2729,9 @@ function sendMessage() {
     }
     const hasImages = pendingImages.length > 0;
     const hasFiles = pendingFiles.length > 0;
-    if ((!text && !hasImages && !hasFiles) || isStreaming) return;
+    // A running turn no longer blocks input: follow-ups are either queued for
+    // the next turn or steered into the current one at a safe loop boundary.
+    if (!text && !hasImages && !hasFiles) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         // Capture the session we queued against: a retry interval polls the live
@@ -2693,6 +2739,7 @@ function sendMessage() {
         // session here, a message queued for one session can be delivered on the
         // socket of a session the user switched to in the meantime (§9).
         const queuedSessionId = currentSessionId;
+        const queuedDelivery = chosenDelivery;
         showError('Not connected to server. Reconnecting...');
         connectWS();
         // Queue the message to send after connection
@@ -2706,7 +2753,7 @@ function sendMessage() {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 clearInterval(checkAndSend);
                 hideError();
-                sendMessage();
+                sendMessage(queuedDelivery);
             }
         }, 500);
         // Stop trying after 5 seconds
@@ -2729,7 +2776,14 @@ function sendMessage() {
     workBlockUserToggled = false;
     runActive = true;
     showProgress('Thinking...');
-    ws.send(JSON.stringify({ type: 'user_message', content: text, images, files, audio }));
+    ws.send(JSON.stringify({
+        type: 'user_message',
+        content: text,
+        images,
+        files,
+        audio,
+        delivery: chosenDelivery,
+    }));
 }
 
 function showError(msg) {
@@ -2757,6 +2811,7 @@ let compactingManual = false;
 // a generic "Thinking...".
 const COMPACTING_PASSTHROUGH = new Set([
     'active_agent', 'agent_switched', 'context', 'plan_update', 'session_title',
+    'steer_queued', 'steered', 'protocol',
 ]);
 
 function showCompacting(data) {
@@ -2863,8 +2918,10 @@ function setBusy(busy) {
     isStreaming = busy;
     if (busy) {
         stopRequested = false;
-        sendBtn.disabled = true;
-        sendBtn.style.display = 'none';
+        // Send stays available: follow-ups are first-class while a turn runs.
+        // Stop remains reachable alongside it so the user can still abort.
+        sendBtn.disabled = false;
+        sendBtn.style.display = 'flex';
         stopBtn.style.display = 'flex';
         stopBtn.classList.add('busy');
         document.body.classList.add('is-working');
@@ -2879,8 +2936,9 @@ function setBusy(busy) {
     }
     // Cleared on both edges: a fresh run re-arms Stop, a finished one restores it.
     stopBtn.classList.remove('stopping');
-    inputEl.disabled = busy;
+    inputEl.disabled = false;
     setAttachmentUiBusy(busy);
+    setDeliveryMode(deliveryMode);
     if (!busy) inputEl.focus();
 }
 
@@ -3284,7 +3342,10 @@ inputEl.addEventListener('input', () => {
     inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
 });
 
-sendBtn.addEventListener('click', sendMessage);
+sendBtn.addEventListener('click', () => sendMessage());
+if (deliveryQueueBtn) deliveryQueueBtn.addEventListener('click', () => setDeliveryMode('queue'));
+if (deliverySteerBtn) deliverySteerBtn.addEventListener('click', () => setDeliveryMode('steer'));
+setDeliveryMode(deliveryMode);
 
 attachBtn.addEventListener('click', () => fileInputEl.click());
 fileInputEl.addEventListener('change', async () => {

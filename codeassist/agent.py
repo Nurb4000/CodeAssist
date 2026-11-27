@@ -801,6 +801,12 @@ class Agent:
         # Graceful step budget for this agent. None falls back to the global cap.
         self.max_steps = max_steps
         self.cancel_event = asyncio.Event()
+        # Follow-ups sent with delivery="steer" while this turn is running. They
+        # are held off the database until the top of a loop iteration, i.e. after
+        # Phase 2 has written every tool result for an assistant(tool_calls) row.
+        # Injecting mid-step would leave that row without its matching tool rows
+        # and the provider would reject the next request.
+        self._steered: list[tuple[str, list[dict], list[dict], list[dict]]] = []
         self._confirm_events: dict[str, asyncio.Event] = {}
         self._confirm_results: dict[str, bool] = {}
         self._confirm_answers: dict[str, str] = {}
@@ -888,6 +894,29 @@ class Agent:
             self._confirm_results[confirm_id] = False
             self._confirm_answers.pop(confirm_id, None)
             event.set()
+
+    def steer(
+        self,
+        content: str,
+        images: list[dict] | None = None,
+        files: list[dict] | None = None,
+        audio: list[dict] | None = None,
+    ) -> None:
+        """Stage a follow-up for the next safe boundary of the running turn.
+
+        Attachments arrive already validated (and transcribed where needed) by
+        the WebSocket receive path, so the loop only has to persist them. Nothing
+        is written here: a steer landing in the middle of Phase 1 or Phase 2
+        must not appear between an assistant tool-call row and its tool results.
+        """
+        self._steered.append((content, list(images or []), list(files or []), list(audio or [])))
+
+    def take_steered(self) -> list[tuple[str, list[dict], list[dict], list[dict]]]:
+        """Drain staged steers. The loop persists them; the server requeues any
+        left over when the turn ends before another boundary is reached."""
+        staged = list(self._steered)
+        self._steered.clear()
+        return staged
 
     async def _answer_unrun_tool_calls(self, tool_calls: list["ToolCall"]):
         """Write a placeholder result for tool calls that never got to run.
@@ -1816,6 +1845,28 @@ class Agent:
             is_last_step = iteration + 1 >= step_limit
             if self.cancel_event.is_set():
                 return
+
+            # ── Steer handoff ─────────────────────────────────────────────
+            # This is the only safe place to persist a steer: the previous
+            # iteration's tool results are already written, and Phase 0 below
+            # rebuilds the model context from the rows we add here. A user row
+            # inserted mid-stream or mid-tool-execution would split an
+            # assistant(tool_calls) row from its tool results.
+            steered = self.take_steered()
+            if steered:
+                # A fresh user instruction supersedes any nudge left by the
+                # previous step; replaying both would make the model answer a
+                # stale "carry on" instead of the new direction.
+                self._pending_nudges = []
+                self._nudge_version += 1
+                self._defer_nudge_text = False
+                self._nudge_answer = None
+                for content, images, files, audio in steered:
+                    await self.session.add_message(
+                        "user", content, attachments=(images + files + audio) or None
+                    )
+                    self._messages_dirty = True
+                    yield AgentEvent("steered", {"content": content})
 
             # Check budget before each iteration
             budget_ok, budget_msg = self.cost_tracker.check_budget()

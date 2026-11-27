@@ -681,10 +681,12 @@ def test_static_busy_state_has_single_owner(live_client):
     """
     js = live_client.get("/static/app.js").text
     assert "function setBusy(busy)" in js
-    # No exit path should hand-roll the send/stop/input dance any more.
-    assert js.count("sendBtn.style.display = 'flex';") == 1, "setBusy() should own this"
+    # No exit path should hand-roll the send/stop/input dance any more. Both
+    # edges keep Send and the input live (v2 follow-ups); only Stop is edge-specific.
+    assert js.count("sendBtn.style.display = 'flex';") == 2, "setBusy() should own this"
     assert js.count("stopBtn.style.display = 'none';") == 1
-    assert js.count("inputEl.disabled = false;") == 0, "setBusy() should own this"
+    assert js.count("inputEl.disabled = false;") == 1, "setBusy() should own this"
+    assert "inputEl.disabled = busy;" not in js
     assert "setAttachmentUiBusy(busy);" in js
 
 
@@ -970,6 +972,240 @@ def test_user_message_queued_not_rejected_while_turn_running(live_client, monkey
                 second_ran = True
                 break
         assert second_ran, f"queued message never ran; saw {seen_prompts}"
+
+
+def test_ws_protocol_v2_declares_delivery_modes(live_client):
+    """v2 clients get an explicit capability frame before any turn starts, and
+    an unknown delivery mode is rejected instead of silently changing semantics.
+    """
+    import uuid
+
+    sid = f"protocol-v2-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        frame = _receive_json(ws)
+        assert frame.get("type") == "protocol", frame
+        assert frame.get("version") == 2, frame
+        assert frame.get("delivery") == ["queue", "steer"], frame
+
+        ws.send_json({
+            "type": "user_message",
+            "content": "hello",
+            "delivery": "teleport",
+        })
+        error = None
+        for _ in range(10):
+            data = _receive_json(ws)
+            if data.get("type") == "error":
+                error = data
+                break
+        assert error and "Unknown delivery" in error["message"], error
+
+
+def test_explicit_queue_followup_runs_after_the_current_turn(live_client, monkeypatch):
+    """An explicit `delivery: "queue"` must behave exactly like the legacy
+    missing-field path: wait for the running turn, then run in order.
+    """
+    import asyncio
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+
+    seen = []
+
+    async def _stream(self, messages, tools=None):
+        prompt = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                prompt = m["content"]
+                break
+        seen.append(prompt)
+        yield TextDelta(f"turn:{prompt}")
+        if not seen[-1].startswith("queued:"):
+            await asyncio.sleep(0.6)
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    sid = f"explicit-queue-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "first", "delivery": "queue"})
+        started = False
+        for _ in range(50):
+            data = _receive_json(ws)
+            if data.get("type") == "text_delta" and data.get("content") == "turn:first":
+                started = True
+                break
+        assert started, f"first turn never streamed; saw {seen}"
+
+        ws.send_json({
+            "type": "user_message",
+            "content": "queued:second",
+            "delivery": "queue",
+        })
+        ran = False
+        for _ in range(100):
+            data = _receive_json(ws)
+            if data.get("type") == "text_delta" and data.get("content") == "turn:queued:second":
+                ran = True
+                break
+        assert ran, f"explicitly queued follow-up never ran; saw {seen}"
+
+
+def test_steered_followup_is_persisted_at_the_loop_boundary(
+    live_client, monkeypatch, test_workspace
+):
+    """A steer sent mid-turn is held off the DB until the agent has finished the
+    current tool-call step. The next model request must see it as the newest
+    user row, and the transcript must keep assistant(tool_calls) -> tool intact.
+    """
+    import asyncio
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, ToolCall, Usage
+    from codeassist.session import Session
+
+    probe = test_workspace / "steer-probe.txt"
+    probe.write_text("probe ok", encoding="utf-8")
+    calls = {"n": 0}
+
+    async def _stream(self, messages, tools=None):
+        prompt = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                prompt = m["content"]
+                break
+        n = calls["n"]
+        calls["n"] += 1
+        if n == 0:
+            yield ToolCall(
+                id="c-steer",
+                name="read",
+                arguments={"file_path": str(probe)},
+            )
+            # Hold the first stream open so the steer definitely lands while the
+            # agent is still inside its first iteration.
+            await asyncio.sleep(0.4)
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+        else:
+            yield TextDelta(f"turn:{prompt}")
+            yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    sid = f"steer-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "first", "delivery": "queue"})
+        saw_tool = False
+        for _ in range(50):
+            data = _receive_json(ws)
+            if data.get("type") == "tool_call":
+                saw_tool = True
+                break
+        assert saw_tool, "the first turn never reached a tool call"
+
+        ws.send_json({
+            "type": "user_message",
+            "content": "change course",
+            "delivery": "steer",
+        })
+
+        ack = False
+        steered = False
+        final_text = False
+        types = []
+        for _ in range(100):
+            data = _receive_json(ws)
+            types.append(data.get("type"))
+            if data.get("type") == "steer_queued":
+                ack = True
+            if data.get("type") == "steered":
+                steered = True
+            if data.get("type") == "text_delta" and data.get("content") == "turn:change course":
+                final_text = True
+                break
+        assert ack, f"no steer_queued acknowledgement; saw {types}"
+        assert steered, f"steer never reached the loop boundary; saw {types}"
+        assert final_text, f"model never saw the steered prompt; saw {types}"
+
+        for _ in range(20):
+            if _receive_json(ws).get("type") == "done":
+                break
+
+    rows = asyncio.run(Session(sid).get_messages())
+
+    def index(pred):
+        return next((i for i, row in enumerate(rows) if pred(row)), -1)
+
+    tool_call_idx = index(lambda r: bool(r.get("tool_calls")))
+    tool_idx = index(lambda r: r.get("role") == "tool")
+    steer_idx = index(
+        lambda r: r.get("role") == "user" and r.get("content") == "change course"
+    )
+    final_idx = index(
+        lambda r: r.get("role") == "assistant"
+        and r.get("content") == "turn:change course"
+    )
+    assert -1 not in (tool_call_idx, tool_idx, steer_idx, final_idx), rows
+    assert tool_call_idx < tool_idx < steer_idx < final_idx, rows
+
+
+def test_steered_followup_is_dropped_when_the_turn_is_cancelled(live_client, monkeypatch):
+    """Stop wins over a staged steer: there is no later loop boundary, so a
+    cancelled turn must not silently spawn a new queued turn after it ends.
+    """
+    import asyncio
+    import uuid
+
+    import codeassist.llm as llm_mod
+    from codeassist.llm import Finish, TextDelta, Usage
+    from codeassist.session import Session
+
+    async def _stream(self, messages, tools=None):
+        prompt = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                prompt = m["content"]
+                break
+        yield TextDelta(f"turn:{prompt}")
+        await asyncio.sleep(1.0)
+        yield Finish("stop", usage=Usage(prompt_tokens=1, completion_tokens=1))
+
+    monkeypatch.setattr(llm_mod.LLMClient, "stream", _stream)
+
+    sid = f"steer-cancel-{uuid.uuid4()}"
+    with live_client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "user_message", "content": "first", "delivery": "queue"})
+        started = False
+        for _ in range(50):
+            data = _receive_json(ws)
+            if data.get("type") == "text_delta" and data.get("content") == "turn:first":
+                started = True
+                break
+        assert started
+
+        ws.send_json({
+            "type": "user_message",
+            "content": "steered:never",
+            "delivery": "steer",
+        })
+        ws.send_json({"type": "cancel"})
+
+        done = False
+        leaked = False
+        for _ in range(100):
+            data = _receive_json(ws)
+            if data.get("type") == "text_delta" and data.get("content") == "turn:steered:never":
+                leaked = True
+            if data.get("type") == "done":
+                done = True
+                break
+        assert done, "cancelled turn never closed out"
+        assert not leaked, "a cancelled turn ran its staged steer anyway"
+
+    rows = asyncio.run(Session(sid).get_messages())
+    assert not any(r.get("content") == "steered:never" for r in rows), rows
 
 
 def test_slash_command_is_expanded_before_the_turn(live_client, monkeypatch):

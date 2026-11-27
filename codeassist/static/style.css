@@ -1533,6 +1533,36 @@ body {
     align-items: flex-end;
 }
 
+/* Follow-up delivery choice. Queue is the default; Steer injects into the
+   running turn at its next loop boundary. Both stay usable while busy. */
+.delivery-selector {
+    display: flex;
+    gap: 4px;
+    align-self: flex-start;
+}
+
+.delivery-option {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.delivery-option:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.delivery-option.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
 #attach-preview {
     display: flex;
     flex-wrap: wrap;

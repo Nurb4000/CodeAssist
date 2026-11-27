@@ -590,6 +590,11 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # idle-but-connected client could exhaust memory by flooding the session; the
 # alternative to filling this is a polite rejection (see the WS handler).
 MAX_QUEUED_MESSAGES = 100
+# Bumped when the client/server follow-up protocol changes. v2 adds explicit
+# `delivery: "queue" | "steer"` on user_message and the `steer_queued` /
+# `steered` acknowledgement frames. Missing `delivery` still means "queue".
+WS_PROTOCOL_VERSION = 2
+VALID_DELIVERY = ("queue", "steer")
 ALLOWED_IMAGE_MIME = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 MAX_FILES_PER_MESSAGE = 5
@@ -986,32 +991,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             except asyncio.QueueEmpty:
                 return
             slot_busy = True
-            from codeassist.capabilities import (
-                model_audio_capable,
-                model_vision_capable,
-            )
-            from codeassist.transcribe import transcribe_audio
+            # Payloads are normalised by _prepare_message before they enter the
+            # queue (including slash expansion, capability checks and audio
+            # transcription), so starting a queued turn never repeats those
+            # awaits or mutates the stored attachments a second time.
             started = False
             try:
-                if images and not await model_vision_capable(cfg):
-                    # The active model cannot take images; skip silently (the
-                    # client is usually gone by now, so there is nothing to
-                    # reject to).
-                    slot_busy = False
-                    return
-                # Mirror the direct-message path: audio goes to native-audio
-                # models, otherwise its transcript is inlined as a text file.
-                if audio and not await model_audio_capable(cfg):
-                    transcript = await transcribe_audio(audio, cfg)
-                    if transcript is None:
-                        slot_busy = False
-                        return
-                    files.append({
-                        "name": "_transcribed_audio",
-                        "content": transcript,
-                        "type": "text/plain",
-                    })
-                    audio = []
                 attachments = images + files + audio
                 active_name = await resolve_agent_name()
                 if active_name != current_agent_name:
@@ -1029,6 +1014,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
         asyncio.create_task(_start_next())
 
+    # Announce the follow-up protocol before any turn starts. Older clients
+    # ignore unknown frame types; newer ones can use delivery="steer" safely.
+    await websocket.send_json({
+        "type": "protocol",
+        "version": WS_PROTOCOL_VERSION,
+        "delivery": list(VALID_DELIVERY),
+    })
+
     # Tell the client which agent is active for this session (agent switcher).
     if agent_config_obj:
         _agent_info = agent_config_obj.to_dict()
@@ -1043,6 +1036,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         so a turn always uses the agent that was current when it was queued."""
         nonlocal agent_task, slot_busy
         ended = False  # a `done` event already closed the run out
+        cancelled = False  # Stop/client disconnect; queued follow-ups are dropped
         try:
             # Register the turn up front so undo/rollback (which mutate the
             # session's message history) are rejected with 409 while it runs --
@@ -1080,6 +1074,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # Stop was pressed. The agent persists any partial output on its way
             # out; we only report it. Swallowing the cancellation ends the task
             # normally, which is what "the run stopped" means here.
+            cancelled = True
             if not ended:
                 try:
                     await websocket.send_json({"type": "cancelled"})
@@ -1095,6 +1090,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         finally:
             agent_task = None
             slot_busy = False
+            # A steer sent after the model's last step has no loop boundary to
+            # land at. Keep it as a normal queued follow-up rather than losing it.
+            # On cancellation the queue is deliberately dropped by _on_turn_done.
+            if not cancelled and not runner.cancel_event.is_set():
+                for staged in runner.take_steered():
+                    try:
+                        pending.put_nowait(staged)
+                    except asyncio.QueueFull:
+                        log.warning("Dropping late steer: follow-up queue is full")
             end_turn(session_id)
 
     async def _run_manual_compact():
@@ -1134,97 +1138,127 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         finally:
             compact_task = None
 
+    async def _prepare_message(data: dict):
+        """Validate and normalise one user_message frame.
+
+        Returns ``(content, images, files, audio)`` or None when the frame was
+        empty/invalid (an error frame has already been sent). Used by the direct,
+        queued and steer paths so all three agree about attachments and limits.
+        """
+        from codeassist.capabilities import model_audio_capable, model_vision_capable
+        from codeassist.skills import expand_slash_command
+        from codeassist.transcribe import transcribe_audio
+
+        content = data.get("content", "")
+        # A leading /name args is a real prompt expansion, not chat text.
+        # Unknown commands fall through unchanged so paths and ordinary prose
+        # starting with a slash still reach the model verbatim. Expand before
+        # the length check so a long skill body obeys the same cap.
+        expanded = expand_slash_command(content)
+        if expanded is not None:
+            content = expanded
+
+        images, img_error = _parse_image_attachments(data.get("images") or [])
+        files, file_error = _parse_text_files(data.get("files") or [])
+        audio, audio_error = _parse_audio_attachments(data.get("audio") or [])
+        for error in (img_error, file_error, audio_error):
+            if error:
+                await websocket.send_json({"type": "error", "message": error})
+                return None
+        if not (content.strip() or images or files or audio):
+            return None
+        if len(content) > MAX_MESSAGE_LEN:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Message too long. Maximum is {MAX_MESSAGE_LEN} characters.",
+            })
+            return None
+
+        if images and not await model_vision_capable(cfg):
+            await websocket.send_json({
+                "type": "error",
+                "message": "This model/server does not support images. You can still attach text files.",
+            })
+            return None
+        # Audio is only sent to a native-audio model; otherwise transcribe it and
+        # inline the text so the turn still proceeds. Done once here, before a
+        # message is staged or queued, so the loop never has to await a model
+        # capability check at a tool boundary.
+        if audio and not await model_audio_capable(cfg):
+            transcript = await transcribe_audio(audio, cfg)
+            if transcript is None:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": (
+                        "This model/server does not take audio natively, and "
+                        "transcription is unavailable."
+                    ),
+                })
+                return None
+            files.append({
+                "name": "_transcribed_audio",
+                "content": transcript,
+                "type": "text/plain",
+            })
+            audio = []
+        return content, images, files, audio
+
     try:
         while True:
             data = await websocket.receive_json()
 
             if data.get("type") == "user_message":
-                from codeassist.capabilities import model_audio_capable, model_vision_capable
-                from codeassist.skills import expand_slash_command
-                from codeassist.transcribe import transcribe_audio
-                content = data.get("content", "")
-                # A leading /name args is a real prompt expansion, not chat text.
-                # Unknown commands fall through unchanged so paths and ordinary
-                # prose starting with a slash still reach the model verbatim.
-                # Expand before the length check: a long skill body is still a
-                # prompt and must obey the same cap.
-                expanded = expand_slash_command(content)
-                if expanded is not None:
-                    content = expanded
-                images, img_error = _parse_image_attachments(data.get("images") or [])
-                files, file_error = _parse_text_files(data.get("files") or [])
-                audio, audio_error = _parse_audio_attachments(data.get("audio") or [])
-                if img_error:
-                    await websocket.send_json({"type": "error", "message": img_error})
-                    continue
-                if file_error:
-                    await websocket.send_json({"type": "error", "message": file_error})
-                    continue
-                if audio_error:
-                    await websocket.send_json({"type": "error", "message": audio_error})
-                    continue
-                if not (content.strip() or images or files or audio):
-                    continue
-                if len(content) > MAX_MESSAGE_LEN:
-                    await websocket.send_json({"type": "error", "message": f"Message too long. Maximum is {MAX_MESSAGE_LEN} characters."})
-                    continue
-                if agent_task and not agent_task.done():
-                    # A turn is already running; queue this message to run in
-                    # order once it finishes instead of dropping it. A full queue
-                    # gets a polite rejection rather than blocking the sender.
-                    try:
-                        pending.put_nowait((content, images, files, audio))
-                    except asyncio.QueueFull:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": "Too many messages are queued. Please wait for the agent to finish.",
-                        })
-                    continue
-
-                # A queued turn may be mid-start here (agent_task momentarily
-                # None). Claim synchronously before any await so we never launch
-                # two turns at once.
-                if slot_busy:
-                    try:
-                        pending.put_nowait((content, images, files, audio))
-                    except asyncio.QueueFull:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": "Too many messages are queued. Please wait for the agent to finish.",
-                        })
-                    continue
-
-                slot_busy = True
-                if images and not await model_vision_capable(cfg):
-                    slot_busy = False
+                # Missing delivery means queue: older clients keep their
+                # fire-and-forget behaviour and never split a running turn.
+                delivery = data.get("delivery", "queue")
+                if delivery not in VALID_DELIVERY:
                     await websocket.send_json({
                         "type": "error",
-                        "message": "This model/server does not support images. You can still attach text files.",
+                        "message": f"Unknown delivery '{delivery}'. Use 'queue' or 'steer'.",
                     })
                     continue
-                # Audio is only sent to a native-audio model; otherwise it is
-                # transcribed and inlined as text so the turn still proceeds.
-                if audio and not await model_audio_capable(cfg):
-                    transcript = await transcribe_audio(audio, cfg)
-                    if transcript is None:
-                        slot_busy = False
+
+                prepared = await _prepare_message(data)
+                if prepared is None:
+                    continue
+                content, images, files, audio = prepared
+
+                if delivery == "steer" and agent_task and not agent_task.done():
+                    # Stage on the running agent (switch_agent is rejected while
+                    # busy, so `agent` is still the task's runner). The agent
+                    # writes it to the DB at its next loop boundary, never in
+                    # the middle of an assistant(tool_calls) -> tool pair.
+                    agent.steer(content, images, files, audio)
+                    await websocket.send_json({
+                        "type": "steer_queued",
+                        "content": content,
+                    })
+                    continue
+
+                if (agent_task and not agent_task.done()) or slot_busy:
+                    # A turn is already running (or a queued one is mid-start):
+                    # run this follow-up in order once it finishes. A steer that
+                    # reaches here had no live turn to inject into, so it degrades
+                    # to an ordinary queued turn instead of being dropped.
+                    try:
+                        pending.put_nowait((content, images, files, audio))
+                    except asyncio.QueueFull:
                         await websocket.send_json({
                             "type": "error",
-                            "message": (
-                                "This model/server does not take audio natively, and "
-                                "transcription is unavailable."
-                            ),
+                            "message": "Too many messages are queued. Please wait for the agent to finish.",
                         })
-                        continue
-                    # Drop raw audio (the model can hear it); inline the transcript
-                    # as a text attachment so it flows through the same pipeline.
-                    files.append({
-                        "name": "_transcribed_audio",
-                        "content": transcript,
-                        "type": "text/plain",
-                    })
-                    audio = []
+                    else:
+                        if delivery == "steer":
+                            await websocket.send_json({
+                                "type": "steer_queued",
+                                "content": content,
+                                "deferred": True,
+                            })
+                    continue
 
+                # Claim synchronously before any await so a queued turn started
+                # by _on_turn_done cannot race this one into two concurrent runs.
+                slot_busy = True
                 attachments = images + files + audio
                 # Re-resolve the agent every turn so a `switch_agent` issued
                 # earlier in this same connection takes effect now.

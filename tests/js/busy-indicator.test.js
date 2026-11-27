@@ -30,7 +30,9 @@ test('starting a turn shows the working indicator', async () => {
 
   startTurn(env);
   assert.deepStrictEqual(isBusy(env), {
-    body: true, stop: true, stopVisible: true, sendVisible: false, inputDisabled: true,
+    // Follow-ups are allowed mid-turn, so Send and the input stay live while
+    // Stop is visible too. This is the v2 delivery contract.
+    body: true, stop: true, stopVisible: true, sendVisible: true, inputDisabled: false,
   });
 });
 

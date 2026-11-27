@@ -72,6 +72,10 @@
                     <div id="mode-list" class="mode-list" role="listbox" hidden></div>
                 </div>
                 <div id="attach-preview"></div>
+                <div id="delivery-selector" class="delivery-selector" role="group" aria-label="Follow-up delivery">
+                    <button type="button" id="delivery-queue" class="delivery-option active" aria-pressed="true" title="Run after the current turn finishes">Queue</button>
+                    <button type="button" id="delivery-steer" class="delivery-option" aria-pressed="false" title="Inject into the running turn at its next step boundary">Steer</button>
+                </div>
                 <div id="attach-row">
                     <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif,text/*,.txt,.md,.markdown,.py,.js,.jsx,.ts,.tsx,.json,.toml,.yaml,.yml,.csv,.html,.css,.scss,.sql,.sh,.bash,.go,.rs,.java,.c,.cpp,.h,.hpp,.rb,.php,.lua,.xml,.mp3,.wav,.ogg,.flac,.m4a" multiple hidden>
                     <button id="attach-btn" title="Attach files or images">&#128206;</button>

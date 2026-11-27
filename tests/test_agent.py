@@ -650,6 +650,18 @@ class TestAgentQuestionFlow:
 class TestAgentRun:
     """Test agent run loop."""
 
+    def test_steer_stages_followups_without_touching_the_transcript(self, agent):
+        """steer() must only stage; the loop owns DB persistence so a steer can
+        never land between an assistant(tool_calls) row and its tool results.
+        """
+        image = {"attachment_type": "image", "data": "AAA"}
+        agent.steer("change course", [image], [], [])
+
+        staged = agent.take_steered()
+        assert staged == [("change course", [image], [], [])]
+        assert agent.take_steered() == [], "drained steers must not replay twice"
+        agent.session.add_message.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_run_saves_user_message(self, agent, mock_session):
         """Test that run saves user message to session."""
